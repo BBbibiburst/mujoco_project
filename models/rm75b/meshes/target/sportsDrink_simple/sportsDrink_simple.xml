@@ -1,0 +1,418 @@
+<mujoco model="sportsDrink_simple">
+  <default>
+    <default class="visual">
+      <geom group="2" type="mesh" contype="0" conaffinity="0"/>
+    </default>
+    <default class="collision">
+      <geom group="3" type="mesh"/>
+    </default>
+  </default>
+  <asset>
+    <mesh file="sportsDrink_simple.obj"/>
+    <mesh file="sportsDrink_simple_collision_0.obj"/>
+    <mesh file="sportsDrink_simple_collision_1.obj"/>
+    <mesh file="sportsDrink_simple_collision_2.obj"/>
+    <mesh file="sportsDrink_simple_collision_3.obj"/>
+    <mesh file="sportsDrink_simple_collision_4.obj"/>
+    <mesh file="sportsDrink_simple_collision_5.obj"/>
+    <mesh file="sportsDrink_simple_collision_6.obj"/>
+    <mesh file="sportsDrink_simple_collision_7.obj"/>
+    <mesh file="sportsDrink_simple_collision_8.obj"/>
+    <mesh file="sportsDrink_simple_collision_9.obj"/>
+    <mesh file="sportsDrink_simple_collision_10.obj"/>
+    <mesh file="sportsDrink_simple_collision_11.obj"/>
+    <mesh file="sportsDrink_simple_collision_12.obj"/>
+    <mesh file="sportsDrink_simple_collision_13.obj"/>
+    <mesh file="sportsDrink_simple_collision_14.obj"/>
+    <mesh file="sportsDrink_simple_collision_15.obj"/>
+    <mesh file="sportsDrink_simple_collision_16.obj"/>
+    <mesh file="sportsDrink_simple_collision_17.obj"/>
+    <mesh file="sportsDrink_simple_collision_18.obj"/>
+    <mesh file="sportsDrink_simple_collision_19.obj"/>
+    <mesh file="sportsDrink_simple_collision_20.obj"/>
+    <mesh file="sportsDrink_simple_collision_21.obj"/>
+    <mesh file="sportsDrink_simple_collision_22.obj"/>
+    <mesh file="sportsDrink_simple_collision_23.obj"/>
+    <mesh file="sportsDrink_simple_collision_24.obj"/>
+    <mesh file="sportsDrink_simple_collision_25.obj"/>
+    <mesh file="sportsDrink_simple_collision_26.obj"/>
+    <mesh file="sportsDrink_simple_collision_27.obj"/>
+    <mesh file="sportsDrink_simple_collision_28.obj"/>
+    <mesh file="sportsDrink_simple_collision_29.obj"/>
+    <mesh file="sportsDrink_simple_collision_30.obj"/>
+    <mesh file="sportsDrink_simple_collision_31.obj"/>
+    <mesh file="sportsDrink_simple_collision_32.obj"/>
+    <mesh file="sportsDrink_simple_collision_33.obj"/>
+    <mesh file="sportsDrink_simple_collision_34.obj"/>
+    <mesh file="sportsDrink_simple_collision_35.obj"/>
+    <mesh file="sportsDrink_simple_collision_36.obj"/>
+    <mesh file="sportsDrink_simple_collision_37.obj"/>
+    <mesh file="sportsDrink_simple_collision_38.obj"/>
+    <mesh file="sportsDrink_simple_collision_39.obj"/>
+    <mesh file="sportsDrink_simple_collision_40.obj"/>
+    <mesh file="sportsDrink_simple_collision_41.obj"/>
+    <mesh file="sportsDrink_simple_collision_42.obj"/>
+    <mesh file="sportsDrink_simple_collision_43.obj"/>
+    <mesh file="sportsDrink_simple_collision_44.obj"/>
+    <mesh file="sportsDrink_simple_collision_45.obj"/>
+    <mesh file="sportsDrink_simple_collision_46.obj"/>
+    <mesh file="sportsDrink_simple_collision_47.obj"/>
+    <mesh file="sportsDrink_simple_collision_48.obj"/>
+    <mesh file="sportsDrink_simple_collision_49.obj"/>
+    <mesh file="sportsDrink_simple_collision_50.obj"/>
+    <mesh file="sportsDrink_simple_collision_51.obj"/>
+    <mesh file="sportsDrink_simple_collision_52.obj"/>
+    <mesh file="sportsDrink_simple_collision_53.obj"/>
+    <mesh file="sportsDrink_simple_collision_54.obj"/>
+    <mesh file="sportsDrink_simple_collision_55.obj"/>
+    <mesh file="sportsDrink_simple_collision_56.obj"/>
+    <mesh file="sportsDrink_simple_collision_57.obj"/>
+    <mesh file="sportsDrink_simple_collision_58.obj"/>
+    <mesh file="sportsDrink_simple_collision_59.obj"/>
+    <mesh file="sportsDrink_simple_collision_60.obj"/>
+    <mesh file="sportsDrink_simple_collision_61.obj"/>
+    <mesh file="sportsDrink_simple_collision_62.obj"/>
+    <mesh file="sportsDrink_simple_collision_63.obj"/>
+    <mesh file="sportsDrink_simple_collision_64.obj"/>
+    <mesh file="sportsDrink_simple_collision_65.obj"/>
+    <mesh file="sportsDrink_simple_collision_66.obj"/>
+    <mesh file="sportsDrink_simple_collision_67.obj"/>
+    <mesh file="sportsDrink_simple_collision_68.obj"/>
+    <mesh file="sportsDrink_simple_collision_69.obj"/>
+    <mesh file="sportsDrink_simple_collision_70.obj"/>
+    <mesh file="sportsDrink_simple_collision_71.obj"/>
+    <mesh file="sportsDrink_simple_collision_72.obj"/>
+    <mesh file="sportsDrink_simple_collision_73.obj"/>
+    <mesh file="sportsDrink_simple_collision_74.obj"/>
+    <mesh file="sportsDrink_simple_collision_75.obj"/>
+    <mesh file="sportsDrink_simple_collision_76.obj"/>
+    <mesh file="sportsDrink_simple_collision_77.obj"/>
+    <mesh file="sportsDrink_simple_collision_78.obj"/>
+    <mesh file="sportsDrink_simple_collision_79.obj"/>
+    <mesh file="sportsDrink_simple_collision_80.obj"/>
+    <mesh file="sportsDrink_simple_collision_81.obj"/>
+    <mesh file="sportsDrink_simple_collision_82.obj"/>
+    <mesh file="sportsDrink_simple_collision_83.obj"/>
+    <mesh file="sportsDrink_simple_collision_84.obj"/>
+    <mesh file="sportsDrink_simple_collision_85.obj"/>
+    <mesh file="sportsDrink_simple_collision_86.obj"/>
+    <mesh file="sportsDrink_simple_collision_87.obj"/>
+    <mesh file="sportsDrink_simple_collision_88.obj"/>
+    <mesh file="sportsDrink_simple_collision_89.obj"/>
+    <mesh file="sportsDrink_simple_collision_90.obj"/>
+    <mesh file="sportsDrink_simple_collision_91.obj"/>
+    <mesh file="sportsDrink_simple_collision_92.obj"/>
+    <mesh file="sportsDrink_simple_collision_93.obj"/>
+    <mesh file="sportsDrink_simple_collision_94.obj"/>
+    <mesh file="sportsDrink_simple_collision_95.obj"/>
+    <mesh file="sportsDrink_simple_collision_96.obj"/>
+    <mesh file="sportsDrink_simple_collision_97.obj"/>
+    <mesh file="sportsDrink_simple_collision_98.obj"/>
+    <mesh file="sportsDrink_simple_collision_99.obj"/>
+    <mesh file="sportsDrink_simple_collision_100.obj"/>
+    <mesh file="sportsDrink_simple_collision_101.obj"/>
+    <mesh file="sportsDrink_simple_collision_102.obj"/>
+    <mesh file="sportsDrink_simple_collision_103.obj"/>
+    <mesh file="sportsDrink_simple_collision_104.obj"/>
+    <mesh file="sportsDrink_simple_collision_105.obj"/>
+    <mesh file="sportsDrink_simple_collision_106.obj"/>
+    <mesh file="sportsDrink_simple_collision_107.obj"/>
+    <mesh file="sportsDrink_simple_collision_108.obj"/>
+    <mesh file="sportsDrink_simple_collision_109.obj"/>
+    <mesh file="sportsDrink_simple_collision_110.obj"/>
+    <mesh file="sportsDrink_simple_collision_111.obj"/>
+    <mesh file="sportsDrink_simple_collision_112.obj"/>
+    <mesh file="sportsDrink_simple_collision_113.obj"/>
+    <mesh file="sportsDrink_simple_collision_114.obj"/>
+    <mesh file="sportsDrink_simple_collision_115.obj"/>
+    <mesh file="sportsDrink_simple_collision_116.obj"/>
+    <mesh file="sportsDrink_simple_collision_117.obj"/>
+    <mesh file="sportsDrink_simple_collision_118.obj"/>
+    <mesh file="sportsDrink_simple_collision_119.obj"/>
+    <mesh file="sportsDrink_simple_collision_120.obj"/>
+    <mesh file="sportsDrink_simple_collision_121.obj"/>
+    <mesh file="sportsDrink_simple_collision_122.obj"/>
+    <mesh file="sportsDrink_simple_collision_123.obj"/>
+    <mesh file="sportsDrink_simple_collision_124.obj"/>
+    <mesh file="sportsDrink_simple_collision_125.obj"/>
+    <mesh file="sportsDrink_simple_collision_126.obj"/>
+    <mesh file="sportsDrink_simple_collision_127.obj"/>
+    <mesh file="sportsDrink_simple_collision_128.obj"/>
+    <mesh file="sportsDrink_simple_collision_129.obj"/>
+    <mesh file="sportsDrink_simple_collision_130.obj"/>
+    <mesh file="sportsDrink_simple_collision_131.obj"/>
+    <mesh file="sportsDrink_simple_collision_132.obj"/>
+    <mesh file="sportsDrink_simple_collision_133.obj"/>
+    <mesh file="sportsDrink_simple_collision_134.obj"/>
+    <mesh file="sportsDrink_simple_collision_135.obj"/>
+    <mesh file="sportsDrink_simple_collision_136.obj"/>
+    <mesh file="sportsDrink_simple_collision_137.obj"/>
+    <mesh file="sportsDrink_simple_collision_138.obj"/>
+    <mesh file="sportsDrink_simple_collision_139.obj"/>
+    <mesh file="sportsDrink_simple_collision_140.obj"/>
+    <mesh file="sportsDrink_simple_collision_141.obj"/>
+    <mesh file="sportsDrink_simple_collision_142.obj"/>
+    <mesh file="sportsDrink_simple_collision_143.obj"/>
+    <mesh file="sportsDrink_simple_collision_144.obj"/>
+    <mesh file="sportsDrink_simple_collision_145.obj"/>
+    <mesh file="sportsDrink_simple_collision_146.obj"/>
+    <mesh file="sportsDrink_simple_collision_147.obj"/>
+    <mesh file="sportsDrink_simple_collision_148.obj"/>
+    <mesh file="sportsDrink_simple_collision_149.obj"/>
+    <mesh file="sportsDrink_simple_collision_150.obj"/>
+    <mesh file="sportsDrink_simple_collision_151.obj"/>
+    <mesh file="sportsDrink_simple_collision_152.obj"/>
+    <mesh file="sportsDrink_simple_collision_153.obj"/>
+    <mesh file="sportsDrink_simple_collision_154.obj"/>
+    <mesh file="sportsDrink_simple_collision_155.obj"/>
+    <mesh file="sportsDrink_simple_collision_156.obj"/>
+    <mesh file="sportsDrink_simple_collision_157.obj"/>
+    <mesh file="sportsDrink_simple_collision_158.obj"/>
+    <mesh file="sportsDrink_simple_collision_159.obj"/>
+    <mesh file="sportsDrink_simple_collision_160.obj"/>
+    <mesh file="sportsDrink_simple_collision_161.obj"/>
+    <mesh file="sportsDrink_simple_collision_162.obj"/>
+    <mesh file="sportsDrink_simple_collision_163.obj"/>
+    <mesh file="sportsDrink_simple_collision_164.obj"/>
+    <mesh file="sportsDrink_simple_collision_165.obj"/>
+    <mesh file="sportsDrink_simple_collision_166.obj"/>
+    <mesh file="sportsDrink_simple_collision_167.obj"/>
+    <mesh file="sportsDrink_simple_collision_168.obj"/>
+    <mesh file="sportsDrink_simple_collision_169.obj"/>
+    <mesh file="sportsDrink_simple_collision_170.obj"/>
+    <mesh file="sportsDrink_simple_collision_171.obj"/>
+    <mesh file="sportsDrink_simple_collision_172.obj"/>
+    <mesh file="sportsDrink_simple_collision_173.obj"/>
+    <mesh file="sportsDrink_simple_collision_174.obj"/>
+    <mesh file="sportsDrink_simple_collision_175.obj"/>
+    <mesh file="sportsDrink_simple_collision_176.obj"/>
+    <mesh file="sportsDrink_simple_collision_177.obj"/>
+    <mesh file="sportsDrink_simple_collision_178.obj"/>
+    <mesh file="sportsDrink_simple_collision_179.obj"/>
+    <mesh file="sportsDrink_simple_collision_180.obj"/>
+    <mesh file="sportsDrink_simple_collision_181.obj"/>
+    <mesh file="sportsDrink_simple_collision_182.obj"/>
+    <mesh file="sportsDrink_simple_collision_183.obj"/>
+    <mesh file="sportsDrink_simple_collision_184.obj"/>
+    <mesh file="sportsDrink_simple_collision_185.obj"/>
+    <mesh file="sportsDrink_simple_collision_186.obj"/>
+    <mesh file="sportsDrink_simple_collision_187.obj"/>
+    <mesh file="sportsDrink_simple_collision_188.obj"/>
+    <mesh file="sportsDrink_simple_collision_189.obj"/>
+    <mesh file="sportsDrink_simple_collision_190.obj"/>
+    <mesh file="sportsDrink_simple_collision_191.obj"/>
+    <mesh file="sportsDrink_simple_collision_192.obj"/>
+    <mesh file="sportsDrink_simple_collision_193.obj"/>
+    <mesh file="sportsDrink_simple_collision_194.obj"/>
+    <mesh file="sportsDrink_simple_collision_195.obj"/>
+    <mesh file="sportsDrink_simple_collision_196.obj"/>
+    <mesh file="sportsDrink_simple_collision_197.obj"/>
+    <mesh file="sportsDrink_simple_collision_198.obj"/>
+    <mesh file="sportsDrink_simple_collision_199.obj"/>
+  </asset>
+  <worldbody>
+    <body name="sportsDrink_simple">
+      <geom mesh="sportsDrink_simple" class="visual"/>
+      <geom mesh="sportsDrink_simple_collision_0" rgba="0.19445108563258995 0.6257717174755346 0.8662315205717107 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_1" rgba="0.7878980705123312 0.9054515119674308 0.28180700768999245 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_2" rgba="0.90581189726789 0.9464000127083739 0.7384909147986032 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_3" rgba="0.03319005685463783 0.06069545706804813 0.09734855940494647 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_4" rgba="0.22231246631512402 0.3964711202589186 0.31119564676863043 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_5" rgba="0.3495409773092123 0.9117096234332353 0.11696809870847735 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_6" rgba="0.9498870519283434 0.7126961469294392 0.881751147200654 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_7" rgba="0.8756709773299952 0.7354137677097182 0.9080173004083285 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_8" rgba="0.69803277060669 0.06934196910447044 0.004832140842220167 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_9" rgba="0.41803784363873286 0.8081112975742619 0.44970524741588735 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_10" rgba="0.4611136057920735 0.8930005513160982 0.6686164693049896 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_11" rgba="0.49733192673668103 0.7203092309762936 0.7760586461014675 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_12" rgba="0.28902544791433393 0.0908113858728673 0.859778679155122 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_13" rgba="0.29369316005118484 0.797207889078098 0.09507279377049505 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_14" rgba="0.21810114121690427 0.6375299230164866 0.3078086796756775 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_15" rgba="0.6241260710954194 0.6769107294994073 0.8979695596098661 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_16" rgba="0.18327854859619142 0.9887999103577347 0.011460490876512464 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_17" rgba="0.3964267522776094 0.49931358831606065 0.6888048976120648 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_18" rgba="0.648175851628335 0.5500550092868136 0.6720620864536945 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_19" rgba="0.4496765234289688 0.47946987546586917 0.19498796654199213 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_20" rgba="0.6531048560699022 0.06662141410853828 0.47600306962655603 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_21" rgba="0.08890210626763118 0.6376586464078292 0.6104698036701577 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_22" rgba="0.07689268554814854 0.7710813957517713 0.5438775362793475 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_23" rgba="0.4820351259516712 0.13843981041542774 0.15617350056616341 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_24" rgba="0.24332757546152006 0.48165646453191413 0.5151712532415008 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_25" rgba="0.8771132377055363 0.8789357450472968 0.37854863812515316 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_26" rgba="0.4875153008707088 0.18690953433570268 0.8449387886948381 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_27" rgba="0.4109555902473454 0.5259980052688318 0.4844668887800869 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_28" rgba="0.6548347382194054 0.8184916127746611 0.8163831074350463 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_29" rgba="0.7116625653663637 0.2853710199146694 0.7139914844943 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_30" rgba="0.23752230191327195 0.5893240303118807 0.4461480054390564 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_31" rgba="0.8752809036390388 0.7269215220515287 0.8890011228674568 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_32" rgba="0.8967023436112401 0.4450342639385806 0.4405177862235353 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_33" rgba="0.7084014114878905 0.7399075829820589 0.4818109247103478 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_34" rgba="0.6794077528298034 0.3408598780147002 0.808736638611253 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_35" rgba="0.9563204390305401 0.08198076056697612 0.47610685991020074 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_36" rgba="0.015313040845778003 0.4745804761302196 0.040262148557889677 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_37" rgba="0.32875154203169077 0.06287935028330838 0.6588010428259281 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_38" rgba="0.28990185280448066 0.31107187447582596 0.01512351044675686 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_39" rgba="0.9336320002877792 0.02753408937793489 0.9206254927352391 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_40" rgba="0.9879903906525933 0.521498336956344 0.933576946763055 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_41" rgba="0.7854375446817637 0.7023835673484063 0.591088114149966 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_42" rgba="0.9081774498118323 0.6128633557636844 0.26793992777594544 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_43" rgba="0.5059879197312632 0.9777192695493432 0.618936219849237 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_44" rgba="0.18325615864362577 0.251585384971437 0.5584705232584046 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_45" rgba="0.10119666855345044 0.11883809840305204 0.32453265845875134 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_46" rgba="0.28367387169586766 0.63485101750501 0.16627165280631595 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_47" rgba="0.7916954084140676 0.26644351267086863 0.5213615458041747 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_48" rgba="0.490711679625792 0.16911625554002596 0.1653675347990996 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_49" rgba="0.17432579071976662 0.24468076895173563 0.84736264811941 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_50" rgba="0.02118800353286243 0.7863925112313223 0.007760926544524538 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_51" rgba="0.42310239102194513 0.6966172580408906 0.27737183338817906 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_52" rgba="0.45830045518923934 0.7320712400450331 0.5134004174142752 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_53" rgba="0.0118135469698889 0.8943439765962656 0.07244886421919339 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_54" rgba="0.8537884861938647 0.7949993425117439 0.8383949806440423 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_55" rgba="0.8211353946900921 0.21876681703733125 0.7752703102887637 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_56" rgba="0.872893051097838 0.7775100413346214 0.41635464068744477 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_57" rgba="0.48327484196932036 0.9386919772879938 0.7779300879688292 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_58" rgba="0.12255596402145252 0.631831120018024 0.42519548420694364 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_59" rgba="0.8568715532039354 0.1193253034963423 0.2662535826767859 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_60" rgba="0.9748014205814728 0.517572908396911 0.7251089233306459 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_61" rgba="0.25898893995539407 0.32196521956492374 0.5265036987605001 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_62" rgba="0.2576545498063567 0.34783062322228897 0.44680928946540155 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_63" rgba="0.5639046693210431 0.35018512210658914 0.9296154703361368 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_64" rgba="0.2406507717817219 0.8008962328811718 0.4703076548476167 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_65" rgba="0.2689197228847091 0.5321792190667664 0.13782133045183664 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_66" rgba="0.18890145659144508 0.2863135178381703 0.6635990227965594 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_67" rgba="0.6460166238501026 0.9015918347681572 0.596614204545906 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_68" rgba="0.4007054774329868 0.2709868330337336 0.14940340547578534 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_69" rgba="0.9964347796013169 0.6911944971126905 0.09326687539277612 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_70" rgba="0.7077840913030561 0.8283760042438376 0.730297473967524 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_71" rgba="0.10518890128830771 0.578808042538174 0.7650335040222784 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_72" rgba="0.4208289300123763 0.009972144334315036 0.2349674131896361 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_73" rgba="0.37521984367669825 0.30711055573266677 0.4237846549625258 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_74" rgba="0.14051693377582086 0.4739327401437833 0.6462523573863892 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_75" rgba="0.7453691060539396 0.25432363848337547 0.3283411120846125 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_76" rgba="0.7114899714708139 0.226599562782425 0.41261763140166385 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_77" rgba="0.5830132214078524 0.8524317376233161 0.5179164612107131 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_78" rgba="0.1600189490099353 0.39910270952068616 0.9193042117455423 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_79" rgba="0.7431669318902251 0.07924351717461509 0.7077289008669915 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_80" rgba="0.8346715801823715 0.20484718200997953 0.07184288268210537 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_81" rgba="0.812865958527948 0.9377856989858864 0.6369029651704671 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_82" rgba="0.858383412339935 0.956219302460184 0.542973107443979 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_83" rgba="0.25377731780177126 0.8801630679606955 0.8459392476223647 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_84" rgba="0.9954289541802452 0.2764568206830361 0.3590686940718536 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_85" rgba="0.9099983984912566 0.9105124739764885 0.7931862547927879 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_86" rgba="0.8799034498804208 0.4243369253218008 0.21201031901862633 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_87" rgba="0.7963854939975271 0.6961932362796651 0.08350646319471944 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_88" rgba="0.24172464046103215 0.34729457331537306 0.6764783465830269 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_89" rgba="0.6292099988783758 0.7302308446670202 0.15779410104084424 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_90" rgba="0.383615606658413 0.7129047727411577 0.9539919443877327 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_91" rgba="0.6365192795411466 0.016856662381495857 0.6942419879854936 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_92" rgba="0.1774249912339142 0.1147325496602597 0.8693339015536434 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_93" rgba="0.9676967407579676 0.02407628337099188 0.6205847440518042 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_94" rgba="0.12517672436638416 0.4779126670613262 0.3033679187742081 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_95" rgba="0.8867700385588673 0.8247792717659967 0.21449333891087197 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_96" rgba="0.7171316175878462 0.8269466826673902 0.9166597988605475 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_97" rgba="0.17747951324707678 0.6665399209176178 0.53591529567815 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_98" rgba="0.8567846972496598 0.09656491739644157 0.6916105519159905 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_99" rgba="0.7486480465679579 0.7568992005917574 0.7806439985884468 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_100" rgba="0.2509346352465889 0.9518923581347888 0.8204603229154483 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_101" rgba="0.2036401920188975 0.8066517562738548 0.7467045236624343 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_102" rgba="0.34731315940826135 0.03880726117747768 0.9428638408038876 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_103" rgba="0.1610867591399593 0.974972039457638 0.6728761609535184 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_104" rgba="0.48051658815993203 0.7657463788220623 0.3720340781318825 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_105" rgba="0.2629446446620999 0.3014207362510276 0.38979066272256924 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_106" rgba="0.3536108996344991 0.27426055342897104 0.09059521932375503 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_107" rgba="0.1796872217612816 0.14881672607941931 0.44347350613792313 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_108" rgba="0.22293993566573833 0.07200265453875954 0.6914509266181699 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_109" rgba="0.676208436088665 0.37320925353684076 0.20132381530021992 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_110" rgba="0.5960345828805308 0.04103799911518158 0.23359171411480162 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_111" rgba="0.18649359158294 0.8402336007338947 0.7411133601976758 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_112" rgba="0.6819346858093253 0.6245709053831767 0.35419914157721544 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_113" rgba="0.44265158159777906 0.4412657928263535 0.128914120891924 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_114" rgba="0.6148262698738659 0.6053199139489038 0.4646067177600407 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_115" rgba="0.41080793837223595 0.2774601281840934 0.3288729553592944 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_116" rgba="0.8287782505524859 0.19788861201003538 0.38935775547977824 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_117" rgba="0.6593491254123764 0.10893870683080742 0.38277518183216963 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_118" rgba="0.8497562677014435 0.7133326660961576 0.2722339578707067 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_119" rgba="0.007603672429659203 0.817490351231713 0.7821278145511965 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_120" rgba="0.729186469894455 0.25469875030891476 0.33694099704273006 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_121" rgba="0.3257906216151595 0.8703737404177134 0.2907437421834398 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_122" rgba="0.10294209097059004 0.2747570971857103 0.867216823216434 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_123" rgba="0.8999931250264643 0.6906432665578757 0.7446315752631225 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_124" rgba="0.7657319332593302 0.23152406483758892 0.4874842797478367 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_125" rgba="0.15037667987072312 0.0056166730224113115 0.04456477039033213 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_126" rgba="0.5541898322166763 0.38334990937457114 0.182660531686908 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_127" rgba="0.5021813576654287 0.9968798430839888 0.18656115969802112 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_128" rgba="0.06987570400392618 0.2527420784219453 0.39508874704610697 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_129" rgba="0.9647426011587944 0.3126337166868729 0.7795748839428892 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_130" rgba="0.635482547825032 0.005521728830593431 0.5264277904862025 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_131" rgba="0.2690098614249693 0.12408186647185948 0.5575895249588793 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_132" rgba="0.9058006856288412 0.5317103707024268 0.7033506215194903 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_133" rgba="0.8832589546706425 0.18380019514436385 0.02638715812818959 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_134" rgba="0.7037229574627212 0.561324665277775 0.41621209239583135 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_135" rgba="0.13063226622683488 0.8340988724235111 0.8666042537203642 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_136" rgba="0.3698259094123584 0.8756359328351977 0.5131091370094818 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_137" rgba="0.4116228837030709 0.22058287006929245 0.0685026031878988 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_138" rgba="0.8853743974963691 0.8357704432393009 0.47819764165265 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_139" rgba="0.5745375818205053 0.38049823679394046 0.4972426569248243 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_140" rgba="0.06728851281652215 0.8950413937000128 0.06706729280558199 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_141" rgba="0.45859484874216805 0.9253765872817206 0.22000622789263558 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_142" rgba="0.6647271325631914 0.8256825631726611 0.8963622453704619 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_143" rgba="0.6506856513385448 0.39296906558839695 0.09603654960049879 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_144" rgba="0.7512580474464223 0.5616907824690724 0.5796646029114401 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_145" rgba="0.9998283477687366 0.8346066662136159 0.31590688494089003 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_146" rgba="0.7080881500769334 0.48153065718856936 0.7001622740264003 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_147" rgba="0.8542548963495377 0.4230944977772496 0.7367347724282127 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_148" rgba="0.2974864361114462 0.09466341953521262 0.7566517333577847 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_149" rgba="0.10053656239378939 0.4868060750694617 0.3198614500461763 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_150" rgba="0.5893489942688015 0.9005606870669182 0.016460999226885376 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_151" rgba="0.9098983839219977 0.6755653612225923 0.5337786106757653 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_152" rgba="0.2241567555057392 0.8023272734489493 0.04397518895971153 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_153" rgba="0.5123179421562317 0.15862036336028928 0.6108615331119777 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_154" rgba="0.3467025990932182 0.35115166438053813 0.8461593087701498 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_155" rgba="0.3687670339728978 0.7373651317810413 0.9758955937098578 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_156" rgba="0.34038654341622065 0.7560849448440655 0.3360532849640857 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_157" rgba="0.47773444772024287 0.09103647740451914 0.28728280464071565 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_158" rgba="0.6359432859535397 0.9810447075591674 0.8924844936435091 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_159" rgba="0.326607216340707 0.07426086200487403 0.6331578615276677 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_160" rgba="0.9510709807634614 0.41046455858603004 0.5540166212513127 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_161" rgba="0.38486604812985226 0.3725129733314634 0.21729082767001817 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_162" rgba="0.08501651132172339 0.12079077057133925 0.7288737804500928 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_163" rgba="0.24508754573022196 0.9751978106537559 0.3778370809172136 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_164" rgba="0.14877971554111924 0.7476500300239026 0.09873298340310344 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_165" rgba="0.10747827015828315 0.18479837597006 0.6533214125194681 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_166" rgba="0.6059273233762136 0.8294759534436434 0.7624505287846283 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_167" rgba="0.4737771437694769 0.4482546254822297 0.35303548185317624 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_168" rgba="0.7983543808547037 0.4087244100802825 0.20925787829169862 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_169" rgba="0.10631903089998096 0.2889996728016351 0.4622057222663045 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_170" rgba="0.645744309512176 0.3460087405505615 0.5854121511117244 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_171" rgba="0.5761856223869803 0.710767713592417 0.40225979169802695 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_172" rgba="0.002726092010087555 0.907710017713351 0.06833219305928151 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_173" rgba="0.5981914401527499 0.4240819906607691 0.18391343681549888 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_174" rgba="0.26414515554533746 0.00207212899086906 0.019669647887539332 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_175" rgba="0.7381824981635691 0.31793945511265753 0.9134594364146617 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_176" rgba="0.697460534822976 0.04907391377110337 0.9331437922822677 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_177" rgba="0.6109828643349712 0.1769726472361618 0.2323527804888491 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_178" rgba="0.6169341824575153 0.13930512188935196 0.8644055094638669 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_179" rgba="0.41820454974458043 0.9442957303301255 0.4849925068683393 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_180" rgba="0.6945682594244508 0.9549624654463462 0.43095640538470403 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_181" rgba="0.5251997998163379 0.46111497608998664 0.22073946380075438 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_182" rgba="0.9613123701957134 0.2907462748930477 0.1042091305494528 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_183" rgba="0.5006209466591094 0.03527562729903777 0.29556438948348807 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_184" rgba="0.44199319250255475 0.7540311171272207 0.6269107823088549 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_185" rgba="0.3087028634231229 0.34204387242820455 0.20275231592542564 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_186" rgba="0.9386717586700521 0.15130694685884782 0.834705865325173 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_187" rgba="0.4661665450355219 0.6596338935608616 0.09925985849874563 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_188" rgba="0.8334861493384498 0.6306683393448438 0.41069183498818207 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_189" rgba="0.20800564060216897 0.9591376908170041 0.49081604959097 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_190" rgba="0.14757185786248095 0.4358543494142255 0.15514218298174554 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_191" rgba="0.1484064584222614 0.9744000388692455 0.24461619280658387 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_192" rgba="0.16365251653793578 0.9260515547840438 0.902063722376107 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_193" rgba="0.9992975712003748 0.5623081697342985 0.9174867141269204 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_194" rgba="0.08905290193348436 0.1887003608448271 0.8688329620697711 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_195" rgba="0.6045442379108013 0.8118381386177307 0.49468404743831673 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_196" rgba="0.8165204966116458 0.015157962822987092 0.8113392658662912 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_197" rgba="0.654809476279178 0.5491839516451237 0.8326082508409087 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_198" rgba="0.958049341712349 0.7243312642944125 0.9434472816208123 1" class="collision"/>
+      <geom mesh="sportsDrink_simple_collision_199" rgba="0.9308100851403703 0.015335907684156935 0.438379376233347 1" class="collision"/>
+    </body>
+  </worldbody>
+</mujoco>
