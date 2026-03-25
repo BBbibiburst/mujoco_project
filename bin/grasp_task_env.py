@@ -45,7 +45,7 @@ DEFAULT_GRASP_PHYSICS = PhysicsConfig(
     ),
     hand_defaults=JointPhysicsConfig(
         damping=0.01,      
-        frictionloss=0.02, 
+        frictionloss=0.01, 
         armature=0.01,     
     ),
     per_joint_overrides={
