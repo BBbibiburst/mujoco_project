@@ -1,0 +1,2 @@
+"/usr/bin/gcc-ar-11" cr ../../../../lib/libabsl_borrowed_fixup_buffer.a CMakeFiles/absl_borrowed_fixup_buffer.dir/internal/borrowed_fixup_buffer.cc.o
+"/usr/bin/gcc-ranlib-11" ../../../../lib/libabsl_borrowed_fixup_buffer.a

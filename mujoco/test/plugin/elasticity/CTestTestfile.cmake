@@ -1,0 +1,14 @@
+# CMake generated Testfile for 
+# Source directory: /home/zmy/MyProject/mujoco/test/plugin/elasticity
+# Build directory: /home/zmy/MyProject/mujoco/build/test/plugin/elasticity
+# 
+# This file includes the relevant testing commands required for 
+# testing this directory and lists subdirectories to be tested as well.
+add_test(ElasticityTest.CantileverIntoCircle "/home/zmy/MyProject/mujoco/build/bin/elasticity_test" "--gtest_filter=ElasticityTest.CantileverIntoCircle")
+set_tests_properties(ElasticityTest.CantileverIntoCircle PROPERTIES  ENVIRONMENT "MUJOCO_PLUGIN_DIR=/home/zmy/MyProject/mujoco/build/lib" WORKING_DIRECTORY "/home/zmy/MyProject/mujoco/test" _BACKTRACE_TRIPLES "/usr/share/cmake-3.22/Modules/GoogleTest.cmake;400;add_test;/home/zmy/MyProject/mujoco/test/CMakeLists.txt;58;gtest_add_tests;/home/zmy/MyProject/mujoco/test/plugin/elasticity/CMakeLists.txt;15;mujoco_test;/home/zmy/MyProject/mujoco/test/plugin/elasticity/CMakeLists.txt;0;")
+add_test(ElasticityTest.InvalidTxtAttribute "/home/zmy/MyProject/mujoco/build/bin/elasticity_test" "--gtest_filter=ElasticityTest.InvalidTxtAttribute")
+set_tests_properties(ElasticityTest.InvalidTxtAttribute PROPERTIES  ENVIRONMENT "MUJOCO_PLUGIN_DIR=/home/zmy/MyProject/mujoco/build/lib" WORKING_DIRECTORY "/home/zmy/MyProject/mujoco/test" _BACKTRACE_TRIPLES "/usr/share/cmake-3.22/Modules/GoogleTest.cmake;400;add_test;/home/zmy/MyProject/mujoco/test/CMakeLists.txt;58;gtest_add_tests;/home/zmy/MyProject/mujoco/test/plugin/elasticity/CMakeLists.txt;15;mujoco_test;/home/zmy/MyProject/mujoco/test/plugin/elasticity/CMakeLists.txt;0;")
+add_test(ElasticityTest.InvalidMixedAttribute "/home/zmy/MyProject/mujoco/build/bin/elasticity_test" "--gtest_filter=ElasticityTest.InvalidMixedAttribute")
+set_tests_properties(ElasticityTest.InvalidMixedAttribute PROPERTIES  ENVIRONMENT "MUJOCO_PLUGIN_DIR=/home/zmy/MyProject/mujoco/build/lib" WORKING_DIRECTORY "/home/zmy/MyProject/mujoco/test" _BACKTRACE_TRIPLES "/usr/share/cmake-3.22/Modules/GoogleTest.cmake;400;add_test;/home/zmy/MyProject/mujoco/test/CMakeLists.txt;58;gtest_add_tests;/home/zmy/MyProject/mujoco/test/plugin/elasticity/CMakeLists.txt;15;mujoco_test;/home/zmy/MyProject/mujoco/test/plugin/elasticity/CMakeLists.txt;0;")
+add_test(ElasticityTest.ValidAttributes "/home/zmy/MyProject/mujoco/build/bin/elasticity_test" "--gtest_filter=ElasticityTest.ValidAttributes")
+set_tests_properties(ElasticityTest.ValidAttributes PROPERTIES  ENVIRONMENT "MUJOCO_PLUGIN_DIR=/home/zmy/MyProject/mujoco/build/lib" WORKING_DIRECTORY "/home/zmy/MyProject/mujoco/test" _BACKTRACE_TRIPLES "/usr/share/cmake-3.22/Modules/GoogleTest.cmake;400;add_test;/home/zmy/MyProject/mujoco/test/CMakeLists.txt;58;gtest_add_tests;/home/zmy/MyProject/mujoco/test/plugin/elasticity/CMakeLists.txt;15;mujoco_test;/home/zmy/MyProject/mujoco/test/plugin/elasticity/CMakeLists.txt;0;")

@@ -1,0 +1,1 @@
+/usr/bin/c++ -fPIC -O3 -DNDEBUG -flto -fno-fat-lto-objects -fuse-ld=gold -Wl,--gc-sections -shared -Wl,-soname,libobj_decoder.so -o ../../lib/libobj_decoder.so CMakeFiles/obj_decoder.dir/obj_decoder.cc.o  -Wl,-rpath,/home/zmy/MyProject/mujoco/build/lib: ../../lib/libmujoco.so.3.7.0 ../../lib/libtinyobjloader.a 

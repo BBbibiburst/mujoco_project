@@ -1,0 +1,51 @@
+Performing C SOURCE FILE Test SUPPORTS_LLD failed with the following output:
+Change Dir: /home/zmy/MyProject/mujoco/build/CMakeFiles/CMakeTmp
+
+Run Build Command(s):/usr/bin/gmake -f Makefile cmTC_1b992/fast && /usr/bin/gmake  -f CMakeFiles/cmTC_1b992.dir/build.make CMakeFiles/cmTC_1b992.dir/build
+gmake[1]: Entering directory '/home/zmy/MyProject/mujoco/build/CMakeFiles/CMakeTmp'
+Building C object CMakeFiles/cmTC_1b992.dir/src.c.o
+/usr/bin/cc -DSUPPORTS_LLD  -fuse-ld=lld -fPIE -std=c11 -o CMakeFiles/cmTC_1b992.dir/src.c.o -c /home/zmy/MyProject/mujoco/build/CMakeFiles/CMakeTmp/src.c
+Linking C executable cmTC_1b992
+/usr/bin/cmake -E cmake_link_script CMakeFiles/cmTC_1b992.dir/link.txt --verbose=1
+/usr/bin/cc  -fuse-ld=lld CMakeFiles/cmTC_1b992.dir/src.c.o -o cmTC_1b992 
+collect2: fatal error: cannot find ‘ld’
+compilation terminated.
+gmake[1]: *** [CMakeFiles/cmTC_1b992.dir/build.make:99: cmTC_1b992] Error 1
+gmake[1]: Leaving directory '/home/zmy/MyProject/mujoco/build/CMakeFiles/CMakeTmp'
+gmake: *** [Makefile:127: cmTC_1b992/fast] Error 2
+
+
+Source file was:
+int main() {}
+Performing C++ SOURCE FILE Test HAVE_CXX_FLAG_WSHORTEN_64_TO_32 failed with the following output:
+Change Dir: /home/zmy/MyProject/mujoco/build/CMakeFiles/CMakeTmp
+
+Run Build Command(s):/usr/bin/gmake -f Makefile cmTC_5c567/fast && /usr/bin/gmake  -f CMakeFiles/cmTC_5c567.dir/build.make CMakeFiles/cmTC_5c567.dir/build
+gmake[1]: Entering directory '/home/zmy/MyProject/mujoco/build/CMakeFiles/CMakeTmp'
+Building CXX object CMakeFiles/cmTC_5c567.dir/src.cxx.o
+/usr/bin/c++ -DHAVE_CXX_FLAG_WSHORTEN_64_TO_32  -Wall  -Wextra  -Wshadow  -Wfloat-equal  -Wold-style-cast  -Wconversion  -Wformat=2  -Werror  -Wsuggest-override  -pedantic  -pedantic-errors  -Wshorten-64-to-32 -fPIE   -Wshorten-64-to-32 -std=c++17 -o CMakeFiles/cmTC_5c567.dir/src.cxx.o -c /home/zmy/MyProject/mujoco/build/CMakeFiles/CMakeTmp/src.cxx
+c++: error: unrecognized command-line option '-Wshorten-64-to-32'
+c++: error: unrecognized command-line option '-Wshorten-64-to-32'
+gmake[1]: *** [CMakeFiles/cmTC_5c567.dir/build.make:78: CMakeFiles/cmTC_5c567.dir/src.cxx.o] Error 1
+gmake[1]: Leaving directory '/home/zmy/MyProject/mujoco/build/CMakeFiles/CMakeTmp'
+gmake: *** [Makefile:127: cmTC_5c567/fast] Error 2
+
+
+Source file was:
+int main() { return 0; }
+Performing C++ SOURCE FILE Test HAVE_CXX_FLAG_WTHREAD_SAFETY failed with the following output:
+Change Dir: /home/zmy/MyProject/mujoco/build/CMakeFiles/CMakeTmp
+
+Run Build Command(s):/usr/bin/gmake -f Makefile cmTC_a6e9e/fast && /usr/bin/gmake  -f CMakeFiles/cmTC_a6e9e.dir/build.make CMakeFiles/cmTC_a6e9e.dir/build
+gmake[1]: Entering directory '/home/zmy/MyProject/mujoco/build/CMakeFiles/CMakeTmp'
+Building CXX object CMakeFiles/cmTC_a6e9e.dir/src.cxx.o
+/usr/bin/c++ -DHAVE_CXX_FLAG_WTHREAD_SAFETY  -Wall  -Wextra  -Wshadow  -Wfloat-equal  -Wold-style-cast  -Wconversion  -Wformat=2  -Werror  -Wsuggest-override  -pedantic  -pedantic-errors  -fstrict-aliasing  -Wno-deprecated-declarations  -Wno-deprecated  -Wstrict-aliasing  -Wthread-safety -fPIE   -Wthread-safety -std=c++17 -o CMakeFiles/cmTC_a6e9e.dir/src.cxx.o -c /home/zmy/MyProject/mujoco/build/CMakeFiles/CMakeTmp/src.cxx
+c++: error: unrecognized command-line option '-Wthread-safety'
+c++: error: unrecognized command-line option '-Wthread-safety'
+gmake[1]: *** [CMakeFiles/cmTC_a6e9e.dir/build.make:78: CMakeFiles/cmTC_a6e9e.dir/src.cxx.o] Error 1
+gmake[1]: Leaving directory '/home/zmy/MyProject/mujoco/build/CMakeFiles/CMakeTmp'
+gmake: *** [Makefile:127: cmTC_a6e9e/fast] Error 2
+
+
+Source file was:
+int main() { return 0; }

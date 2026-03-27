@@ -1,0 +1,3 @@
+/home/zmy/MyProject/mujoco/build/_deps/tinyobjloader-subbuild/CMakeFiles/tinyobjloader-populate.dir
+/home/zmy/MyProject/mujoco/build/_deps/tinyobjloader-subbuild/CMakeFiles/edit_cache.dir
+/home/zmy/MyProject/mujoco/build/_deps/tinyobjloader-subbuild/CMakeFiles/rebuild_cache.dir
