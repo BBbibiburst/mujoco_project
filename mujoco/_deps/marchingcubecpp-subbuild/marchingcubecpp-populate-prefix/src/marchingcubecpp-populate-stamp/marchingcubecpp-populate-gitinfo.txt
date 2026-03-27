@@ -1,3 +1,0 @@
-repository='https://github.com/aparis69/MarchingCubeCpp.git'
-module=''
-tag='origin'
