@@ -1,0 +1,57 @@
+<mujoco model="touchtest">
+  <compiler autolimits="true" angle="degree"/>
+
+  <extension>
+    <plugin plugin="mujoco.sensor.touch_grid"/>
+  </extension>
+
+  <asset>
+    <texture name="grid" type="2d" builtin="checker" rgb1=".1 .2 .3" rgb2=".2 .3 .4" 
+             width="300" height="300" mark="edge" markrgb=".2 .3 .4"/>
+    <material name="grid_mat" texture="grid" texrepeat="3 3" texuniform="true"/>
+  </asset>
+
+  <visual>
+    <headlight ambient=".6 .6 .6" diffuse=".3 .3 .3" specular="0.1 0.1 0.1"/>
+    <map znear="0.01"/>
+    <scale contactwidth=".05" contactheight=".5"/>
+  </visual>
+
+  <default>
+    <geom friction="1.0" solimp="0 0.95 0.02" solref="0.02 1"/>
+  </default>
+
+  <statistic center="0 0 0.5" extent="1.5"/>
+
+<worldbody>
+  <light pos="0 0 2" dir="0 0 -1"/>
+  <geom name="floor" pos="0 0 -0.5" type="plane" size="5 5 0.1" material="grid_mat"/>
+
+  <body name="box_body" pos="0 0 0">
+    <!-- 加一个 weld joint，让它有 joint 但固定在世界 -->
+    <freejoint/>   <!-- 先用 freejoint，再用 equality 锁死 -->
+    <inertial pos="0 0 0" mass="100" diaginertia="100 100 100"/>
+    <geom name="box_geom" type="box" size="0.5 0.5 0.5" rgba="0.2 0.5 0.2 1"/>
+    <site name="touch_site" pos="0 0 0.5" size=".5" rgba="1 0 0 0.1"/>
+  </body>
+
+  <body name="ball" pos="0.2 0.2 1">
+    <joint name="free" type="free"/>
+    <geom name="ball_geom" type="sphere" size="0.1" mass="1" rgba=".5 .5 .5 .8"/>
+  </body>
+</worldbody>
+
+<!-- 用 equality 把 box 焊死在世界原点 -->
+<equality>
+  <weld body1="box_body" relpose="0 0 0 1 0 0 0"/>
+</equality>
+  <sensor>
+    <plugin name="touch_sensor" plugin="mujoco.sensor.touch_grid" 
+            objtype="site" objname="touch_site">
+      <config key="size" value="100 100"/>
+      <config key="fov" value="60 60"/>
+      <config key="gamma" value="1.0"/>
+      <config key="nchannel" value="1"/>
+    </plugin>
+  </sensor>
+</mujoco>
