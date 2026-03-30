@@ -71,15 +71,9 @@ from robot_arm_system import get_combined_spec, PhysicsConfig, JointPhysicsConfi
 from position_controller import PositionController
 from hand_arm_controller import HandArmController
 
-DEFAULT_GRASP_PHYSICS = PhysicsConfig(
-    arm_defaults=JointPhysicsConfig(damping=100.0, frictionloss=0.1, armature=0.01),
-    hand_defaults=JointPhysicsConfig(damping=0.01, frictionloss=0.01, armature=0.01),
-    per_joint_overrides={"thumb_rotate_act_push_j": JointPhysicsConfig(damping=10.0)}
-)
-
-def build_custom_grasp_environment(physics: PhysicsConfig = DEFAULT_GRASP_PHYSICS) -> Tuple[mujoco.MjModel, mujoco.MjData]:
+def build_custom_grasp_environment() -> Tuple[mujoco.MjModel, mujoco.MjData]:
     """构建基础仿真环境（复用之前的逻辑）"""
-    spec = get_combined_spec(rot_xyz_deg=(-90, 0, 0), attach_point_name="right_hand", physics=physics)
+    spec = get_combined_spec(rot_xyz_deg=(-90, 0, 0), attach_point_name="right_hand")
     worldbody = spec.worldbody
     worldbody.add_light(name="top_light", pos=[0.0, 0.0, 2.0], dir=[0.0, 0.0, -1.0], diffuse=[1.0, 1.0, 1.0])
 

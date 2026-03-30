@@ -31,39 +31,11 @@ CAM_HEIGHT = 240   # 相机图像高度（像素）
 TARGET_POS = [0.4, 0.0, 0.025]
 
 
-# ====================== 物理参数配置 ======================
-
-DEFAULT_GRASP_PHYSICS = PhysicsConfig(
-    # 机械臂默认物理参数：较高的阻尼确保运动平稳
-    arm_defaults=JointPhysicsConfig(
-        damping=100.0,        # 关节阻尼系数，抑制振荡
-        frictionloss=0.1,      # 摩擦损耗，模拟关节摩擦
-        armature=0.01,       # 电机惯量，影响动态响应
-    ),
-    # 机械手默认物理参数：低阻尼以实现灵活抓取
-    hand_defaults=JointPhysicsConfig(
-        damping=0.01,        # 手指关节低阻尼，保证灵活性
-        frictionloss=0.01,   # 手指摩擦系数
-        armature=0.01,       # 手指电机惯量
-    ),
-    # 特定关节参数覆盖：拇指旋转关节需要更高阻尼以保持稳定性
-    per_joint_overrides={
-        "thumb_rotate_act_push_j": JointPhysicsConfig(damping=10.0),
-    }
-)
-
-
 # ====================== 环境构建 ======================
 
-def build_custom_grasp_environment(
-    physics: PhysicsConfig = DEFAULT_GRASP_PHYSICS,
-) -> Tuple[mujoco.MjModel, mujoco.MjData]:
+def build_custom_grasp_environment() -> Tuple[mujoco.MjModel, mujoco.MjData]:
     """
     构建并编译抓取仿真环境，添加外部环境物体与光照.
-    
-    Args:
-        physics: 物理参数配置对象，包含机械臂和机械手的关节物理属性。
-                默认为 DEFAULT_GRASP_PHYSICS。
     
     Returns:
         Tuple[mujoco.MjModel, mujoco.MjData]: 
@@ -83,7 +55,6 @@ def build_custom_grasp_environment(
     spec = get_combined_spec(
         rot_xyz_deg=(-90, 0, 0),           # 绕X轴旋转-90度，调整机械手姿态
         attach_point_name="right_hand",     # 机械臂腕部连接点名称
-        physics=physics,                    # 应用物理参数配置
     )
     worldbody = spec.worldbody
 

@@ -120,6 +120,27 @@ class PhysicsConfig:
     geom_condim:         Optional[int] = None
 
 
+# ====================== 物理参数配置 ======================
+
+DEFAULT_GRASP_PHYSICS = PhysicsConfig(
+    # 机械臂默认物理参数：较高的阻尼确保运动平稳
+    arm_defaults=JointPhysicsConfig(
+        damping=100.0,        # 关节阻尼系数，抑制振荡
+        frictionloss=0.1,      # 摩擦损耗，模拟关节摩擦
+        armature=0.01,       # 电机惯量，影响动态响应
+    ),
+    # 机械手默认物理参数：低阻尼以实现灵活抓取
+    hand_defaults=JointPhysicsConfig(
+        damping=0.01,        # 手指关节低阻尼，保证灵活性
+        frictionloss=0.01,   # 手指摩擦系数
+        armature=0.01,       # 手指电机惯量
+    ),
+    # 特定关节参数覆盖：拇指旋转关节需要更高阻尼以保持稳定性
+    per_joint_overrides={
+        "thumb_rotate_act_push_j": JointPhysicsConfig(damping=10.0),
+    }
+)
+
 # ====================== 内部辅助函数 ======================
 
 def _apply_joint_config(joint: mujoco.MjsJoint, cfg: JointPhysicsConfig) -> None:
@@ -329,6 +350,8 @@ def get_combined_spec(
     # ----- 应用物理参数（可选）-----
     if physics is not None:
         _apply_physics_to_spec(arm_spec, physics, arm_root_name=attach_point_name)
+    else:
+        _apply_physics_to_spec(arm_spec, DEFAULT_GRASP_PHYSICS, arm_root_name=attach_point_name)
 
     return arm_spec
 
