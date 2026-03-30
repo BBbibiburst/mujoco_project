@@ -8,6 +8,7 @@
 import mujoco
 from mujoco import mjtGeom, mjtJoint
 from robot_arm_system import get_combined_spec, PhysicsConfig, JointPhysicsConfig
+from position_controller import PositionController
 from typing import Tuple
 import numpy as np
 
@@ -30,8 +31,8 @@ TARGET_POS = [0.4, 0.0, 0.025]
 DEFAULT_GRASP_PHYSICS = PhysicsConfig(
     # 机械臂默认物理参数：较高的阻尼确保运动平稳
     arm_defaults=JointPhysicsConfig(
-        damping=10.0,        # 关节阻尼系数，抑制振荡
-        frictionloss=1,      # 摩擦损耗，模拟关节摩擦
+        damping=100.0,        # 关节阻尼系数，抑制振荡
+        frictionloss=0.1,      # 摩擦损耗，模拟关节摩擦
         armature=0.01,       # 电机惯量，影响动态响应
     ),
     # 机械手默认物理参数：低阻尼以实现灵活抓取
@@ -143,75 +144,74 @@ def build_custom_grasp_environment(
 # ====================== 主程序 ======================
 
 def main():
-    """
-    演示主程序：运行抓取仿真并异步显示相机画面.
-    
-    仿真流程：
-        1. 初始化仿真环境和控制器
-        2. 启动被动式可视化窗口
-        3. 进入实时仿真循环：
-           - 前0.5秒：手爪保持张开（零点命令）
-           - 0.5秒后：手爪闭合（施加抓取力）
-        4. 同步更新物理状态和可视化渲染
-    
-    """
     try:
-        # ----- 1. 环境与控制器初始化 -----
-        # 构建仿真环境，获取模型和数据对象
+        # ===== 1. 初始化 =====
         model, data = build_custom_grasp_environment()
-        # 初始化手-臂协调控制器，绑定到当前模型
-        controller  = HandArmController(model)
 
-        # ----- 2. 启动可视化与仿真循环 -----
-        # 使用被动模式启动MuJoCo查看器，允许外部控制循环
+        # ⭐ 底层控制器
+        controller = HandArmController(model)
+
+        # ⭐ 新增：位置控制器
+        pos_controller = PositionController(controller, model)
+
+        # ===== 2. viewer =====
         with mujoco.viewer.launch_passive(model, data) as viewer:
-            # 仿真状态变量初始化
-            sim_time   = 0.0        # 累计仿真时间（秒）
-            step_count = 0          # 物理步进计数器
-            close_hand_time = 0.5   # 手爪闭合触发时间（秒）
 
-            # ----- 3. 主仿真循环 -----
+            sim_time = 0.0
+            circle_hand_time = 4
+
+            # ⭐ 初始目标（机械臂不动）
+            arm_target_origin = data.qpos[pos_controller.arm_qpos_ids].copy()
+
             while viewer.is_running():
-                # 更新仿真时间
-                sim_time   += model.opt.timestep
-                step_count += 1
+                sim_time += model.opt.timestep
 
-                # --- 控制策略计算 ---
-                # 机械臂保持零力矩（静止或重力补偿模式）
-                arm_torques = np.zeros(7)  # 7自由度机械臂
-                
-                # 手爪控制命令：时间触发式闭合策略
-                # 6维向量：[食指弯曲, 中指弯曲, 无名指弯曲, 小指弯曲, 拇指弯曲, 拇指旋转]
-                hand_commands = (
-                    np.array([300.0, 300.0, 300.0, 300.0, 300.0, 0.0])  # 闭合命令（除拇指旋转）
-                    if sim_time > close_hand_time
-                    else np.zeros(6)  # 张开状态（零点）
+                # =========================
+                # ⭐ 手爪目标（位置控制！）
+                # =========================
+                # 逻辑：计算当前处于第几个时间段
+                current_period = int(sim_time / circle_hand_time)
+
+                if current_period % 2 == 0:
+                    # 偶数时间段 -> 闭合
+                    hand_target = np.array([0.01, 0.01, 0.01, 0.01, 0.01, 0.0])
+                    arm_target = np.array([1, 1, 1, 1, 1, 1, 1])
+                else:
+                    # 奇数时间段 -> 张开
+                    hand_target = np.zeros(6)
+                    arm_target = arm_target_origin
+
+                # =========================
+                # ⭐ 使用 PD 控制器（关键）
+                # =========================
+                pos_controller.set_target(
+                    data,
+                    arm_target=arm_target,
+                    hand_target=hand_target
                 )
 
-                # --- 物理更新 ---
-                # 应用控制命令到仿真数据
-                controller.apply_control(data, arm_torques, hand_commands)
-                # 执行单步物理仿真（积分动力学方程）
+                # ===== 物理步进 =====
                 mujoco.mj_step(model, data)
-                # 同步更新可视化窗口
                 viewer.sync()
-                
-                # --- 状态输出 ---
-                # 实时打印仿真进度（不换行，覆盖输出）
-                print(f"\r[Sim] 时间: {sim_time:.2f}s | 手爪命令: {hand_commands} ", end="", flush=True)
 
-    # ----- 异常处理与资源清理 -----
+                # ===== 调试输出 =====
+                # 打印真实 torque（验证 gear 是否正确）
+                ctrl = data.ctrl[controller.all_indices]
+                torque = ctrl * controller.gear[controller.all_indices]
+
+                print(
+                    f"\r[Sim {sim_time:.2f}s] hand={hand_target.round(4)}",
+                    end=" " * 20,   # 清除残留字符
+                    flush=True
+                )
+
     except Exception as e:
-        # 捕获并显示所有未处理异常
-        print(f"\n[致命错误] 仿真运行中断: {e}")
+        print(f"\n[致命错误] {e}")
         import traceback
-        traceback.print_exc()  # 打印完整堆栈跟踪
-    finally:
-        # 条件化资源清理：根据实际分配的资源进行释放
-        # 注意：当前版本无显式资源需要清理（相机渲染已注释）
-        # 如需添加相机线程，应在此处设置停止标志并等待线程结束
-        print("\n=== [System] 资源已释放，仿真结束 ===")
+        traceback.print_exc()
 
+    finally:
+        print("\n=== 仿真结束 ===")
 
 if __name__ == "__main__":
     main()
