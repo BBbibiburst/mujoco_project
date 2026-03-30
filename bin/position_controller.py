@@ -100,7 +100,7 @@ class PositionController:
 
         # ⭐ 新增：步长限制 (防止目标过远导致 dq 过大)
         # 限制单次计算的最大关节变化量（例如 0.05 弧度）
-        max_dq = 0.1
+        max_dq = 0.1745
         magnitude = np.linalg.norm(dq)
         if magnitude > max_dq:
             dq = dq * (max_dq / magnitude)

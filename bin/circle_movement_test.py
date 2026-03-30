@@ -1,231 +1,160 @@
-import mujoco
-from mujoco import mjtGeom, mjtJoint
-from robot_arm_system import get_combined_spec, PhysicsConfig, JointPhysicsConfig
-from position_controller import PositionController
-from typing import Tuple
 import numpy as np
-import time
+import mujoco
+from dataclasses import dataclass, field
 
-# 内部模块导入
-from hand_arm_controller import HandArmController
+@dataclass
+class PDGains:
+    kp_arm: np.ndarray = field(default_factory=lambda: np.full(7, 4000.))
+    kd_arm: np.ndarray = field(default_factory=lambda: np.full(7, 400.))
+    kp_hand: np.ndarray = field(default_factory=lambda: np.full(6, 4000.))
+    kd_hand: np.ndarray = field(default_factory=lambda: np.full(6, 400.))
 
-# ====================== 仿真配置 ======================
-TARGET_CENTER = np.array([1,1,1])  # 圆周运动的圆心
-CIRCLE_RADIUS = 1                     # 圆周半径 (10cm)
-CIRCLE_SPEED  = 1.5                      # 旋转角速度 (rad/s)
-HAND_RANDOM_INTERVAL = 1.0               # 手部随机运动变换间隔 (秒)
+class PositionController:
+    def __init__(self, base, model, gains: PDGains | None = None):
+        self.base = base
+        self.model = model
+        self.gains = gains if gains is not None else PDGains()
 
-# ====================== 仿真常量配置 ======================
+        # 关节索引解析
+        self.arm_qpos_ids, self.arm_qvel_ids = self._resolve_joint_ids(base.arm_names)
+        self.hand_qpos_ids, self.hand_qvel_ids = self._resolve_joint_ids(
+            [base.hand_names[k] for k in base.hand_key_order if k in base.hand_names]
+        )
 
-# 相机分辨率配置 (宽 x 高)，影响渲染质量和计算开销
-CAM_WIDTH  = 320   # 相机图像宽度（像素）
-CAM_HEIGHT = 240   # 相机图像高度（像素）
+        # 自动读取范围和限制
+        self.arm_range = self._get_joint_range(self.arm_qpos_ids)
+        self.hand_range = self._get_joint_range(self.hand_qpos_ids)
+        self._torque_min = base.torque_min
+        self._torque_max = base.torque_max
 
-# 目标物体初始位置 [x, y, z]（单位：米）
-# 位于机械臂前方0.4米，高度0.025米处
-TARGET_POS = [0.4, 0.0, 0.025]
+        self._arm_torques = np.zeros(base.ARM_DOF)
+        self._hand_torques = np.zeros(base.HAND_DOF)
 
-
-# ====================== 物理参数配置 ======================
-
-DEFAULT_GRASP_PHYSICS = PhysicsConfig(
-    # 机械臂默认物理参数：较高的阻尼确保运动平稳
-    arm_defaults=JointPhysicsConfig(
-        damping=100.0,        # 关节阻尼系数，抑制振荡
-        frictionloss=0.1,      # 摩擦损耗，模拟关节摩擦
-        armature=0.01,       # 电机惯量，影响动态响应
-    ),
-    # 机械手默认物理参数：低阻尼以实现灵活抓取
-    hand_defaults=JointPhysicsConfig(
-        damping=0.01,        # 手指关节低阻尼，保证灵活性
-        frictionloss=0.01,   # 手指摩擦系数
-        armature=0.01,       # 手指电机惯量
-    ),
-    # 特定关节参数覆盖：拇指旋转关节需要更高阻尼以保持稳定性
-    per_joint_overrides={
-        "thumb_rotate_act_push_j": JointPhysicsConfig(damping=10.0),
-    }
-)
-
-
-# ====================== 环境构建 ======================
-
-def build_custom_grasp_environment(
-    physics: PhysicsConfig = DEFAULT_GRASP_PHYSICS,
-) -> Tuple[mujoco.MjModel, mujoco.MjData]:
-    """
-    构建并编译抓取仿真环境，添加外部环境物体与光照.
-    
-    Args:
-        physics: 物理参数配置对象，包含机械臂和机械手的关节物理属性。
-                默认为 DEFAULT_GRASP_PHYSICS。
-    
-    Returns:
-        Tuple[mujoco.MjModel, mujoco.MjData]: 
-            - model: 编译后的 MuJoCo 模型对象
-            - data:  对应的仿真数据对象，包含状态信息
-    
-    环境组成：
-        1. 机械臂+机械手组合体（通过 get_combined_spec 导入）
-        2. 顶部定向光源照明
-        3. 可抓取的红色立方体目标物体
-        4. 俯视全局相机，自动计算视野角度
-    """
-    print("=== [EnvBuilder] 开始构建自定义抓取环境 ===")
-
-    # 获取组合机器人模型规格，机械手安装在"right_hand"连接点
-    # rot_xyz_deg: 机械手相对机械臂的旋转角度（度）
-    spec = get_combined_spec(
-        rot_xyz_deg=(-90, 0, 0),           # 绕X轴旋转-90度，调整机械手姿态
-        attach_point_name="right_hand",     # 机械臂腕部连接点名称
-        physics=physics,                    # 应用物理参数配置
-    )
-    worldbody = spec.worldbody
-
-    # ----- 配置环境光照 -----
-    # 添加顶部平行光源，提供均匀照明
-    worldbody.add_light(
-        name="top_light",                   # 光源标识名称
-        pos=[0.0, 0.0, 2.0],               # 光源位置：场景正上方2米处
-        dir=[0.0, 0.0, -1.0],              # 照射方向：垂直向下
-        diffuse=[1.0, 1.0, 1.0],           # 漫反射颜色：白色
-    )
-
-    # ----- 添加抓取目标物体 -----
-    # 创建可自由移动的立方体作为抓取目标
-    obj_body = worldbody.add_body(
-        name="target_box",                  # 物体名称
-        pos=TARGET_POS,                     # 初始位置
-    )
-    # 添加立方体几何形状和物理属性
-    obj_body.add_geom(
-        type=mjtGeom.mjGEOM_BOX,           # 几何类型：立方体
-        size=[0.025, 0.025, 0.025],        # 半边长：5cm立方体
-        rgba=[1.0, 0.2, 0.2, 1.0],         # 颜色：红色不透明
-        mass=0.2,                          # 质量：200克
-    )
-    # 添加6自由度自由关节，允许物体在空间中自由移动和旋转
-    obj_body.add_joint(
-        name="box_free", 
-        type=mjtJoint.mjJNT_FREE           # 自由关节类型：6DOF
-    )
-
-    # ----- 自动定位俯视相机 -----
-    # 计算机械臂基座与目标物体的中点位置
-    base_pos   = np.array([0.0, 0.0, 0.0])  # 机械臂基座位置（假设在原点）
-    target_pos = np.array(TARGET_POS)
-    mid_point  = (base_pos + target_pos) / 2.0  # 场景中心点
-    
-    # 相机高度设置
-    cam_height = 3.0  # 相机距离地面3米
-
-    # 根据场景几何自动计算合适的视野角度(FOVY)
-    # 确保相机能同时看到机械臂基座和目标物体
-    dist_to_cover = np.linalg.norm(target_pos - base_pos)  # 基座到目标的水平距离
-    # 三角函数计算：fovy = 2 * arctan(覆盖范围 / 相机高度)
-    calc_fovy = 2 * np.degrees(np.arctan2((dist_to_cover / 2) * 2.0, cam_height))
-
-    # 添加俯视相机到场景
-    worldbody.add_camera(
-        name="downward_cam",                # 相机名称
-        pos=[mid_point[0], mid_point[1], cam_height],  # 位置：中点正上方
-        xyaxes=[0, 1, 0, -1, 0, 0],        # 相机坐标系朝向：俯视-Z轴
-        fovy=calc_fovy,                     # 垂直视野角度（自动计算）
-    )
-
-    print("[EnvBuilder] 模型构建完成，正在编译并生成仿真对象...")
-    # 编译模型规格，生成可仿真的模型对象
-    model = spec.compile()
-    # 创建对应的仿真数据对象，存储状态变量
-    data  = mujoco.MjData(model)
-    return model, data
-
-def main():
-    try:
-        # 1. 初始化模型和数据
-        model, data = build_custom_grasp_environment()
+        # --- IK 相关初始化 ---
+        # 末端执行器的 site 名称，如果你的 model 里叫别的名字请修改
+        self.ee_site_name = "right_hand_site" 
+        self.ee_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, self.ee_site_name)
         
-        # 2. 初始化控制器
-        # 注意：HandArmController 是底层，PositionController 是封装了 IK 和 PD 的上层
-        base_controller = HandArmController(model)
-        pos_controller = PositionController(base_controller, model)
+        # 用于 IK 计算的临时变量
+        self.jac_p = np.zeros((3, model.nv)) # 位置雅可比
+        self.jac_r = np.zeros((3, model.nv)) # 旋转雅可比
 
-        # 3. 计算运动到位时间 (到达圆周起点)
-        # 获取当前末端位置
-        ee_id = pos_controller.ee_id
-        current_ee_pos = data.site_xpos[ee_id].copy()
-        # 设定圆周起点 (angle = 0)
-        start_target = TARGET_CENTER + np.array([CIRCLE_RADIUS, 0, 0])
+    # -----------------------------
+    # 新增：末端位置控制接口 (IK)
+    # -----------------------------
+    def set_ee_target(self, data, ee_pos_target, ee_quat_target=None, hand_target=None):
+        """
+        通过末端位置控制机械臂
+        :param ee_pos_target: 目标位置 [x, y, z]
+        :param ee_quat_target: 目标姿态 [w, x, y, z] (可选，None则只追逐位置)
+        :param hand_target: 手部关节目标 (复用原逻辑)
+        """
+        # 1. 获取当前末端状态
+        ee_pos_current = data.site_xpos[self.ee_id]
+        ee_rot_current = data.site_xmat[self.ee_id].reshape(3, 3)
+
+        # 2. 计算位置误差
+        error_pos = ee_pos_target - ee_pos_current
         
-        # 估算时间：基于距离和平均移动速度
-        # 假设关节步长限制为 0.05 rad/step，仿真频率为 1/timestep
-        # 这是一个经验估算值，实际受 PD 参数影响
-        dist = np.linalg.norm(start_target - current_ee_pos)
-        estimated_arrival_time = dist / 0.1  # 假设平均末端移动速度 0.1m/s
-        print(f"\n[规划] 目标圆心: {TARGET_CENTER}, 半径: {CIRCLE_RADIUS}m")
-        print(f"[规划] 预计机械臂运动到位时间: 约 {estimated_arrival_time:.2f} 秒\n")
+        # 3. 计算旋转误差 (如果提供了四元数)
+        error_rot = np.zeros(3)
+        if ee_quat_target is not None:
+            # 获取当前末端 site 的四元数 (MuJoCo 存储的是旋转矩阵，先转四元数)
+            ee_quat_current = np.zeros(4)
+            mujoco.mju_mat2Quat(ee_quat_current, data.site_xmat[self.ee_id])
+            
+            # 计算四元数误差 (Target * Current_inv)
+            # MuJoCo 提供 mju_subQuat 得到旋转轴/速度向量
+            neg_ee_quat_current = np.zeros(4)
+            mujoco.mju_negQuat(neg_ee_quat_current, ee_quat_current)
+            
+            error_quat = np.zeros(4)
+            mujoco.mju_mulQuat(error_quat, ee_quat_target, neg_ee_quat_current)
+            
+            # 将误差四元数转换为旋转向量 (3维)
+            # 这是误差的方向和大小
+            mujoco.mju_quat2Vel(error_rot, error_quat, 1.0)
 
-        # 4. 启动可视化
-        with mujoco.viewer.launch_passive(model, data) as viewer:
-            sim_time = 0.0
-            last_hand_update = -HAND_RANDOM_INTERVAL
-            hand_target = np.zeros(6)
+        # 4. 获取雅可比矩阵
+        mujoco.mj_jacSite(self.model, data, self.jac_p, self.jac_r, self.ee_id)
+        
+        # 只提取机械臂对应的 Dof 雅可比列 (假设机械臂对应前几个 dof)
+        arm_jac_p = self.jac_p[:, self.arm_qvel_ids]
+        arm_jac_r = self.jac_r[:, self.arm_qvel_ids]
+        
+        # 拼接雅可比 (如果只要位置就只用 jac_p)
+        if ee_quat_target is not None:
+            full_jac = np.vstack([arm_jac_p, arm_jac_r])
+            full_error = np.concatenate([error_pos, error_rot])
+        else:
+            full_jac = arm_jac_p
+            full_error = error_pos
 
-            while viewer.is_running():
-                step_start = time.time()
-                
-                # --- A. 机械臂圆周运动逻辑 ---
-                # 计算当前圆周角度
-                angle = sim_time * CIRCLE_SPEED
-                ee_target_pos = TARGET_CENTER + np.array([
-                    CIRCLE_RADIUS * np.cos(angle),
-                    CIRCLE_RADIUS * np.sin(angle),
-                    0  # 保持在固定高度
-                ])
-                
-                # 保持手的姿势
-                # 如果你的模型姿态不同，请调整此四元数
-                ee_target_quat = np.array([0, 0, 0, 0]) 
+        # 5. 计算关节增量 (DLS 阻尼最小二乘)
+        lambda_sq = 0.01 
+        # 使用 solve 通常比直接求逆更稳定
+        dq = full_jac.T @ np.linalg.solve(
+            full_jac @ full_jac.T + lambda_sq * np.eye(full_jac.shape[0]), 
+            full_error
+        )
 
-                # --- B. 机械手随机运动逻辑 ---
-                if sim_time - last_hand_update > HAND_RANDOM_INTERVAL:
-                    # 为 6 个手部关节生成随机目标 (参考 self.hand_range)
-                    low = pos_controller.hand_range[:, 0]
-                    high = pos_controller.hand_range[:, 1]
-                    hand_target = np.random.uniform(low, high)
-                    last_hand_update = sim_time
+        # ⭐ 新增：步长限制 (防止目标过远导致 dq 过大)
+        # 限制单次计算的最大关节变化量（例如 0.05 弧度）
+        max_dq = 0.1745
+        magnitude = np.linalg.norm(dq)
+        if magnitude > max_dq:
+            dq = dq * (max_dq / magnitude)
 
-                # --- C. 调用 IK 接口下发控制 ---
-                pos_controller.set_ee_target(
-                    data,
-                    ee_pos_target=ee_target_pos,
-                    ee_quat_target=ee_target_quat,
-                    hand_target=hand_target
-                )
+        # 6. 计算新的目标关节角
+        # 注意：这里我们基于当前实际位置 data.qpos 计算下一个目标点
+        arm_target = data.qpos[self.arm_qpos_ids] + dq
+        
+        # 7. 调用原有的 set_target 进行 PD 控制和下发
+        if hand_target is None:
+            hand_target = data.qpos[self.hand_qpos_ids] # 保持当前手部姿态
+            
+        self.set_target(data, arm_target, hand_target)
 
-                # --- D. 物理步进 ---
-                mujoco.mj_step(model, data)
-                viewer.sync()
+    # -----------------------------
+    # 原有：关节空间主控制
+    # -----------------------------
+    def set_target(self, data, arm_target, hand_target):
+        # 限制范围
+        arm_target = np.clip(arm_target, self.arm_range[:, 0], self.arm_range[:, 1])
+        hand_target = np.clip(hand_target, self.hand_range[:, 0], self.hand_range[:, 1])
 
-                # 更新仿真时间
-                sim_time += model.opt.timestep
-                
-                # 实时状态打印
-                if int(sim_time * 10) % 2 == 0: # 降低打印频率
-                    print(f"\r[Sim {sim_time:.2f}s] EE_Pos: {data.site_xpos[ee_id].round(3)} | "
-                          f"Hand_Move: 随机中", end="", flush=True)
+        # --- arm PD ---
+        np.subtract(arm_target, data.qpos[self.arm_qpos_ids], out=self._arm_torques)
+        self._arm_torques *= self.gains.kp_arm
+        self._arm_torques -= (self.gains.kd_arm * data.qvel[self.arm_qvel_ids])
 
-                # 维持仿真频率 (可选)
-                time_until_next_step = model.opt.timestep - (time.time() - step_start)
-                if time_until_next_step > 0:
-                    time.sleep(time_until_next_step)
+        # --- hand PD ---
+        np.subtract(hand_target, data.qpos[self.hand_qpos_ids], out=self._hand_torques)
+        self._hand_torques *= self.gains.kp_hand
+        self._hand_torques -= (self.gains.kd_hand * data.qvel[self.hand_qvel_ids])
 
-    except Exception as e:
-        print(f"\n[错误] {e}")
-        import traceback
-        traceback.print_exc()
-    finally:
-        print("\n=== 仿真结束 ===")
+        self._apply_saturation()
+        self.base.apply_control(data, self._arm_torques, self._hand_torques)
 
-if __name__ == "__main__":
-    main()
+    def _apply_saturation(self):
+        np.clip(self._arm_torques, self._torque_min[:self.base.ARM_DOF], 
+                self._torque_max[:self.base.ARM_DOF], out=self._arm_torques)
+        np.clip(self._hand_torques, self._torque_min[self.base.ARM_DOF:], 
+                self._torque_max[self.base.ARM_DOF:], out=self._hand_torques)
+
+    def _get_joint_range(self, qpos_ids):
+        ranges = []
+        for qid in qpos_ids:
+            joint_id = np.where(self.model.jnt_qposadr == qid)[0][0]
+            ranges.append(self.model.jnt_range[joint_id])
+        return np.array(ranges)
+
+    def _resolve_joint_ids(self, actuator_names):
+        qpos_ids = []
+        qvel_ids = []
+        for name in actuator_names:
+            act_id = self.base.actuator_map[name]
+            joint_id = self.model.actuator_trnid[act_id, 0]
+            qpos_ids.append(self.model.jnt_qposadr[joint_id])
+            qvel_ids.append(self.model.jnt_dofadr[joint_id])
+        return (np.array(qpos_ids, dtype=np.int32), np.array(qvel_ids, dtype=np.int32))
