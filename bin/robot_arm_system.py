@@ -131,13 +131,20 @@ DEFAULT_GRASP_PHYSICS = PhysicsConfig(
     ),
     # 机械手默认物理参数：低阻尼以实现灵活抓取
     hand_defaults=JointPhysicsConfig(
-        damping=0.01,        # 手指关节低阻尼，保证灵活性
-        frictionloss=0.01,   # 手指摩擦系数
-        armature=0.01,       # 手指电机惯量
+        damping=0.1,        # 手指关节低阻尼，保证灵活性
+        frictionloss=0.1,   # 手指摩擦系数
+        armature=0.1,       # 手指电机惯量
     ),
     # 特定关节参数覆盖：拇指旋转关节需要更高阻尼以保持稳定性
     per_joint_overrides={
         "thumb_rotate_act_push_j": JointPhysicsConfig(damping=10.0),
+        "joint1": JointPhysicsConfig(damping=100.0),
+        "joint2": JointPhysicsConfig(damping=50.0),
+        "joint3": JointPhysicsConfig(damping=10.0),
+        "joint4": JointPhysicsConfig(damping=10.0),
+        "joint5": JointPhysicsConfig(damping=10.0),
+        "joint6": JointPhysicsConfig(damping=5.0),
+        "joint7": JointPhysicsConfig(damping=5.0),
     }
 )
 
@@ -208,8 +215,7 @@ def _apply_physics_to_spec(
         for lookup in (name, bare_name):
             if lookup in physics.per_joint_overrides:
                 _apply_joint_config(joint, physics.per_joint_overrides[lookup])
-                break  # 找到匹配即停止，避免重复应用
-
+                break
     # ----- 2. 遍历所有几何体应用接触参数 -----
     # 可选：修改全局接触摩擦属性
     if physics.geom_friction is not None or physics.geom_condim is not None:
@@ -426,30 +432,9 @@ if __name__ == "__main__":
         python robot_arm_system.py
     """
     print("--- 独立运行模式：预览合成机械臂 ---")
-
-    # 示例物理配置
-    demo_physics = PhysicsConfig(
-        # 机械臂默认物理参数：较高的阻尼确保运动平稳
-        arm_defaults=JointPhysicsConfig(
-            damping=10.0,        # 关节阻尼系数，抑制振荡
-            frictionloss=1,      # 摩擦损耗，模拟关节摩擦
-            armature=0.01,       # 电机惯量，影响动态响应
-        ),
-        # 机械手默认物理参数：低阻尼以实现灵活抓取
-        hand_defaults=JointPhysicsConfig(
-            damping=0.01,        # 手指关节低阻尼，保证灵活性
-            frictionloss=0.01,   # 手指摩擦系数
-            armature=0.01,       # 手指电机惯量
-        ),
-        # 特定关节参数覆盖：拇指旋转关节需要更高阻尼以保持稳定性
-        per_joint_overrides={
-            "thumb_rotate_act_push_j": JointPhysicsConfig(damping=10.0),
-        }
-    )
-
     try:
         # 加载并编译模型
-        model, data = load_combined_model(physics=demo_physics)
+        model, data = load_combined_model()
 
         # 启动被动查看器（非阻塞，允许外部控制循环）
         with viewer.launch_passive(model, data) as v:
