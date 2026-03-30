@@ -31,9 +31,9 @@ class PDGains:
         kp_hand: 机械手比例增益。通常设置为与臂同量级或略低。
         kd_hand: 机械手微分增益。
     """
-    kp_arm: np.ndarray = field(default_factory=lambda: np.full(7, 4000.))
+    kp_arm: np.ndarray = field(default_factory=lambda: np.full(7, 40000.))
     kd_arm: np.ndarray = field(default_factory=lambda: np.full(7, 400.))
-    kp_hand: np.ndarray = field(default_factory=lambda: np.full(6, 4000.))
+    kp_hand: np.ndarray = field(default_factory=lambda: np.full(6, 40000.))
     kd_hand: np.ndarray = field(default_factory=lambda: np.full(6, 400.))
 
 
@@ -161,22 +161,30 @@ class PositionController:
             full_jac = arm_jac_p
             full_error = error_pos
 
-        # 5. 计算关节增量 (DLS 阻尼最小二乘)
-        # 解决雅可比矩阵非方阵或奇异的问题，增加数值稳定性
-        lambda_sq = 0.01 
+        # 5. 计算关节增量 (自适应 DLS)
+    
+        # ⭐ 自适应阻尼：误差大时阻尼大（防抖动），误差小时阻尼小（快收敛）
+        error_norm = np.linalg.norm(full_error)
+        lambda_sq = np.clip(0.001 * error_norm, 1e-6, 0.01)  # 随误差线性缩放
         
-        # 使用 solve 通常比直接求逆更稳定
         dq = full_jac.T @ np.linalg.solve(
             full_jac @ full_jac.T + lambda_sq * np.eye(full_jac.shape[0]), 
             full_error
         )
 
-        # ⭐ 新增：步长限制 (防止目标过远导致 dq 过大)
-        # 限制单次计算的最大关节变化量（例如 0.05 弧度）
-        max_dq = 0.1745
+        # ⭐ 自适应步长：误差小时步长也按比例缩小，不做硬截断
+        max_dq_base = 0.1745
+        # 误差大于阈值时正常截断，小于阈值时线性缩放（跟踪误差）
+        error_threshold = 0.05  # 5cm / ~3deg 以内开始线性缩放
+        
         magnitude = np.linalg.norm(dq)
-        if magnitude > max_dq:
-            dq = dq * (max_dq / magnitude)
+        if magnitude > 0:
+            # 步长上限随误差线性降低，避免小误差时过冲
+            adaptive_max_dq = max_dq_base * min(1.0, error_norm / error_threshold)
+            adaptive_max_dq = max(adaptive_max_dq, 1e-4)  # 保底，避免完全停住
+            
+            if magnitude > adaptive_max_dq:
+                dq = dq * (adaptive_max_dq / magnitude)
 
         # 6. 计算新的目标关节角
         # 注意：这里我们基于当前实际位置 data.qpos 计算下一个目标点

@@ -67,25 +67,6 @@ def build_custom_grasp_environment() -> Tuple[mujoco.MjModel, mujoco.MjData]:
         diffuse=[1.0, 1.0, 1.0],           # 漫反射颜色：白色
     )
 
-    # ----- 添加抓取目标物体 -----
-    # 创建可自由移动的立方体作为抓取目标
-    obj_body = worldbody.add_body(
-        name="target_box",                  # 物体名称
-        pos=TARGET_POS,                     # 初始位置
-    )
-    # 添加立方体几何形状和物理属性
-    obj_body.add_geom(
-        type=mjtGeom.mjGEOM_BOX,           # 几何类型：立方体
-        size=[0.025, 0.025, 0.025],        # 半边长：5cm立方体
-        rgba=[1.0, 0.2, 0.2, 1.0],         # 颜色：红色不透明
-        mass=0.2,                          # 质量：200克
-    )
-    # 添加6自由度自由关节，允许物体在空间中自由移动和旋转
-    obj_body.add_joint(
-        name="box_free", 
-        type=mjtJoint.mjJNT_FREE           # 自由关节类型：6DOF
-    )
-
     # ----- 自动定位俯视相机 -----
     # 计算机械臂基座与目标物体的中点位置
     base_pos   = np.array([0.0, 0.0, 0.0])  # 机械臂基座位置（假设在原点）
@@ -132,30 +113,22 @@ def main():
 
         # ===== 2. viewer =====
         with mujoco.viewer.launch_passive(model, data) as viewer:
-
             sim_time = 0.0
-            circle_hand_time = 4
-
+            
             # ⭐ 初始目标（机械臂不动）
             arm_target_origin = data.qpos[pos_controller.arm_qpos_ids].copy()
-
+            hand_target = data.qpos[pos_controller.hand_qpos_ids].copy()
+            arm_target_in_degree = np.array([9.25100040435791, 82.20800018310547, -18.44099998474121, 133.0800018310547, 7.341000080108643, -125.16699981689453, 113.6760025024414])
+            arm_target = arm_target_in_degree / 180.0 * np.pi
+            print(f"arm_target={arm_target}/n")
             while viewer.is_running():
                 sim_time += model.opt.timestep
 
                 # =========================
                 # ⭐ 手爪目标（位置控制！）
                 # =========================
-                # 逻辑：计算当前处于第几个时间段
-                current_period = int(sim_time / circle_hand_time)
 
-                if current_period % 2 == 0:
-                    # 偶数时间段 -> 闭合
-                    hand_target = np.array([0.01, 0.01, 0.01, 0.01, 0.01, 0.0])
-                    arm_target = np.array([1, 1, 1, 1, 1, 1, 1])
-                else:
-                    # 奇数时间段 -> 张开
-                    hand_target = np.zeros(6)
-                    arm_target = arm_target_origin
+                
 
                 # =========================
                 # ⭐ 使用 PD 控制器（关键）
