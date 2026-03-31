@@ -13,11 +13,9 @@
 import mujoco
 from mujoco import mjtGeom, mjtJoint
 from robot_arm_system import get_combined_spec, PhysicsConfig, JointPhysicsConfig
-from position_controller import PositionController
+from position_controller import OSC_PositionController
 from typing import Tuple
 import numpy as np
-
-# 内部模块导入
 from hand_arm_controller import HandArmController
 
 # ====================== 仿真常量配置 ======================
@@ -109,7 +107,7 @@ def main():
         controller = HandArmController(model)
 
         # ⭐ 新增：位置控制器
-        pos_controller = PositionController(controller, model)
+        pos_controller = OSC_PositionController(controller, model)
         
         # 机械臂控制保持一个姿势，手部的控制用csv文件里的七维时序数据
         # 第一维是时间戳，后面六维是手部的控制

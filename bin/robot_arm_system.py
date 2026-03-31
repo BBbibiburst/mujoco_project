@@ -358,6 +358,10 @@ def get_combined_spec(
         _apply_physics_to_spec(arm_spec, physics, arm_root_name=attach_point_name)
     else:
         _apply_physics_to_spec(arm_spec, DEFAULT_GRASP_PHYSICS, arm_root_name=attach_point_name)
+    
+    arm_spec.option.timestep = 0.001  # 适配机械臂的高频控制
+    arm_spec.option.solver = mujoco.mjtSolver.mjSOL_NEWTON 
+    arm_spec.option.iterations = 100  # 增加迭代次数以处理灵巧手的复杂约束
 
     return arm_spec
 

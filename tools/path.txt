@@ -1,0 +1,5 @@
+/home/zmy/MyProject/bin/circle_movement_test.py
+/home/zmy/MyProject/bin/grasp_task_env.py
+/home/zmy/MyProject/bin/hand_arm_controller.py
+/home/zmy/MyProject/bin/position_controller.py
+/home/zmy/MyProject/bin/robot_arm_system.py

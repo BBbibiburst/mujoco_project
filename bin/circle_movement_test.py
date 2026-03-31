@@ -12,6 +12,9 @@ from mujoco import mjtGeom, mjtJoint
 import numpy as np
 import time
 from typing import Tuple
+from robot_arm_system import get_combined_spec, PhysicsConfig, JointPhysicsConfig
+from position_controller import OSC_PositionController
+from hand_arm_controller import HandArmController
 
 # ====================== 轨迹可视化辅助类 ======================
 class TrajectoryVisualizer:
@@ -66,10 +69,6 @@ CIRCLE_SPEED  = 1.5                        # 旋转角速度 (rad/s)
 HAND_RANDOM_INTERVAL = 1.0  # 手部动作随机变化的间隔时间 (秒)
 TARGET_POS = [0.4, 0.0, 0.025] # 静态物体位置
 
-# --- 导入模块 (请确保这些文件存在) ---
-from robot_arm_system import get_combined_spec, PhysicsConfig, JointPhysicsConfig
-from position_controller import PositionController
-from hand_arm_controller import HandArmController
 
 def build_custom_grasp_environment() -> Tuple[mujoco.MjModel, mujoco.MjData]:
     """构建基础仿真环境（复用之前的逻辑）"""
@@ -90,7 +89,7 @@ def main():
         # ===== 1. 系统初始化 =====
         model, data = build_custom_grasp_environment()
         base_controller = HandArmController(model)
-        pos_controller = PositionController(base_controller, model)
+        pos_controller = OSC_PositionController(base_controller, model)
 
         # 初始化可视化工具：用于绘制末端实际位置
         # 颜色为青蓝色，半径 5mm
