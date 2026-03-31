@@ -131,8 +131,8 @@ DEFAULT_GRASP_PHYSICS = PhysicsConfig(
     ),
     # 机械手默认物理参数：低阻尼以实现灵活抓取
     hand_defaults=JointPhysicsConfig(
-        damping=0.1,        # 手指关节低阻尼，保证灵活性
-        frictionloss=0.1,   # 手指摩擦系数
+        damping=1,        # 手指关节低阻尼，保证灵活性
+        frictionloss=0.01,   # 手指摩擦系数
         armature=0.1,       # 手指电机惯量
     ),
     # 特定关节参数覆盖：拇指旋转关节需要更高阻尼以保持稳定性

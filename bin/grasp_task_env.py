@@ -110,13 +110,27 @@ def main():
 
         # ⭐ 新增：位置控制器
         pos_controller = PositionController(controller, model)
-
+        
+        # 机械臂控制保持一个姿势，手部的控制用csv文件里的七维时序数据
+        # 第一维是时间戳，后面六维是手部的控制
+        import csv
+        hand_target_sequence = []
+        with open('/home/zmy/MyProject/data/position_log.csv', 'r') as f:
+            reader = csv.reader(f)
+            for row in reader:
+                hand_target_sequence.append([float(x) for x in row])
+        hand_target_sequence = np.array(hand_target_sequence)[1:]  # 去掉表头
+        # 归一化到 0-0.01 之间
+        hand_range = np.array([1600, 1600, 1400, 1800, 1200, 2000])  # 每个手部控制的范围
+        hand_target_sequence[:, 1:] = hand_target_sequence[:, 1:] / hand_range * 0.01
+        # 将每一行的所有值设为第一列的值
+        hand_target_sequence = np.column_stack([hand_target_sequence[:, 1]] * 7)
+        print(f"Loaded hand target sequence with shape: {hand_target_sequence.shape}")
         # ===== 2. viewer =====
         with mujoco.viewer.launch_passive(model, data) as viewer:
             sim_time = 0.0
             
-            # ⭐ 初始目标（机械臂不动）
-            arm_target_origin = data.qpos[pos_controller.arm_qpos_ids].copy()
+            # ⭐ 初始目标（灵巧手不动）
             hand_target = data.qpos[pos_controller.hand_qpos_ids].copy()
             arm_target_in_degree = np.array([9.25100040435791, 82.20800018310547, -18.44099998474121, 133.0800018310547, 7.341000080108643, -125.16699981689453, 113.6760025024414])
             arm_target = arm_target_in_degree / 180.0 * np.pi
@@ -128,7 +142,7 @@ def main():
                 # ⭐ 手爪目标（位置控制！）
                 # =========================
 
-                
+                hand_target = hand_target_sequence[int(sim_time / 0.01) % len(hand_target_sequence), 1:]  # 循环使用手部目标序列
 
                 # =========================
                 # ⭐ 使用 PD 控制器（关键）
