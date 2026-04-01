@@ -8,42 +8,37 @@ import warnings
 warnings.filterwarnings("ignore", message="Signature.*longdouble")
 
 def fit_viz_sampling_pca_locked(stl_path, m, n):
+    """
+    基于 PCA 锁轴的残缺椭圆柱面拟合与采样算法
+    :param stl_path: 输入 STL 文件路径
+    :param m: 周向采样点数量 (Theta/Arc direction) - [已修正]
+    :param n: 轴向采样点数量 (Z/Height direction) - [已修正]
+    """
     print(f"--- Processing model: {stl_path} ---")
     mesh = trimesh.load(stl_path)
     
     # ==========================================
-    # 1. PCA 锁定主方向 (Lock Axis with PCA)
+    # 1. PCA 锁定主方向
     # ==========================================
-    # 提取主表面
     facet_groups = trimesh.graph.connected_components(mesh.face_adjacency, nodes=np.arange(len(mesh.faces)))
     main_facet_indices = facet_groups[np.argmax([mesh.area_faces[g].sum() for g in facet_groups])]
     main_vertices = mesh.vertices[np.unique(mesh.faces[main_facet_indices])]
     
-    # PCA 变换
     pca = PCA(n_components=3)
     pts_pca = pca.fit_transform(main_vertices)
     
-    # 强制定义：
-    # PC0 (z) -> 柱面轴向
-    # PC1 (x) -> 截面长轴方向
-    # PC2 (y) -> 截面短轴方向
-    z_pca_data = pts_pca[:, 0]
-    x_pca_data = pts_pca[:, 1]
-    y_pca_data = pts_pca[:, 2]
+    z_pca_data = pts_pca[:, 0] # 轴向
+    x_pca_data = pts_pca[:, 1] # 截面 X
+    y_pca_data = pts_pca[:, 2] # 截面 Y
     
     print(f"--- PCA Axis Locked. Variance Ratios: {pca.explained_variance_ratio_} ---")
 
     # ==========================================
-    # 2. 截面全量拟合 (Fit Full Cross-Section)
+    # 2. 截面全量拟合
     # ==========================================
-    # 在垂直于 PCA 轴的平面 (X-Y 平面) 上拟合完整椭圆
-    # 我们不直接假设中心是 0，而是通过点云分布来估算完整的椭圆边界
-    # 这样可以处理“虽然轴是直的，但截面可能是偏心的”情况
-    
     x_min, x_max = x_pca_data.min(), x_pca_data.max()
     y_min, y_max = y_pca_data.min(), y_pca_data.max()
     
-    # 估算完整椭圆的中心和半径
     center_x = (x_min + x_max) / 2
     center_y = (y_min + y_max) / 2
     a_fit = (x_max - x_min) / 2
@@ -52,43 +47,29 @@ def fit_viz_sampling_pca_locked(stl_path, m, n):
     print(f"--- Full Ellipse Params: a={a_fit:.2f}, b={b_fit:.2f}, Center=({center_x:.2f}, {center_y:.2f}) ---")
 
     # ==========================================
-    # 3. 投影与分布分析 (Project & Analyze Arc)
+    # 3. 投影与分布分析
     # ==========================================
-    # 将点投影到拟合的完整椭圆上，计算角度
     x_centered = x_pca_data - center_x
     y_centered = y_pca_data - center_y
     
-    # 归一化角度计算 (处理非圆椭圆)
-    # 这一步完全在 PCA 的局部坐标系内进行，保证了角度是相对于 PCA 轴的
     angles = np.arctan2(y_centered / b_fit, x_centered / a_fit)
-    
-    # 展开到 0 ~ 2PI
     angles_deg = np.degrees(np.mod(angles, 2 * np.pi))
     
-    # 寻找最大间隙 (Max Gap) 以确定有效弧段
     sorted_angles = np.sort(angles_deg)
-    # 计算相邻角度差
     gaps = np.diff(sorted_angles)
     
-    # 还需要考虑首尾跨越 360 度的间隙
     wrap_gap = 360 - (sorted_angles[-1] - sorted_angles[0])
     gaps = np.append(gaps, wrap_gap)
     
     max_gap_idx = np.argmax(gaps)
     
-    # 确定有效区域的起止角度
-    # 如果最大间隙是 wrap_gap，说明点云是连续的且跨越了 0 度
     if max_gap_idx == len(gaps) - 1:
         start_angle_deg = sorted_angles[0]
         end_angle_deg = sorted_angles[-1]
     else:
-        # 最大间隙在中间，有效区域在间隙之后
         start_angle_deg = sorted_angles[(max_gap_idx + 1) % len(sorted_angles)]
         end_angle_deg = sorted_angles[max_gap_idx]
-        # 处理跨越 360 的显示问题
-        if start_angle_deg < end_angle_deg:
-             pass 
-        else:
+        if start_angle_deg > end_angle_deg:
              end_angle_deg += 360
 
     covered_angle_deg = end_angle_deg - start_angle_deg
@@ -97,23 +78,21 @@ def fit_viz_sampling_pca_locked(stl_path, m, n):
     print(f"--- Detected Arc: [{start_angle_deg:.1f}°, {end_angle_deg:.1f}°], Ratio: {arc_ratio:.2f} ---")
 
     # ==========================================
-    # 4. 生成拟合曲面与网格 (Generate Geometry)
+    # 4. 生成拟合曲面与网格
     # ==========================================
     theta_start = np.radians(start_angle_deg)
     theta_end = np.radians(end_angle_deg)
     
-    # 绘图用网格
+    # 绘图用网格 (保持 80x80 用于显示，不受 m,n 影响)
     num_plot = 80
     z_grid_plot = np.linspace(z_pca_data.min(), z_pca_data.max(), num_plot)
     theta_grid_plot = np.linspace(theta_start, theta_end, num_plot)
     
     Z_mesh, THETA_mesh = np.meshgrid(z_grid_plot, theta_grid_plot)
     
-    # 参数方程 (严格基于 PCA 坐标系)
     X_mesh = center_x + a_fit * np.cos(THETA_mesh)
     Y_mesh = center_y + b_fit * np.sin(THETA_mesh)
     
-    # 逆变换回世界坐标系
     surf_pca = np.vstack([Z_mesh.ravel(), X_mesh.ravel(), Y_mesh.ravel()]).T
     surf_orig = pca.inverse_transform(surf_pca)
     
@@ -121,11 +100,16 @@ def fit_viz_sampling_pca_locked(stl_path, m, n):
     Y_surf = surf_orig[:, 1].reshape(num_plot, num_plot)
     Z_surf = surf_orig[:, 2].reshape(num_plot, num_plot)
 
-    # 采样点生成
-    z_grid_sampling = np.linspace(z_pca_data.min(), z_pca_data.max(), m)
-    theta_grid_sampling = np.linspace(theta_start, theta_end, n)
+    # ==========================================
+    # 5. 生成采样点 (已修正 m, n 对应关系)
+    # ==========================================
+    # m -> 周向 (Theta)
+    # n -> 轴向 (Z)
+    theta_grid_sampling = np.linspace(theta_start, theta_end, m)
+    z_grid_sampling = np.linspace(z_pca_data.min(), z_pca_data.max(), n)
     
     sampled_pts_pca = []
+    # 先遍历 Z，再遍历 Theta (或者反过来，只要对应即可，这里保持逻辑一致)
     for zi in z_grid_sampling:
         for theta in theta_grid_sampling:
             xi = center_x + a_fit * np.cos(theta)
@@ -178,5 +162,5 @@ def fit_viz_sampling_pca_locked(stl_path, m, n):
     plt.show()
 
 if __name__ == "__main__":
-    path = "/home/zmy/MyProject/models/inspirehand/meshes/skin_0_2_p.STL"
+    path = "/home/zmy/MyProject/models/inspirehand/meshes/skin_0_0_p.STL"
     fit_viz_sampling_pca_locked(path, m=11, n=8)
