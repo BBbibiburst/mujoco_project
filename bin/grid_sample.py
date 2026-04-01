@@ -11,8 +11,8 @@ def fit_viz_sampling_pca_locked(stl_path, m, n):
     """
     基于 PCA 锁轴的残缺椭圆柱面拟合与采样算法
     :param stl_path: 输入 STL 文件路径
-    :param m: 周向采样点数量 (Theta/Arc direction) - [已修正]
-    :param n: 轴向采样点数量 (Z/Height direction) - [已修正]
+    :param m: 周向采样点数量 (Theta/Arc direction) → 生成 m 个中心采样点
+    :param n: 轴向采样点数量 (Z/Height direction) → 生成 n 个中心采样点
     """
     print(f"--- Processing model: {stl_path} ---")
     mesh = trimesh.load(stl_path)
@@ -78,12 +78,12 @@ def fit_viz_sampling_pca_locked(stl_path, m, n):
     print(f"--- Detected Arc: [{start_angle_deg:.1f}°, {end_angle_deg:.1f}°], Ratio: {arc_ratio:.2f} ---")
 
     # ==========================================
-    # 4. 生成拟合曲面与网格
+    # 4. 生成拟合曲面与网格 (用于显示)
     # ==========================================
     theta_start = np.radians(start_angle_deg)
     theta_end = np.radians(end_angle_deg)
     
-    # 绘图用网格 (保持 80x80 用于显示，不受 m,n 影响)
+    # 绘图用网格
     num_plot = 80
     z_grid_plot = np.linspace(z_pca_data.min(), z_pca_data.max(), num_plot)
     theta_grid_plot = np.linspace(theta_start, theta_end, num_plot)
@@ -101,25 +101,31 @@ def fit_viz_sampling_pca_locked(stl_path, m, n):
     Z_surf = surf_orig[:, 2].reshape(num_plot, num_plot)
 
     # ==========================================
-    # 5. 生成采样点 (已修正 m, n 对应关系)
+    # 5. 生成 m×n 个规则中心采样点（已按需求修改）
     # ==========================================
-    # m -> 周向 (Theta)
-    # n -> 轴向 (Z)
-    theta_grid_sampling = np.linspace(theta_start, theta_end, m)
-    z_grid_sampling = np.linspace(z_pca_data.min(), z_pca_data.max(), n)
+    # 目标：把参数空间划分为 m×n 个小矩形，取每个矩形的中心点
+    # 生成 (m+1) 和 (n+1) 条边界 → 产生 m×n 个中心点
     
-    sampled_pts_pca = []
-    # 先遍历 Z，再遍历 Theta (或者反过来，只要对应即可，这里保持逻辑一致)
-    for zi in z_grid_sampling:
-        for theta in theta_grid_sampling:
-            xi = center_x + a_fit * np.cos(theta)
-            yi = center_y + b_fit * np.sin(theta)
-            sampled_pts_pca.append([zi, xi, yi])
-            
-    ideal_pts_orig = pca.inverse_transform(np.array(sampled_pts_pca))
+    theta_edges = np.linspace(theta_start, theta_end, m + 1)   # m+1 条周向边界
+    z_edges     = np.linspace(z_pca_data.min(), z_pca_data.max(), n + 1)  # n+1 条轴向边界
+
+    # 计算每个小矩形的中心
+    theta_centers = 0.5 * (theta_edges[:-1] + theta_edges[1:])   # 长度 = m
+    z_centers     = 0.5 * (z_edges[:-1] + z_edges[1:])           # 长度 = n
+
+    # 使用 meshgrid 更简洁高效地生成所有组合
+    THETA, Z = np.meshgrid(theta_centers, z_centers)
+    
+    X = center_x + a_fit * np.cos(THETA)
+    Y = center_y + b_fit * np.sin(THETA)
+    
+    sampled_pts_pca = np.stack([Z.ravel(), X.ravel(), Y.ravel()], axis=1)
+    ideal_pts_orig = pca.inverse_transform(sampled_pts_pca)
+    
+    print(f"--- Generated Center Grid: {len(ideal_pts_orig)} points (m={m} × n={n}) ---")
 
     # ==========================================
-    # 5. 可视化
+    # 6. 可视化
     # ==========================================
     fig = plt.figure(figsize=(20, 6))
     fig.suptitle(f"PCA-Locked Fitting (Ratio {arc_ratio:.2f})\n{stl_path.split('/')[-1]}", fontsize=16)
@@ -152,10 +158,13 @@ def fit_viz_sampling_pca_locked(stl_path, m, n):
     ax3.plot_trisurf(mesh.vertices[:, 0], mesh.vertices[:, 1], mesh.vertices[:, 2], 
                     triangles=mesh.faces, color='gray', alpha=0.2, linewidth=0)
     
-    colors = np.tile(np.linspace(0, 1, n), m)
+    # 颜色按轴向 (Z) 渐变
+    z_colors = np.linspace(0, 1, n)
+    colors = np.repeat(z_colors, m)          # 每个 Z 层重复 m 次（与点顺序一致）
+    
     ax3.scatter(ideal_pts_orig[:, 0], ideal_pts_orig[:, 1], ideal_pts_orig[:, 2], 
                c=colors, cmap='jet', s=40, edgecolors='none')
-    ax3.set_title(f"3. Sampling Grid ({m}x{n})")
+    ax3.set_title(f"3. Sampling Grid ({m}×{n})")
     set_axes_equal(ax3)
 
     plt.tight_layout()
@@ -163,4 +172,4 @@ def fit_viz_sampling_pca_locked(stl_path, m, n):
 
 if __name__ == "__main__":
     path = "/home/zmy/MyProject/models/inspirehand/meshes/skin_0_0_p.STL"
-    fit_viz_sampling_pca_locked(path, m=11, n=8)
+    fit_viz_sampling_pca_locked(path, m=10, n=7)
