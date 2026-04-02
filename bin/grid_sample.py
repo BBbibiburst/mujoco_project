@@ -662,26 +662,44 @@ def fit_thick_elliptic_cylinder(
         ax4.axhline(t_mean, color='red', lw=1.5, linestyle='--', label=f'mean={t_mean:.3f}')
         ax4.set_title(f"4. Wall Thickness\n(polar, mean={t_mean:.4f})")
 
-        # 子图 5：外表面采样点（矩形网格中点）
+        # 子图 5：外表面采样点 + 完整 (m+1)×(n+1) 分割线网格
         ax5 = fig.add_subplot(155, projection="3d")
         ax5.plot_trisurf(mesh.vertices[:,0], mesh.vertices[:,1], mesh.vertices[:,2],
                         triangles=mesh.faces, color="gray", alpha=0.15, linewidth=0)
 
-        # 绘制分割线网格（可选，帮助理解）
+        # ========== 修改：增强分割线网格显示 ==========
+        # 1. 周向分割线：n+1 条椭圆环线（原有，但样式增强）
         for z_div in z_divisions:
-            # 在每个 z 高度画椭圆分割线
             theta_line = np.linspace(theta_start, theta_end, 100)
             line_pts = to_world_outer(np.full_like(theta_line, z_div), theta_line)
-            ax5.plot(line_pts[:,0], line_pts[:,1], line_pts[:,2], 'gray', alpha=0.3, linewidth=0.5)
+            ax5.plot(line_pts[:,0], line_pts[:,1], line_pts[:,2], 
+                    'gray', alpha=0.6, linewidth=1.0, linestyle='-')  # ← 加粗、更清晰
 
-        # 颜色按弧长位置映射
+        # 2. 轴向分割线：m+1 条竖直母线（← 新增！）
+        for theta_div in theta_divisions:
+            z_line = np.linspace(z_all.min(), z_all.max(), 50)
+            line_pts = to_world_outer(z_line, np.full_like(z_line, theta_div))
+            ax5.plot(line_pts[:,0], line_pts[:,1], line_pts[:,2], 
+                    'gray', alpha=0.6, linewidth=1.0, linestyle='-')
+
+        # 3. 网格交点：(m+1)×(n+1) 个（← 新增！）
+        THETA_grid, Z_grid = np.meshgrid(theta_divisions, z_divisions)
+        grid_intersections = to_world_outer(Z_grid.ravel(), THETA_grid.ravel())
+        ax5.scatter(grid_intersections[:,0], grid_intersections[:,1], grid_intersections[:,2],
+                c='black', s=20, marker='+', alpha=0.8, linewidth=1.5,
+                label=f'Grid intersections ({(m+1)*(n+1)})')
+
+        # 4. 采样点：m×n 个（← 增强显示）
         arc_positions = np.linspace(0, 1, m)
         colors = np.tile(arc_positions, n)
-
         ax5.scatter(sample_pts[:,0], sample_pts[:,1], sample_pts[:,2],
-                    c=colors, cmap='jet', s=50, edgecolors='none', zorder=5)
-        ax5.set_title(f"5. Outer Surface Samples (Cell Centers)\n({m}×{n}={m*n} pts, arc-length×uniform)")
+                    c=colors, cmap='jet', s=80, edgecolors='black', linewidth=0.5,  # ← 更大、加边框
+                    zorder=5, label=f'Sample points ({m}×{n})')
+
+        ax5.set_title(f"5. Sampling Grid with Divisions\n"
+                    f"({m+1}×{n+1}={(m+1)*(n+1)} intersections, {m}×{n}={m*n} cell centers)")
         set_eq(ax5)
+        ax5.legend(loc='upper left', fontsize=7)  # ← 新增图例
 
         plt.tight_layout()
         # out_fig = Path(stl_path).with_suffix('.fit_thick.png')
@@ -722,13 +740,13 @@ def fit_thick_elliptic_cylinder(
 if __name__ == "__main__":
     PROJECT_ROOT = Path(__file__).resolve().parent.parent
     STL_PATH = (
-        PROJECT_ROOT / "models" / "inspirehand" / "meshes" / "skin_0_2_p.STL"
+        PROJECT_ROOT / "models" / "inspirehand" / "meshes" / "skin_0_0_p.STL"
     )
 
     result = fit_thick_elliptic_cylinder(
         str(STL_PATH),
-        m=6,
-        n=5,
+        m=10,
+        n=7,
         ransac_iters=150,
         inlier_tol=0.15,
         show_plot=True,
