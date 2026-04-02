@@ -524,11 +524,11 @@ def fit_thick_elliptic_cylinder(
     # z 范围用全部点
     z_all = all_pts @ axis
 
-    # ========== 修改：按弧长采样 ==========
-    def ellipse_arc_length_parameterization(a, b, n_samples, start_deg, end_deg):
+    # ========== 修改：矩形网格中点采样 ==========
+    def ellipse_arc_length_divisions(a, b, n_divisions, start_deg, end_deg):
         """
-        将角度区间 [start_deg, end_deg] 按弧长均匀采样，返回采样角度数组
-        使用数值积分计算椭圆弧长
+        将角度区间 [start_deg, end_deg] 按弧长均匀分割为 n_divisions 段
+        返回 n_divisions+1 条分割线位置（角度），以及总弧长
         """
         start_rad = np.radians(start_deg)
         end_rad = np.radians(end_deg)
@@ -538,37 +538,42 @@ def fit_thick_elliptic_cylinder(
             return np.sqrt((a * np.sin(theta))**2 + (b * np.cos(theta))**2)
         
         # 数值积分计算累积弧长
-        n_integral = 1000  # 积分精度
+        n_integral = 1000
         thetas_integral = np.linspace(start_rad, end_rad, n_integral)
         ds = arc_integrand(thetas_integral)
         cumulative_arc = np.cumsum(ds) * (end_rad - start_rad) / (n_integral - 1)
         total_arc = cumulative_arc[-1]
         
-        # 等弧长分布的目标弧长位置
-        target_arcs = np.linspace(0, total_arc, n_samples)
+        # 等弧长分布的分割线位置（n_divisions+1 条线）
+        target_arcs = np.linspace(0, total_arc, n_divisions + 1)
         
         # 通过插值找到对应的角度
-        sample_angles = np.interp(target_arcs, cumulative_arc, thetas_integral)
+        division_angles = np.interp(target_arcs, cumulative_arc, thetas_integral)
         
-        return sample_angles, total_arc
+        return division_angles, total_arc
 
     # 定义弧段起止角度（从弧段检测结果）
     theta_start = np.radians(start_deg)
     theta_end = np.radians(end_deg)
 
-    # 生成周向采样角度（按弧长均匀）
-    theta_c, total_arc_length = ellipse_arc_length_parameterization(
+    # 生成周向分割线：(m+1) 条弧长均匀分割线
+    theta_divisions, total_arc_length = ellipse_arc_length_divisions(
         o_a, o_b, m, start_deg, end_deg
     )
+    # 取 m 个区间中点作为采样角度
+    theta_c = 0.5 * (theta_divisions[:-1] + theta_divisions[1:])
 
-    # 轴向采样（保持均匀）
-    z_edges = np.linspace(z_all.min(), z_all.max(), n + 1)
-    z_c = 0.5 * (z_edges[:-1] + z_edges[1:])
+    # 生成轴向分割线：(n+1) 条均匀分割线
+    z_divisions = np.linspace(z_all.min(), z_all.max(), n + 1)
+    # 取 n 个区间中点作为采样高度
+    z_c = 0.5 * (z_divisions[:-1] + z_divisions[1:])
 
     THETA, Z = np.meshgrid(theta_c, z_c)
     sample_pts = to_world_outer(Z.ravel(), THETA.ravel())
     print(f"Generated {len(sample_pts)} sample points on outer surface ({m}×{n})")
+    print(f"  Grid: {m} arc-length divisions × {n} axial divisions")
     print(f"  Total arc length: {total_arc_length:.4f}, arc per cell: {total_arc_length/m:.4f}")
+    print(f"  Axial range: [{z_all.min():.4f}, {z_all.max():.4f}], height per cell: {(z_all.max()-z_all.min())/n:.4f}")
 
     # ── 9. 可视化 ──────────────────────────────────────────────
     if show_plot:
@@ -657,18 +662,25 @@ def fit_thick_elliptic_cylinder(
         ax4.axhline(t_mean, color='red', lw=1.5, linestyle='--', label=f'mean={t_mean:.3f}')
         ax4.set_title(f"4. Wall Thickness\n(polar, mean={t_mean:.4f})")
 
-        # 子图 5：外表面采样点（保持弧长均匀的颜色映射）
+        # 子图 5：外表面采样点（矩形网格中点）
         ax5 = fig.add_subplot(155, projection="3d")
         ax5.plot_trisurf(mesh.vertices[:,0], mesh.vertices[:,1], mesh.vertices[:,2],
                         triangles=mesh.faces, color="gray", alpha=0.15, linewidth=0)
-        
-        # 颜色按弧长位置映射（更直观）
+
+        # 绘制分割线网格（可选，帮助理解）
+        for z_div in z_divisions:
+            # 在每个 z 高度画椭圆分割线
+            theta_line = np.linspace(theta_start, theta_end, 100)
+            line_pts = to_world_outer(np.full_like(theta_line, z_div), theta_line)
+            ax5.plot(line_pts[:,0], line_pts[:,1], line_pts[:,2], 'gray', alpha=0.3, linewidth=0.5)
+
+        # 颜色按弧长位置映射
         arc_positions = np.linspace(0, 1, m)
         colors = np.tile(arc_positions, n)
-        
+
         ax5.scatter(sample_pts[:,0], sample_pts[:,1], sample_pts[:,2],
                     c=colors, cmap='jet', s=50, edgecolors='none', zorder=5)
-        ax5.set_title(f"5. Outer Surface Samples (Arc-length)\n({m}×{n}={m*n} pts)")
+        ax5.set_title(f"5. Outer Surface Samples (Cell Centers)\n({m}×{n}={m*n} pts, arc-length×uniform)")
         set_eq(ax5)
 
         plt.tight_layout()
@@ -710,13 +722,13 @@ def fit_thick_elliptic_cylinder(
 if __name__ == "__main__":
     PROJECT_ROOT = Path(__file__).resolve().parent.parent
     STL_PATH = (
-        PROJECT_ROOT / "models" / "inspirehand" / "meshes" / "skin_0_0_p.STL"
+        PROJECT_ROOT / "models" / "inspirehand" / "meshes" / "skin_0_2_p.STL"
     )
 
     result = fit_thick_elliptic_cylinder(
         str(STL_PATH),
-        m=10,
-        n=7,
+        m=6,
+        n=5,
         ransac_iters=150,
         inlier_tol=0.15,
         show_plot=True,
