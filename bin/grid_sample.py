@@ -633,9 +633,9 @@ def fit_thick_elliptic_cylinder(
         set_eq(ax5)
 
         plt.tight_layout()
-        out_fig = Path(stl_path).with_suffix('.fit_thick.png')
-        plt.savefig(str(out_fig), dpi=150, bbox_inches='tight')
-        print(f"Figure saved: {out_fig}")
+        # out_fig = Path(stl_path).with_suffix('.fit_thick.png')
+        # plt.savefig(str(out_fig), dpi=150, bbox_inches='tight')
+        # print(f"Figure saved: {out_fig}")
         plt.show()
 
     return {
@@ -671,13 +671,13 @@ def fit_thick_elliptic_cylinder(
 if __name__ == "__main__":
     PROJECT_ROOT = Path(__file__).resolve().parent.parent
     STL_PATH = (
-        PROJECT_ROOT / "models" / "inspirehand" / "meshes" / "skin_0_2_p.STL"
+        PROJECT_ROOT / "models" / "inspirehand" / "meshes" / "skin_0_0_p.STL"
     )
 
     result = fit_thick_elliptic_cylinder(
         str(STL_PATH),
-        m=6,
-        n=5,
+        m=10,
+        n=7,
         ransac_iters=150,
         inlier_tol=0.15,
         show_plot=True,
