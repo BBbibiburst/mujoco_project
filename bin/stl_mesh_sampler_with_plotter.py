@@ -29,6 +29,7 @@ warnings.filterwarnings("ignore")
 # 1. 柱轴估计：从面法向量 PCA（最小方差方向）
 # ─────────────────────────────────────────────────────────────
 
+
 def estimate_cylinder_axis_from_normals(mesh):
     areas = mesh.area_faces
     normals = mesh.face_normals
@@ -44,6 +45,7 @@ def estimate_cylinder_axis_from_normals(mesh):
 # 2. 几何距离椭圆拟合（Sampson + L-BFGS-B + IRLS）
 # ─────────────────────────────────────────────────────────────
 
+
 def point_to_ellipse_sampson(params, pts):
     cx, cy, a, b, angle = params
     if a <= 0 or b <= 0:
@@ -54,10 +56,10 @@ def point_to_ellipse_sampson(params, pts):
     u = dx * cos_a + dy * sin_a
     v = -dx * sin_a + dy * cos_a
     F = (u / a) ** 2 + (v / b) ** 2 - 1.0
-    grad_u = 2 * u / a ** 2
-    grad_v = 2 * v / b ** 2
-    denom = grad_u ** 2 + grad_v ** 2 + 1e-12
-    return (F ** 2 / denom).sum()
+    grad_u = 2 * u / a**2
+    grad_v = 2 * v / b**2
+    denom = grad_u**2 + grad_v**2 + 1e-12
+    return (F**2 / denom).sum()
 
 
 def fit_ellipse_geometric(pts_2d, init_params=None, max_iter=3):
@@ -121,8 +123,9 @@ def fit_ellipse_ransac(pts_2d, n_iter=200, inlier_tol=0.15, min_inliers=15):
     rng = np.random.default_rng(42)
 
     for _ in range(n_iter):
-        k = rng.integers(max(min_inliers, len(pts_2d) // 4),
-                         max(min_inliers + 1, len(pts_2d) // 2))
+        k = rng.integers(
+            max(min_inliers, len(pts_2d) // 4), max(min_inliers + 1, len(pts_2d) // 2)
+        )
         idx = rng.choice(len(pts_2d), size=min(k, len(pts_2d)), replace=False)
         result = fit_ellipse_geometric(pts_2d[idx])
         if result is None:
@@ -134,7 +137,7 @@ def fit_ellipse_ransac(pts_2d, n_iter=200, inlier_tol=0.15, min_inliers=15):
         v = -dx * sin_a + dy * cos_a
         r = np.sqrt((u / a) ** 2 + (v / b) ** 2)
         r = np.where(r < 1e-9, 1e-9, r)
-        dist = np.abs(r - 1.0) * np.sqrt(u ** 2 + v ** 2) / r
+        dist = np.abs(r - 1.0) * np.sqrt(u**2 + v**2) / r
         inliers = dist < tol
         if inliers.sum() > best_count:
             best_count, best_inliers, best_result = inliers.sum(), inliers, result
@@ -144,7 +147,9 @@ def fit_ellipse_ransac(pts_2d, n_iter=200, inlier_tol=0.15, min_inliers=15):
         best_inliers = np.ones(len(pts_2d), dtype=bool)
 
     if best_result is not None and best_inliers.sum() > 0:
-        refined = fit_ellipse_geometric(pts_2d[best_inliers], init_params=list(best_result))
+        refined = fit_ellipse_geometric(
+            pts_2d[best_inliers], init_params=list(best_result)
+        )
         if refined is not None:
             best_result = refined
 
@@ -155,9 +160,10 @@ def fit_ellipse_ransac(pts_2d, n_iter=200, inlier_tol=0.15, min_inliers=15):
 # 3. 弧段检测
 # ─────────────────────────────────────────────────────────────
 
+
 def detect_arc_robust(angles_deg, n_bins=90, sigma=1.0, empty_thresh=0.05):
     hist, _ = np.histogram(angles_deg, bins=n_bins, range=(0, 360))
-    smooth = gaussian_filter1d(hist.astype(float), sigma=sigma, mode='wrap')
+    smooth = gaussian_filter1d(hist.astype(float), sigma=sigma, mode="wrap")
     threshold = empty_thresh * smooth.max()
     empty = smooth < threshold
     double = np.concatenate([empty, empty])
@@ -186,9 +192,10 @@ def detect_arc_robust(angles_deg, n_bins=90, sigma=1.0, empty_thresh=0.05):
 # 4. 内外表面分离
 # ─────────────────────────────────────────────────────────────
 
-def separate_inner_outer_surfaces(mesh, axis, e_x, e_y,
-                                   coarse_cx, coarse_cy,
-                                   coarse_a, coarse_b, coarse_angle):
+
+def separate_inner_outer_surfaces(
+    mesh, axis, e_x, e_y, coarse_cx, coarse_cy, coarse_a, coarse_b, coarse_angle
+):
     """
     策略：
     - 计算每个面片质心在截面坐标系下的位置 (u, v)
@@ -219,7 +226,7 @@ def separate_inner_outer_surfaces(mesh, axis, e_x, e_y,
     # 径向方向（从椭圆中心指向面片质心，截面内）
     radial_x = dx
     radial_y = dy
-    radial_len = np.sqrt(radial_x ** 2 + radial_y ** 2) + 1e-12
+    radial_len = np.sqrt(radial_x**2 + radial_y**2) + 1e-12
     radial_x /= radial_len
     radial_y /= radial_len
 
@@ -243,8 +250,8 @@ def separate_inner_outer_surfaces(mesh, axis, e_x, e_y,
         inner_mask = fn_radial < 0
     else:
         # 位置 + 法向联合投票
-        pos_vote = (r_norm > r_median).astype(float)   # 1=外, 0=内
-        nor_vote = (fn_radial > 0).astype(float)       # 1=外, 0=内
+        pos_vote = (r_norm > r_median).astype(float)  # 1=外, 0=内
+        nor_vote = (fn_radial > 0).astype(float)  # 1=外, 0=内
         score = 0.6 * pos_vote + 0.4 * nor_vote
         outer_mask = score > 0.5
         inner_mask = ~outer_mask
@@ -266,6 +273,7 @@ def separate_inner_outer_surfaces(mesh, axis, e_x, e_y,
 # ─────────────────────────────────────────────────────────────
 # 5. 壁厚估计
 # ─────────────────────────────────────────────────────────────
+
 
 def estimate_wall_thickness(outer_fit, inner_fit, n_samples=360):
     """
@@ -290,7 +298,7 @@ def estimate_wall_thickness(outer_fit, inner_fit, n_samples=360):
     # 外椭圆法向（参数化法向）在椭圆坐标系下：(b*cos(t)/a, a*sin(t)/b)，归一化
     nx_u = b_o * np.cos(thetas) / a_o
     nx_v = a_o * np.sin(thetas) / b_o
-    norm_len = np.sqrt(nx_u ** 2 + nx_v ** 2) + 1e-12
+    norm_len = np.sqrt(nx_u**2 + nx_v**2) + 1e-12
     # 转回截面坐标，取向内方向（朝中心）
     nx_sec = (nx_u * cos_o - nx_v * sin_o) / norm_len
     ny_sec = (nx_u * sin_o + nx_v * cos_o) / norm_len
@@ -321,7 +329,7 @@ def estimate_wall_thickness(outer_fit, inner_fit, n_samples=360):
             return (u_i / a_i) ** 2 + (v_i / b_i) ** 2 - 1.0
 
         # 粗估：在 [0, max_t] 上搜索符号变化
-        max_t = (a_o + b_o)  # 上限设为外椭圆半轴和
+        max_t = a_o + b_o  # 上限设为外椭圆半轴和
         t_lo, t_hi = 0.0, max_t
         f_lo = signed_dist_to_inner(t_lo)
         f_hi = signed_dist_to_inner(t_hi)
@@ -349,12 +357,17 @@ def estimate_wall_thickness(outer_fit, inner_fit, n_samples=360):
     thicknesses = np.array(thicknesses)
     # 剔除异常值（> 3σ）
     mask = np.abs(thicknesses - np.median(thicknesses)) < 3 * thicknesses.std() + 1e-9
-    return float(np.mean(thicknesses[mask])), float(np.std(thicknesses[mask])), thicknesses
+    return (
+        float(np.mean(thicknesses[mask])),
+        float(np.std(thicknesses[mask])),
+        thicknesses,
+    )
 
 
 # ─────────────────────────────────────────────────────────────
 # 6. 主函数
 # ─────────────────────────────────────────────────────────────
+
 
 def fit_thick_elliptic_cylinder(
     stl_path,
@@ -402,8 +415,10 @@ def fit_thick_elliptic_cylinder(
     ref_v = np.array([0, 0, 1.0])
     if abs(np.dot(axis, ref_v)) > 0.9:
         ref_v = np.array([1, 0, 0.0])
-    e_x = np.cross(ref_v, axis); e_x /= np.linalg.norm(e_x)
-    e_y = np.cross(axis, e_x); e_y /= np.linalg.norm(e_y)
+    e_x = np.cross(ref_v, axis)
+    e_x /= np.linalg.norm(e_x)
+    e_y = np.cross(axis, e_x)
+    e_y /= np.linalg.norm(e_y)
 
     # ── 2. 面片均匀重采样 ─────────────────────────────────────
     facet_groups = trimesh.graph.connected_components(
@@ -428,8 +443,10 @@ def fit_thick_elliptic_cylinder(
     if coarse_result is None:
         raise RuntimeError("Coarse ellipse fitting failed.")
     c_cx, c_cy, c_a, c_b, c_angle = coarse_result
-    print(f"  Coarse: a={c_a:.4f}, b={c_b:.4f}, center=({c_cx:.4f},{c_cy:.4f}), "
-          f"angle={np.degrees(c_angle):.1f}°")
+    print(
+        f"  Coarse: a={c_a:.4f}, b={c_b:.4f}, center=({c_cx:.4f},{c_cy:.4f}), "
+        f"angle={np.degrees(c_angle):.1f}°"
+    )
 
     # ── 4. 内外表面分离（面片级别） ───────────────────────────
     print("Step 2/3: Separating inner/outer surfaces...")
@@ -490,12 +507,16 @@ def fit_thick_elliptic_cylinder(
         o_cx, o_cy, o_a, o_b, o_ang = outer_result
         i_cx, i_cy, i_a, i_b, i_ang = inner_result
 
-    print(f"  Outer ellipse: a={o_a:.4f}, b={o_b:.4f}, "
-          f"center=({o_cx:.4f},{o_cy:.4f}), angle={np.degrees(o_ang):.1f}°, "
-          f"inliers={outer_inliers.sum()/len(outer_inliers):.1%}")
-    print(f"  Inner ellipse: a={i_a:.4f}, b={i_b:.4f}, "
-          f"center=({i_cx:.4f},{i_cy:.4f}), angle={np.degrees(i_ang):.1f}°, "
-          f"inliers={inner_inliers.sum()/len(inner_inliers):.1%}")
+    print(
+        f"  Outer ellipse: a={o_a:.4f}, b={o_b:.4f}, "
+        f"center=({o_cx:.4f},{o_cy:.4f}), angle={np.degrees(o_ang):.1f}°, "
+        f"inliers={outer_inliers.sum()/len(outer_inliers):.1%}"
+    )
+    print(
+        f"  Inner ellipse: a={i_a:.4f}, b={i_b:.4f}, "
+        f"center=({i_cx:.4f},{i_cy:.4f}), angle={np.degrees(i_ang):.1f}°, "
+        f"inliers={inner_inliers.sum()/len(inner_inliers):.1%}"
+    )
 
     # ── 6. 壁厚估计 ───────────────────────────────────────────
     t_mean, t_std, t_arr = estimate_wall_thickness(outer_result, inner_result)
@@ -517,9 +538,11 @@ def fit_thick_elliptic_cylinder(
         v = o_b * np.sin(theta_arr)
         x_sec = u * o_cos - v * o_sin + o_cx
         y_sec = u * o_sin + v * o_cos + o_cy
-        return (z_arr[:, None] * axis[None, :]
-                + x_sec[:, None] * e_x[None, :]
-                + y_sec[:, None] * e_y[None, :])
+        return (
+            z_arr[:, None] * axis[None, :]
+            + x_sec[:, None] * e_x[None, :]
+            + y_sec[:, None] * e_y[None, :]
+        )
 
     # z 范围用全部点
     z_all = all_pts @ axis
@@ -532,24 +555,24 @@ def fit_thick_elliptic_cylinder(
         """
         start_rad = np.radians(start_deg)
         end_rad = np.radians(end_deg)
-        
+
         # 椭圆参数方程导数的模（弧长微分）
         def arc_integrand(theta):
-            return np.sqrt((a * np.sin(theta))**2 + (b * np.cos(theta))**2)
-        
+            return np.sqrt((a * np.sin(theta)) ** 2 + (b * np.cos(theta)) ** 2)
+
         # 数值积分计算累积弧长
         n_integral = 1000
         thetas_integral = np.linspace(start_rad, end_rad, n_integral)
         ds = arc_integrand(thetas_integral)
         cumulative_arc = np.cumsum(ds) * (end_rad - start_rad) / (n_integral - 1)
         total_arc = cumulative_arc[-1]
-        
+
         # 等弧长分布的分割线位置（n_divisions+1 条线）
         target_arcs = np.linspace(0, total_arc, n_divisions + 1)
-        
+
         # 通过插值找到对应的角度
         division_angles = np.interp(target_arcs, cumulative_arc, thetas_integral)
-        
+
         return division_angles, total_arc
 
     # 定义弧段起止角度（从弧段检测结果）
@@ -572,8 +595,12 @@ def fit_thick_elliptic_cylinder(
     sample_pts = to_world_outer(Z.ravel(), THETA.ravel())
     print(f"Generated {len(sample_pts)} sample points on outer surface ({m}×{n})")
     print(f"  Grid: {m} arc-length divisions × {n} axial divisions")
-    print(f"  Total arc length: {total_arc_length:.4f}, arc per cell: {total_arc_length/m:.4f}")
-    print(f"  Axial range: [{z_all.min():.4f}, {z_all.max():.4f}], height per cell: {(z_all.max()-z_all.min())/n:.4f}")
+    print(
+        f"  Total arc length: {total_arc_length:.4f}, arc per cell: {total_arc_length/m:.4f}"
+    )
+    print(
+        f"  Axial range: [{z_all.min():.4f}, {z_all.max():.4f}], height per cell: {(z_all.max()-z_all.min())/n:.4f}"
+    )
 
     # ── 9. 可视化 ──────────────────────────────────────────────
     if show_plot:
@@ -589,9 +616,11 @@ def fit_thick_elliptic_cylinder(
             v_ = b_ * np.sin(THETA_p.ravel())
             xs = u_ * cos_ - v_ * sin_ + cx_
             ys = u_ * sin_ + v_ * cos_ + cy_
-            pts_ = (Z_p.ravel()[:, None] * axis[None, :]
-                    + xs[:, None] * e_x[None, :]
-                    + ys[:, None] * e_y[None, :])
+            pts_ = (
+                Z_p.ravel()[:, None] * axis[None, :]
+                + xs[:, None] * e_x[None, :]
+                + ys[:, None] * e_y[None, :]
+            )
             return pts_.reshape(num_plot, num_plot, 3)
 
         outer_surf = make_surf(o_cx, o_cy, o_a, o_b, o_ang)
@@ -611,95 +640,180 @@ def fit_thick_elliptic_cylinder(
             lims = np.array([mesh.vertices.min(0), mesh.vertices.max(0)])
             c = lims.mean(0)
             r = (lims[1] - lims[0]).max() * 0.55
-            ax.set_xlim(c[0]-r, c[0]+r); ax.set_ylim(c[1]-r, c[1]+r)
-            ax.set_zlim(c[2]-r, c[2]+r)
-            ax.set_xlabel("X"); ax.set_ylabel("Y"); ax.set_zlabel("Z")
+            ax.set_xlim(c[0] - r, c[0] + r)
+            ax.set_ylim(c[1] - r, c[1] + r)
+            ax.set_zlim(c[2] - r, c[2] + r)
+            ax.set_xlabel("X")
+            ax.set_ylabel("Y")
+            ax.set_zlabel("Z")
 
         # 子图 1：原始 STL
         ax1 = fig.add_subplot(151, projection="3d")
-        ax1.plot_trisurf(mesh.vertices[:,0], mesh.vertices[:,1], mesh.vertices[:,2],
-                         triangles=mesh.faces, color="gray", alpha=0.4, linewidth=0.1)
+        ax1.plot_trisurf(
+            mesh.vertices[:, 0],
+            mesh.vertices[:, 1],
+            mesh.vertices[:, 2],
+            triangles=mesh.faces,
+            color="gray",
+            alpha=0.4,
+            linewidth=0.1,
+        )
         ax1.set_title("1. Original STL")
         set_eq(ax1)
 
         # 子图 2：内外拟合曲面叠加
         ax2 = fig.add_subplot(152, projection="3d")
-        ax2.plot_trisurf(mesh.vertices[:,0], mesh.vertices[:,1], mesh.vertices[:,2],
-                         triangles=mesh.faces, color="gray", alpha=0.15, linewidth=0)
-        ax2.plot_surface(outer_surf[...,0], outer_surf[...,1], outer_surf[...,2],
-                         color='steelblue', alpha=0.6, linewidth=0, label='Outer')
-        ax2.plot_surface(inner_surf[...,0], inner_surf[...,1], inner_surf[...,2],
-                         color='salmon', alpha=0.6, linewidth=0, label='Inner')
+        ax2.plot_trisurf(
+            mesh.vertices[:, 0],
+            mesh.vertices[:, 1],
+            mesh.vertices[:, 2],
+            triangles=mesh.faces,
+            color="gray",
+            alpha=0.15,
+            linewidth=0,
+        )
+        ax2.plot_surface(
+            outer_surf[..., 0],
+            outer_surf[..., 1],
+            outer_surf[..., 2],
+            color="steelblue",
+            alpha=0.6,
+            linewidth=0,
+            label="Outer",
+        )
+        ax2.plot_surface(
+            inner_surf[..., 0],
+            inner_surf[..., 1],
+            inner_surf[..., 2],
+            color="salmon",
+            alpha=0.6,
+            linewidth=0,
+            label="Inner",
+        )
         ax2.set_title("2. Outer (blue) + Inner (red)\nFitted surfaces")
         set_eq(ax2)
 
         # 子图 3：截面 2D 内外点云 + 拟合椭圆
         ax3 = fig.add_subplot(153)
-        ax3.scatter(outer_2d[::5, 0], outer_2d[::5, 1],
-                    c='steelblue', s=3, alpha=0.4, label='Outer pts')
-        ax3.scatter(inner_2d[::5, 0], inner_2d[::5, 1],
-                    c='salmon', s=3, alpha=0.4, label='Inner pts')
-        t_ell = np.linspace(0, 2*np.pi, 300)
-        for (cx_, cy_, a_, b_, ang_, col, lbl) in [
-            (o_cx, o_cy, o_a, o_b, o_ang, 'navy', 'Outer ellipse'),
-            (i_cx, i_cy, i_a, i_b, i_ang, 'darkred', 'Inner ellipse'),
+        ax3.scatter(
+            outer_2d[::5, 0],
+            outer_2d[::5, 1],
+            c="steelblue",
+            s=3,
+            alpha=0.4,
+            label="Outer pts",
+        )
+        ax3.scatter(
+            inner_2d[::5, 0],
+            inner_2d[::5, 1],
+            c="salmon",
+            s=3,
+            alpha=0.4,
+            label="Inner pts",
+        )
+        t_ell = np.linspace(0, 2 * np.pi, 300)
+        for cx_, cy_, a_, b_, ang_, col, lbl in [
+            (o_cx, o_cy, o_a, o_b, o_ang, "navy", "Outer ellipse"),
+            (i_cx, i_cy, i_a, i_b, i_ang, "darkred", "Inner ellipse"),
         ]:
             cos_, sin_ = np.cos(ang_), np.sin(ang_)
             u_ = a_ * np.cos(t_ell)
             v_ = b_ * np.sin(t_ell)
-            x_ = u_*cos_ - v_*sin_ + cx_
-            y_ = u_*sin_ + v_*cos_ + cy_
+            x_ = u_ * cos_ - v_ * sin_ + cx_
+            y_ = u_ * sin_ + v_ * cos_ + cy_
             ax3.plot(x_, y_, color=col, lw=2, label=lbl)
-        ax3.set_aspect('equal')
+        ax3.set_aspect("equal")
         ax3.legend(fontsize=7, markerscale=3)
         ax3.set_title("3. Cross-section (2D)\nInner / Outer separation")
 
         # 子图 4：壁厚分布（极坐标直方图）
-        ax4 = fig.add_subplot(154, projection='polar')
-        theta_polar = np.linspace(0, 2*np.pi, len(t_arr), endpoint=False)
-        ax4.plot(theta_polar, t_arr, 'steelblue', lw=1.5)
-        ax4.fill(theta_polar, t_arr, alpha=0.3, color='steelblue')
-        ax4.axhline(t_mean, color='red', lw=1.5, linestyle='--', label=f'mean={t_mean:.3f}')
+        ax4 = fig.add_subplot(154, projection="polar")
+        theta_polar = np.linspace(0, 2 * np.pi, len(t_arr), endpoint=False)
+        ax4.plot(theta_polar, t_arr, "steelblue", lw=1.5)
+        ax4.fill(theta_polar, t_arr, alpha=0.3, color="steelblue")
+        ax4.axhline(
+            t_mean, color="red", lw=1.5, linestyle="--", label=f"mean={t_mean:.3f}"
+        )
         ax4.set_title(f"4. Wall Thickness\n(polar, mean={t_mean:.4f})")
 
         # 子图 5：外表面采样点 + 完整 (m+1)×(n+1) 分割线网格
         ax5 = fig.add_subplot(155, projection="3d")
-        ax5.plot_trisurf(mesh.vertices[:,0], mesh.vertices[:,1], mesh.vertices[:,2],
-                        triangles=mesh.faces, color="gray", alpha=0.15, linewidth=0)
+        ax5.plot_trisurf(
+            mesh.vertices[:, 0],
+            mesh.vertices[:, 1],
+            mesh.vertices[:, 2],
+            triangles=mesh.faces,
+            color="gray",
+            alpha=0.15,
+            linewidth=0,
+        )
 
         # ========== 修改：增强分割线网格显示 ==========
         # 1. 周向分割线：n+1 条椭圆环线（原有，但样式增强）
         for z_div in z_divisions:
             theta_line = np.linspace(theta_start, theta_end, 100)
             line_pts = to_world_outer(np.full_like(theta_line, z_div), theta_line)
-            ax5.plot(line_pts[:,0], line_pts[:,1], line_pts[:,2], 
-                    'gray', alpha=0.6, linewidth=1.0, linestyle='-')  # ← 加粗、更清晰
+            ax5.plot(
+                line_pts[:, 0],
+                line_pts[:, 1],
+                line_pts[:, 2],
+                "gray",
+                alpha=0.6,
+                linewidth=1.0,
+                linestyle="-",
+            )  # ← 加粗、更清晰
 
         # 2. 轴向分割线：m+1 条竖直母线（← 新增！）
         for theta_div in theta_divisions:
             z_line = np.linspace(z_all.min(), z_all.max(), 50)
             line_pts = to_world_outer(z_line, np.full_like(z_line, theta_div))
-            ax5.plot(line_pts[:,0], line_pts[:,1], line_pts[:,2], 
-                    'gray', alpha=0.6, linewidth=1.0, linestyle='-')
+            ax5.plot(
+                line_pts[:, 0],
+                line_pts[:, 1],
+                line_pts[:, 2],
+                "gray",
+                alpha=0.6,
+                linewidth=1.0,
+                linestyle="-",
+            )
 
         # 3. 网格交点：(m+1)×(n+1) 个（← 新增！）
         THETA_grid, Z_grid = np.meshgrid(theta_divisions, z_divisions)
         grid_intersections = to_world_outer(Z_grid.ravel(), THETA_grid.ravel())
-        ax5.scatter(grid_intersections[:,0], grid_intersections[:,1], grid_intersections[:,2],
-                c='black', s=20, marker='+', alpha=0.8, linewidth=1.5,
-                label=f'Grid intersections ({(m+1)*(n+1)})')
+        ax5.scatter(
+            grid_intersections[:, 0],
+            grid_intersections[:, 1],
+            grid_intersections[:, 2],
+            c="black",
+            s=20,
+            marker="+",
+            alpha=0.8,
+            linewidth=1.5,
+            label=f"Grid intersections ({(m+1)*(n+1)})",
+        )
 
         # 4. 采样点：m×n 个（← 增强显示）
         arc_positions = np.linspace(0, 1, m)
         colors = np.tile(arc_positions, n)
-        ax5.scatter(sample_pts[:,0], sample_pts[:,1], sample_pts[:,2],
-                    c=colors, cmap='jet', s=80, edgecolors='black', linewidth=0.5,  # ← 更大、加边框
-                    zorder=5, label=f'Sample points ({m}×{n})')
+        ax5.scatter(
+            sample_pts[:, 0],
+            sample_pts[:, 1],
+            sample_pts[:, 2],
+            c=colors,
+            cmap="jet",
+            s=80,
+            edgecolors="black",
+            linewidth=0.5,  # ← 更大、加边框
+            zorder=5,
+            label=f"Sample points ({m}×{n})",
+        )
 
-        ax5.set_title(f"5. Sampling Grid with Divisions\n"
-                    f"({m+1}×{n+1}={(m+1)*(n+1)} intersections, {m}×{n}={m*n} cell centers)")
+        ax5.set_title(
+            f"5. Sampling Grid with Divisions\n"
+            f"({m+1}×{n+1}={(m+1)*(n+1)} intersections, {m}×{n}={m*n} cell centers)"
+        )
         set_eq(ax5)
-        ax5.legend(loc='upper left', fontsize=7)  # ← 新增图例
+        ax5.legend(loc="upper left", fontsize=7)  # ← 新增图例
 
         plt.tight_layout()
         # out_fig = Path(stl_path).with_suffix('.fit_thick.png')
@@ -710,12 +824,18 @@ def fit_thick_elliptic_cylinder(
     return {
         "sample_pts": sample_pts,
         "outer_ellipse": {
-            "cx": o_cx, "cy": o_cy, "a": o_a, "b": o_b,
+            "cx": o_cx,
+            "cy": o_cy,
+            "a": o_a,
+            "b": o_b,
             "angle_rad": o_ang,
             "inlier_ratio": float(outer_inliers.sum() / len(outer_inliers)),
         },
         "inner_ellipse": {
-            "cx": i_cx, "cy": i_cy, "a": i_a, "b": i_b,
+            "cx": i_cx,
+            "cy": i_cy,
+            "a": i_a,
+            "b": i_b,
             "angle_rad": i_ang,
             "inlier_ratio": float(inner_inliers.sum() / len(inner_inliers)),
         },
@@ -739,9 +859,7 @@ def fit_thick_elliptic_cylinder(
 # ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     PROJECT_ROOT = Path(__file__).resolve().parent.parent
-    STL_PATH = (
-        PROJECT_ROOT / "models" / "inspirehand" / "meshes" / "skin_0_0_p.STL"
-    )
+    STL_PATH = PROJECT_ROOT / "models" / "inspirehand" / "meshes" / "skin_0_0_p.STL"
 
     result = fit_thick_elliptic_cylinder(
         str(STL_PATH),
@@ -755,8 +873,10 @@ if __name__ == "__main__":
     print("\n--- Results ---")
     print(f"Outer ellipse : {result['outer_ellipse']}")
     print(f"Inner ellipse : {result['inner_ellipse']}")
-    print(f"Wall thickness: mean={result['wall_thickness']['mean']:.4f}, "
-          f"std={result['wall_thickness']['std']:.4f}")
+    print(
+        f"Wall thickness: mean={result['wall_thickness']['mean']:.4f}, "
+        f"std={result['wall_thickness']['std']:.4f}"
+    )
     print(f"Arc           : {result['arc']}")
     print(f"Cylinder axis : {result['cylinder_axis']}")
     print(f"\nFirst 5 sample points:\n{result['sample_pts'][:5]}")

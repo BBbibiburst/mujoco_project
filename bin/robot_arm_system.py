@@ -27,6 +27,7 @@ import mujoco
 from mujoco import viewer
 import numpy as np
 from scipy.spatial.transform import Rotation as R
+from touch_sensor_builder import add_touch_sensors_to_spec
 
 # ====================== 路径配置 ======================
 
@@ -362,7 +363,19 @@ def get_combined_spec(
     arm_spec.option.timestep = 0.001  # 适配机械臂的高频控制
     arm_spec.option.solver = mujoco.mjtSolver.mjSOL_NEWTON 
     arm_spec.option.iterations = 100  # 增加迭代次数以处理灵巧手的复杂约束
-
+    # ── 添加触觉传感器（touch sensors on skin meshes）────────────────────────
+    # 为 skin_0_0_p ~ skin_4_2_p 共 15 块 skin 在曲面上布置 touch sensor
+    # 底部指节 [10,7]=70个, 中部指节 [8,5]=40个, 顶部指节 [6,5]=30个
+    # 合计每根手指 140 个，4 根手指 + 拇指共 700 个 touch sensor
+    from touch_sensor_builder import add_touch_sensors_to_spec
+    
+    touch_sensor_map = add_touch_sensors_to_spec(
+        spec=arm_spec,
+        hand_path=hand_path,           # get_combined_spec 已有此变量
+        prefix="inspirehand_",         # 与 attach_body 时的 prefix 一致
+        site_group=4,                  # group=4，可在 viewer 中单独显隐
+        site_rgba=(1.0, 0.35, 0.0, 0.5),  # 橙色半透明，便于调试可视化
+    )
     return arm_spec
 
 
