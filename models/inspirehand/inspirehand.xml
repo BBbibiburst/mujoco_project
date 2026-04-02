@@ -459,7 +459,7 @@
       ctrlrange="-5000 5000" gear="0.05" />
   </actuator>
   <sensor>
-    <actuatorpos name="act_push_0_j_p" actuator="act_push_0_j" />
+    <!-- <actuatorpos name="act_push_0_j_p" actuator="act_push_0_j" />
     <actuatorvel name="act_push_0_j_v" actuator="act_push_0_j" />
     <actuatorfrc name="act_push_0_j_f" actuator="act_push_0_j" noise="0.001" />
     <actuatorpos name="act_push_1_j_p" actuator="act_push_1_j" />
@@ -476,7 +476,7 @@
     <actuatorfrc name="thumb_rotate_act_push_j_f" actuator="thumb_rotate_act_push_j" noise="0.001" />
     <actuatorpos name="thumb_grasp_act_push_j_p" actuator="thumb_grasp_act_push_j" />
     <actuatorvel name="thumb_grasp_act_push_j_v" actuator="thumb_grasp_act_push_j" />
-    <actuatorfrc name="thumb_grasp_act_push_j_f" actuator="thumb_grasp_act_push_j" noise="0.001" />
+    <actuatorfrc name="thumb_grasp_act_push_j_f" actuator="thumb_grasp_act_push_j" noise="0.001" /> -->
   </sensor>
   <size njmax="5000" nconmax="2000" />
   <equality>
