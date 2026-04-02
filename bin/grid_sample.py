@@ -10,7 +10,7 @@
    c. 用 scipy.optimize 最小化所有点到椭圆的几何距离（真正的几何拟合）
    d. RANSAC 外层包裹，剔除噪声/破损面片带来的异常点
 3. 弧段检测：角度直方图 + 形态学闭运算，对稀疏噪声免疫
-4. 采样点投影到实际 STL 表面（最近点）
+4. 面片均匀重采样（sample_surface）解决粗糙 STL 顶点稀少问题
 5. 函数返回完整结果字典
 """
 
@@ -287,7 +287,7 @@ def fit_viz_sampling_robust(
     :param stl_path:           STL 文件路径
     :param m:                  周向采样数
     :param n:                  轴向采样数
-    :param ransac_iters:       RANSAC 迭代次数
+    :param ransac_iters:       RANSAC 迭代次数（每次从重采样点云中随机抽样子集）
     :param inlier_tol:         RANSAC 内点容差（相对于数据范围）
     :param show_plot:          是否显示可视化
     :return: dict
@@ -316,18 +316,31 @@ def fit_viz_sampling_robust(
     e_y = np.cross(axis, e_x)
     e_y /= np.linalg.norm(e_y)
 
-    # ── 2. 选主连通体顶点，投影到截面 ─────────────────────────
+    # ── 2. 选主连通体，面片均匀重采样 → 解决粗糙 STL 顶点稀少问题 ──
     facet_groups = trimesh.graph.connected_components(
         mesh.face_adjacency, nodes=np.arange(len(mesh.faces))
     )
     main_idx = np.argmax([mesh.area_faces[g].sum() for g in facet_groups])
-    main_verts = mesh.vertices[np.unique(mesh.faces[facet_groups[main_idx]])]
+    main_face_indices = facet_groups[main_idx]
+
+    # 取主连通体子网格
+    main_mesh = mesh.submesh([main_face_indices], append=True)
+
+    # 在面片上均匀撒点：目标点数 = max(原始顶点数 × 10, 5000)
+    # 即使原始网格只有几十个面片，也能得到足够密集的截面点云
+    n_orig_verts = len(main_mesh.vertices)
+    n_resample = max(n_orig_verts * 10, 5000)
+    sampled_pts, _ = trimesh.sample.sample_surface(main_mesh, n_resample)
+    print(f"Resampled surface: {n_orig_verts} verts → {n_resample} points")
+
+    # 保留原始顶点 + 重采样点（边界顶点对弧段检测很重要）
+    all_pts = np.vstack([main_mesh.vertices, sampled_pts])
 
     # 轴向坐标（沿柱轴）
-    z_vals = main_verts @ axis          # (N,)
+    z_vals = all_pts @ axis
     # 截面坐标（垂直于柱轴）
-    x_vals = main_verts @ e_x          # (N,)
-    y_vals = main_verts @ e_y          # (N,)
+    x_vals = all_pts @ e_x
+    y_vals = all_pts @ e_y
 
     pts_2d = np.column_stack([x_vals, y_vals])
 
@@ -508,7 +521,7 @@ def fit_viz_sampling_robust(
 if __name__ == "__main__":
     PROJECT_ROOT = Path(__file__).resolve().parent.parent
     STL_PATH = (
-        PROJECT_ROOT / "models" / "inspirehand" / "meshes" / "skin_0_1_p.STL"
+        PROJECT_ROOT / "models" / "inspirehand" / "meshes" / "skin_0_0_p.STL"
     )
 
     result = fit_viz_sampling_robust(
