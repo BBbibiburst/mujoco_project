@@ -1,3 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 缓存
+cache/stl_cache/
+
+# 生成的文本文件
+src/tools/code_summary.txt
+src/tools/path.txt
+
+# MuJoCo
 MUJOCO_LOG.TXT
-bin/__pycache__/
-tools/code_summary.txt
