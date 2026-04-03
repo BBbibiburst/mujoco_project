@@ -1,15 +1,25 @@
 """
-触觉传感器布局模块 (Touch Sensor Layout Module)
+触觉传感器布局模块 (Touch Sensor Layout Module).
 
 在灵巧手 skin mesh 的曲面上均匀布置 MuJoCo touch sensor。
 每个 sensor 通过在对应 body 下添加 site 来实现，坐标系从 STL 世界坐标
 逆变换回对应 body 的局部坐标系。
 
+核心功能：
+    1. 批量传感器生成：为15块手指皮肤（4指+拇指）自动布局触觉传感器
+    2. 分层采样密度：底部指节70个(10×7)、中部40个(8×5)、顶部30个(6×5)
+    3. 坐标系自动转换：STL世界坐标 → 皮肤几何体局部坐标 → 父级body局部坐标
+    4. 可视化配置：支持自定义site颜色、分组，便于仿真调试
+
 使用方式：
     在 robot_arm_system.py 的 get_combined_spec() 末尾、return 之前调用：
 
         from touch_sensor_builder import add_touch_sensors_to_spec
-        add_touch_sensors_to_spec(spec, hand_path, prefix="inspirehand_")
+        touch_sensor_map = add_touch_sensors_to_spec(
+            spec=arm_spec,
+            hand_path=hand_path,
+            prefix="inspirehand_"
+        )
 
 依赖：
     - generate_surface_mesh_points_from_stl (来自 stl_mesh_sampler 模块)
@@ -34,7 +44,17 @@ from stl_mesh_sampler import generate_surface_mesh_points_from_stl
 # ====================== 传感器布局配置 ======================
 
 class SkinConfig(NamedTuple):
-    """单块 skin mesh 的传感器配置."""
+    """
+    单块 skin mesh 的传感器配置.
+
+    Attributes:
+        mesh_name: skin 的 mesh/geom 名称（不含 prefix）。
+        body_name: 该 skin 所挂载的 parent body 名称（不含 prefix）。
+        stl_file: 对应的 STL 文件名。
+        m: 圆周方向采样数（周向网格数）。
+        n: 轴向采样数（高度方向网格数）。
+        sensor_size: touch sensor site 半径 [m]。
+    """
     mesh_name: str       # skin 的 mesh/geom 名称（不含 prefix）
     body_name: str       # 该 skin 所挂载的 parent body 名称（不含 prefix）
     stl_file: str        # 对应的 STL 文件名
@@ -83,12 +103,24 @@ def _body_world_transform(spec: mujoco.MjSpec, body_name: str) -> Tuple[np.ndarr
     """
     通过临时编译模型获取 body 在世界坐标系中的位姿.
 
-    返回:
-        pos_w  : (3,)  body 原点在世界系中的位置
-        rot_w  : (3,3) body 姿态旋转矩阵（列向量为 body 坐标轴）
-    
-    注意：每次调用都会临时编译 spec，适合离线预处理。
-    若性能敏感，可缓存结果或改用 mj_kinematics。
+    实现方式：
+        临时编译 spec → 创建 MjData → 执行前向运动学 → 读取 xpos/xmat。
+
+    Args:
+        spec: 未编译的 MjSpec 对象。
+        body_name: body 的完整名称（含 prefix）。
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray]: (pos_w, rot_w)
+            - pos_w: (3,) body 原点在世界系中的位置。
+            - rot_w: (3,3) body 姿态旋转矩阵（行向量为 body 坐标轴在世界系的投影）。
+
+    Raises:
+        ValueError: body_name 不存在于模型中。
+
+    Note:
+        每次调用都会临时编译 spec，适合离线预处理。
+        若性能敏感（如批量处理大量点），可缓存结果或改用 mj_kinematics。
     """
     # 临时编译以读取 xpos / xmat
     tmp_model = spec.compile()
@@ -114,16 +146,19 @@ def _world_to_body_local(
 
     MuJoCo xmat 存储的是旋转矩阵 R，满足：
         p_world = R @ p_local + pos_world
-    因此：
+    因此逆变换为：
         p_local = R^T @ (p_world - pos_world)
 
     Args:
-        pts_world  : (N, 3) 世界坐标点
-        body_pos_w : (3,)   body 原点世界位置
-        body_rot_w : (3, 3) body 旋转矩阵
+        pts_world: (N, 3) 世界坐标点。
+        body_pos_w: (3,) body 原点世界位置。
+        body_rot_w: (3, 3) body 旋转矩阵（行主序）。
 
     Returns:
-        (N, 3) body 局部坐标点
+        np.ndarray: (N, 3) body 局部坐标点。
+
+    Note:
+        使用矩阵乘法 @ 实现批量变换，比循环更高效。
     """
     delta = pts_world - body_pos_w[None, :]          # (N, 3)
     pts_local = delta @ body_rot_w                   # R^T @ delta，因为 xmat 行=world→body
@@ -143,49 +178,79 @@ def add_touch_sensors_to_spec(
     """
     为灵巧手 skin mesh 在曲面上批量添加 MuJoCo touch sensor.
 
-    流程：
-        1. 对每块 skin，调用 generate_surface_mesh_points_from_stl 得到世界坐标采样点
-        2. 通过前向运动学获取 parent body 的世界位姿
-        3. 将采样点逆变换到 body 局部坐标系
-        4. 在 body 下逐点添加 site（sphere）
-        5. 为每个 site 添加 touch sensor
+    完整处理流程：
+        1. 遍历每块 skin 配置，加载对应 STL 文件。
+        2. 调用 generate_surface_mesh_points_from_stl 生成世界坐标采样点。
+        3. 获取 skin geom 在其 parent body 中的局部位姿。
+        4. 将采样点从 mesh 局部坐标变换到 body 局部坐标。
+        5. 在 target body 下逐点添加 site（sphere）。
+        6. 为每个 site 添加 touch sensor，绑定到该 site。
+        7. 收集所有 sensor 名称，按 skin 分组返回。
 
     Args:
-        spec:           已合并（未编译）的 MjSpec 对象。
-        hand_path:      灵巧手模型目录（含 meshes/ 子目录的 Path）。
-        prefix:         灵巧手 body/sensor 名称前缀，默认 "inspirehand_"。
+        spec: 已合并（未编译）的 MjSpec 对象。
+        hand_path: 灵巧手模型目录（含 meshes/ 子目录的 Path）。
+        prefix: 灵巧手 body/sensor 名称前缀，默认 "inspirehand_"。
+            必须与 attach_body 时的 prefix 一致。
         sensor_configs: 自定义 SkinConfig 列表，None → 使用默认 SKIN_CONFIGS。
-        site_group:     site 的 MuJoCo group（用于可视化分层，默认 4）。
-        site_rgba:      site 颜色 RGBA，默认半透明红色，便于可视化调试。
+        site_group: site 的 MuJoCo group（用于可视化分层，默认 4）。
+            可通过 MuJoCo 可视化选项按 group 开关显示。
+        site_rgba: site 颜色 RGBA，默认半透明红色 (1,0.2,0.2,0.6)，便于可视化调试。
 
     Returns:
-        Dict[skin_name → List[sensor_name]]：每块 skin 对应的 sensor 名称列表。
+        Dict[str, List[str]]: 每块 skin 对应的 sensor 名称列表。
+            键为 skin 名称（如 "skin_0_0_p"），值为该 skin 上所有 sensor 名称的列表。
 
     Raises:
         FileNotFoundError: STL 文件不存在。
-        ValueError:        body 未找到。
+        ValueError: body 未找到或 geom 未找到。
+
+    Examples:
+        >>> # 基础用法
+        >>> sensor_map = add_touch_sensors_to_spec(spec, hand_path, prefix="inspirehand_")
+        >>> print(f"共添加 {sum(len(v) for v in sensor_map.values())} 个传感器")
+        
+        >>> # 自定义配置（仅给拇指添加传感器）
+        >>> thumb_configs = [c for c in SKIN_CONFIGS if c.mesh_name.startswith("skin_4")]
+        >>> sensor_map = add_touch_sensors_to_spec(
+        ...     spec, hand_path, sensor_configs=thumb_configs, site_rgba=(0,1,0,0.5)
+        ... )
+
+    Note:
+        此函数直接修改输入的 spec 对象（添加 site 和 sensor）。
+        必须在 spec.compile() 之前调用。
+        传感器输出为法向接触力，单位牛顿（N）。
     """
     configs = sensor_configs or SKIN_CONFIGS
     meshes_dir = Path(hand_path).parent / "meshes"
     sensor_map: Dict[str, List[str]] = {}
     total_sensors = 0                       
+    
     print(f"[TouchSensor] 开始添加 touch sensor，目标 skin 数量: {len(configs)}")
+    
     for cfg in configs:
+        # ----- 1. 加载 STL 并生成采样点 -----
         stl_path = meshes_dir / cfg.stl_file
         if not stl_path.exists():
             raise FileNotFoundError(f"STL 文件不存在: {stl_path}")
 
+        # 生成世界坐标系下的采样点（来自 stl_mesh_sampler）
         pts_mesh = generate_surface_mesh_points_from_stl(stl_path, cfg.m, cfg.n)
 
+        # ----- 2. 获取 skin geom 在 body 中的位姿 -----
         geom_pos_local, geom_quat_local = _get_skin_geom_pose_in_body(
             spec, cfg.mesh_name, prefix
         )
+        
+        # ----- 3. 坐标变换：mesh 局部 → body 局部 -----
         pts_body = _apply_geom_transform(pts_mesh, geom_pos_local, geom_quat_local)
 
+        # ----- 4. 获取目标 body 并添加传感器 -----
         full_body_name = prefix + cfg.body_name
         target_body = spec.body(full_body_name)
 
         skin_sensors: List[str] = []
+        
         for idx, pt in enumerate(pts_body):
             site_name   = f"touch_site_{cfg.mesh_name}_{idx}"
             sensor_name = f"touch_{cfg.mesh_name}_{idx}"
@@ -194,7 +259,7 @@ def add_touch_sensors_to_spec(
             site = target_body.add_site()
             site.name    = site_name
             site.type    = mujoco.mjtGeom.mjGEOM_SPHERE
-            site.size    = [cfg.sensor_size, 0.0, 0.0]
+            site.size    = [cfg.sensor_size, 0.0, 0.0]  # sphere 只需第一个元素
             site.pos     = pt.tolist()
             site.group   = site_group
             site.rgba    = list(site_rgba)
@@ -229,11 +294,22 @@ def _get_skin_geom_pose_in_body(
     """
     从 MjSpec 中读取 skin geom 相对于其 parent body 的位姿.
 
+    Args:
+        spec: MjSpec 对象。
+        geom_name: skin geom 名称（可能含或不含 prefix）。
+        prefix: 模型前缀。
+
     Returns:
-        pos  : (3,)  geom 在 body 局部坐标系中的位置
-        quat : (4,)  geom 在 body 局部坐标系中的四元数 [w,x,y,z]
+        Tuple[np.ndarray, np.ndarray]: (pos, quat)
+            - pos: (3,) geom 在 body 局部坐标系中的位置。
+            - quat: (4,) geom 在 body 局部坐标系中的四元数 [w,x,y,z]。
+
+    Note:
+        兼容 geom 名称带或不带 prefix 的情况。
+        先尝试带 prefix 查找，失败则尝试原名。
     """
     full_geom_name = prefix + geom_name if not geom_name.startswith(prefix) else geom_name
+    
     # MjSpec 中的 geom 名称在 attach 时已添加 prefix
     try:
         geom = spec.geom(full_geom_name)
@@ -249,6 +325,17 @@ def _get_skin_geom_pose_in_body(
 def _quat_to_rot(quat_wxyz: np.ndarray) -> np.ndarray:
     """
     四元数 [w,x,y,z] → 3×3 旋转矩阵（MuJoCo 约定）.
+
+    使用标准四元数到旋转矩阵的转换公式：
+        R = [[1-2(y²+z²), 2(xy-zw), 2(xz+yw)],
+             [2(xy+zw), 1-2(x²+z²), 2(yz-xw)],
+             [2(xz-yw), 2(yz+xw), 1-2(x²+y²)]]
+
+    Args:
+        quat_wxyz: (4,) 四元数 [w, x, y, z]。
+
+    Returns:
+        np.ndarray: (3, 3) 旋转矩阵。
     """
     w, x, y, z = quat_wxyz
     return np.array([
@@ -272,12 +359,15 @@ def _apply_geom_transform(
     其中 R_geom 由 geom 的 quat 决定（MuJoCo 中 geom pose = body 局部系下的偏移）。
 
     Args:
-        pts_mesh  : (N, 3) STL mesh 局部坐标系下的点
-        geom_pos  : (3,)   geom 在 body 局部系中的位置
-        geom_quat : (4,)   geom 在 body 局部系中的四元数 [w,x,y,z]
+        pts_mesh: (N, 3) STL mesh 局部坐标系下的点。
+        geom_pos: (3,) geom 在 body 局部系中的位置。
+        geom_quat: (4,) geom 在 body 局部系中的四元数 [w,x,y,z]。
 
     Returns:
-        (N, 3) body 局部坐标系下的点
+        np.ndarray: (N, 3) body 局部坐标系下的点。
+
+    Note:
+        使用矩阵乘法实现批量变换，避免 Python 循环。
     """
     R = _quat_to_rot(geom_quat)                      # (3,3)
     pts_body = (R @ pts_mesh.T).T + geom_pos[None, :] # (N,3)
@@ -296,7 +386,8 @@ def patch_get_combined_spec_example():
     ```python
     # ── 添加触觉传感器 ──────────────────────────────────────────────────────
     from touch_sensor_builder import add_touch_sensors_to_spec
-    _touch_sensor_map = add_touch_sensors_to_spec(
+    
+    touch_sensor_map = add_touch_sensors_to_spec(
         spec=arm_spec,
         hand_path=hand_path,        # 已有变量
         prefix="inspirehand_",      # 与 attach_body 时的 prefix 一致
@@ -304,9 +395,10 @@ def patch_get_combined_spec_example():
         site_rgba=(1.0, 0.3, 0.0, 0.5),  # 橙色半透明
     )
     # 将 sensor_map 挂在 spec 上，方便后续使用（可选）
-    arm_spec._touch_sensor_map = _touch_sensor_map
+    arm_spec._touch_sensor_map = touch_sensor_map
     # ────────────────────────────────────────────────────────────────────────
-    return arm_spec
+    
+    return arm_spec, touch_sensor_map
     ```
 
     编译后访问传感器数据：
@@ -328,7 +420,32 @@ def patch_get_combined_spec_example():
 
 if __name__ == "__main__":
     """
-    独立测试：加载灵巧手模型，添加传感器后编译并验证。
+    独立测试：加载灵巧手模型，添加传感器后编译并验证.
+
+    测试流程：
+        1. 加载灵巧手模型（不含机械臂，快速测试）。
+        2. 调用 add_touch_sensors_to_spec 添加所有传感器。
+        3. 编译模型，验证无错误。
+        4. 统计各 skin 传感器数量。
+        5. 执行一步仿真，确认 sensordata 可读。
+
+    运行方式：
+        python touch_sensor_builder.py
+
+    预期输出：
+        === 触觉传感器独立测试 ===
+        手模型路径: /path/to/inspirehand.xml
+        [TouchSensor] 开始添加 touch sensor，目标 skin 数量: 15
+        [TouchSensor]   → 在 'skin_0_0_p' 上添加 10 * 7 = 70 个 sensor
+        ...
+        [TouchSensor] 完成！共添加 700 个 touch sensor，覆盖 15 块 skin mesh。
+        
+        编译验证中...
+        编译成功！传感器总数: 700
+          skin_0_0_p          :  70 个 sensor
+          ...
+        仿真步进成功，sensordata shape: (700,)
+        === 测试通过 ===
     """
     from pathlib import Path
     import sys
