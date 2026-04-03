@@ -14,7 +14,7 @@
 设计模式：
     - 使用 dataclass 实现声明式物理参数配置
     - 优先级覆盖策略：per_joint_overrides > group_defaults > XML_original
-    - 延迟编译：get_combined_spec 返回未编译 MjSpec，支持链式修改
+    - 延迟编译：get_combined_spec 返回未编译 MjSpec和 touch_sensor_map，允许调用者继续添加物体、相机、光照等，最后手动调用 spec.compile() 生成可仿真模型。
 """
 
 import os
@@ -240,7 +240,7 @@ def get_combined_spec(
     rot_xyz_deg: Tuple[float, float, float] = (-90.0, 0.0, 0.0),
     attach_point_name: str = "right_hand",
     physics: Optional[PhysicsConfig] = None,
-) -> mujoco.MjSpec:
+) -> Tuple[mujoco.MjSpec, Dict[str, List[str]]]:
     """
     加载并合并机械臂与机械手模型，返回未编译的 MjSpec 对象.
 
@@ -276,7 +276,7 @@ def get_combined_spec(
 
     Examples:
         >>> # 基础用法：使用默认路径和姿态
-        >>> spec = get_combined_spec()
+        >>> spec, touch_sensor_map = get_combined_spec()
         >>> model = spec.compile()
         
         >>> # 高级用法：自定义物理参数和安装姿态
@@ -286,7 +286,7 @@ def get_combined_spec(
         ...         "inspirehand_finger1_joint1": JointPhysicsConfig(stiffness=5.0)
         ...     },
         ... )
-        >>> spec = get_combined_spec(
+        >>> spec, touch_sensor_map = get_combined_spec(
         ...     rot_xyz_deg=(0, -90, 0),  # 手爪朝下
         ...     physics=cfg
         ... )
@@ -371,12 +371,12 @@ def get_combined_spec(
     
     touch_sensor_map = add_touch_sensors_to_spec(
         spec=arm_spec,
-        hand_path=hand_path,           # get_combined_spec 已有此变量
-        prefix="inspirehand_",         # 与 attach_body 时的 prefix 一致
-        site_group=4,                  # group=4，可在 viewer 中单独显隐
-        site_rgba=(1.0, 0.35, 0.0, 0.5),  # 橙色半透明，便于调试可视化
+        hand_path=hand_path,
+        prefix="inspirehand_",
+        site_group=4,
+        site_rgba=(1.0, 0.35, 0.0, 0.5),
     )
-    return arm_spec
+    return arm_spec, touch_sensor_map
 
 
 def load_combined_model(
@@ -420,7 +420,7 @@ def load_combined_model(
         >>> mujoco.mj_step(model, data)
     """
     # 获取合并后的 spec（未编译）
-    spec = get_combined_spec(arm_path, hand_path, rot_xyz_deg, physics=physics)
+    spec, _ = get_combined_spec(arm_path, hand_path, rot_xyz_deg, physics=physics)
 
     # 编译生成可仿真模型
     print("[SpecBuilder] 正在编译模型...")

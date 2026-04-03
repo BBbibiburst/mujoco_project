@@ -72,7 +72,7 @@ TARGET_POS = [0.4, 0.0, 0.025] # 静态物体位置
 
 def build_custom_grasp_environment() -> Tuple[mujoco.MjModel, mujoco.MjData]:
     """构建基础仿真环境（复用之前的逻辑）"""
-    spec = get_combined_spec(rot_xyz_deg=(-90, 0, 0), attach_point_name="right_hand")
+    spec, _ = get_combined_spec(rot_xyz_deg=(-90, 0, 0), attach_point_name="right_hand")
     worldbody = spec.worldbody
     worldbody.add_light(name="top_light", pos=[0.0, 0.0, 2.0], dir=[0.0, 0.0, -1.0], diffuse=[1.0, 1.0, 1.0])
 
@@ -96,6 +96,7 @@ def main():
         traj_vis = TrajectoryVisualizer(rgba=[0, 1, 1, 0.8], size=0.005)
 
         with mujoco.viewer.launch_passive(model, data) as viewer:
+            sim_step = 0.0
             sim_time = 0.0
             last_hand_update = -HAND_RANDOM_INTERVAL
             hand_target = np.zeros(6)
@@ -163,7 +164,8 @@ def main():
                 viewer.sync()
 
                 # --- G. 时间管理 (固定步长) ---
-                sim_time += model.opt.timestep
+                sim_time = sim_step * model.opt.timestep
+                sim_step += 1
                 # 计算剩余睡眠时间，保持仿真节奏
                 time_until_next_step = model.opt.timestep - (time.time() - step_start)
                 if time_until_next_step > 0:

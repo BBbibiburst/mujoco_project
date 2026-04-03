@@ -18,6 +18,13 @@ import mujoco
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
 import warnings
+from enum import Enum, auto
+
+class _CtrlMode(Enum):
+    NONE      = auto()
+    JOINT_PD  = auto()
+    OSC       = auto()
+
 
 
 # ====================== 控制参数配置 ======================
@@ -254,6 +261,7 @@ class OSC_PositionController:
 
         # ----- 9. 力矩变化率限制状态 -----
         self._prev_tau: Optional[np.ndarray] = None
+        self._ctrl_mode = _CtrlMode.NONE        # ✅ 新增模式追踪
 
     # =========================================================
     # 公共接口 1：末端位置/姿态控制（OSC 模式）
@@ -280,6 +288,10 @@ class OSC_PositionController:
         Returns:
             Tuple[np.ndarray, np.ndarray]: (arm_torques, hand_torques) 实际应用的力矩。
         """
+        # ✅ 检测模式切换，切换时清除历史力矩
+        if self._ctrl_mode != _CtrlMode.OSC:
+            self._prev_tau = None
+            self._ctrl_mode = _CtrlMode.OSC
         g = self.gains
         dt = self.model.opt.timestep
 
@@ -404,23 +416,13 @@ class OSC_PositionController:
 
         return xacc_des, xacc_rot
 
-    def _compute_osc_torque(
-        self,
-        data: mujoco.MjData,
-        J_p: np.ndarray,
-        J_r: np.ndarray,
-        xacc_des: np.ndarray,
-        xacc_rot: np.ndarray,
-        g: OSCGains,
-    ) -> np.ndarray:
-        """计算 OSC 关节力矩（核心动力学）"""
+    # ✅ 修改后：选择标准 OSC 公式，只补偿一次
+    def _compute_osc_torque(self, data, J_p, J_r, xacc_des, xacc_rot, g):
         arm_idx = self.arm_qvel_ids
 
-        # 获取关节空间惯量矩阵
         mujoco.mj_fullM(self.model, self._M_full, data.qM)
         M = self._M_full[np.ix_(arm_idx, arm_idx)]
 
-        # 组合雅可比和任务加速度
         if np.any(xacc_rot != 0):
             J = np.vstack([J_p, J_r])
             xacc = np.concatenate([xacc_des, xacc_rot])
@@ -428,32 +430,30 @@ class OSC_PositionController:
             J = J_p
             xacc = xacc_des
 
-        # 计算任务空间惯量矩阵 Λ = (J M^-1 J^T)^-1
-        # 使用 solve 替代直接求逆，数值稳定性更好
         X = np.linalg.solve(M, J.T)
         JMinvJT = J @ X
-
         Lambda = self._svd_pinv(JMinvJT, g.singular_thresh)
-
-        # 强制对称（消除数值误差）
         Lambda = 0.5 * (Lambda + Lambda.T)
 
-        # 计算 μ 项（任务空间科氏力/离心力补偿）
         bias = data.qfrc_bias[arm_idx]
-        mu = -Lambda @ (J @ np.linalg.solve(M, bias))
 
-        # 任务空间力
-        F_task = Lambda @ xacc + mu
+        # ✅ 标准 OSC：F = Λ(ẍ_des + J M⁻¹ bias) 使得 tau = Jᵀ F 自然包含动力学补偿
+        # 等价于：tau = Jᵀ Λ ẍ_des + Jᵀ Λ J M⁻¹ bias
+        # 其中 Jᵀ Λ J M⁻¹ 是任务空间投影的动力学补偿，不是全量 bias
+        F_task = Lambda @ (xacc + J @ np.linalg.solve(M, bias))
         tau_task = J.T @ F_task
 
-        # 动力学补偿（重力+科氏力）
-        tau_comp = bias
-
-        # 零空间控制（冗余自由度管理）
+        # ✅ 零空间补偿保留完整 bias（零空间不受任务空间控制）
         tau_null = self._compute_null_space_torque(data, J, M, Lambda, arm_idx, g)
 
-        return tau_task + tau_comp + tau_null
+        # ✅ 残余补偿：bias 中未被任务空间投影覆盖的部分
+        # N_null = I - Jᵀ(J M⁻¹ Jᵀ)⁻¹ J M⁻¹ 是零空间投影
+        J_bar = np.linalg.solve(M, J.T) @ Lambda   # (n, 6)
+        N = np.eye(len(arm_idx)) - J_bar @ J        # 零空间投影矩阵
+        tau_bias_null = N.T @ bias                  # 仅补偿零空间方向的 bias
 
+        return tau_task + tau_bias_null + tau_null
+    
     def _compute_null_space_torque(
         self,
         data: mujoco.MjData,
@@ -526,6 +526,9 @@ class OSC_PositionController:
         Returns:
             Tuple[np.ndarray, np.ndarray]: (arm_torques, hand_torques) 实际应用的力矩。
         """
+        if self._ctrl_mode != _CtrlMode.JOINT_PD:
+            self._prev_tau = None
+            self._ctrl_mode = _CtrlMode.JOINT_PD
         g = self.gains
 
         # 缓存目标（保持行为一致性）
@@ -757,17 +760,17 @@ class IK_PositionController:
         # ----- 1. 关节索引解析 -----
         # 通过 Base 接口获取关节名称，并映射为 MuJoCo 内部索引
         # 这种映射避免了硬编码索引，提高了代码对不同 URDF/XML 的适应性
-        self.arm_qpos_ids, self.arm_qvel_ids = self._resolve_joint_ids(base.arm_names)
-        
-        # 机械手索引：按照预定义的 key_order 顺序排列，确保多指协同的一致性
-        self.hand_qpos_ids, self.hand_qvel_ids = self._resolve_joint_ids(
-            [base.hand_names[k] for k in base.hand_key_order if k in base.hand_names]
-        )
+        # ✅ 改为传 actuator_names，在 _resolve_joint_ids 里同时返回 joint_ids
+        self.arm_qpos_ids, self.arm_qvel_ids, self.arm_joint_ids = \
+            self._resolve_joint_ids(base.arm_names)
+        self.hand_qpos_ids, self.hand_qvel_ids, self.hand_joint_ids = \
+            self._resolve_joint_ids(
+                [base.hand_names[k] for k in base.hand_key_order if k in base.hand_names]
+            )
 
-        # ----- 2. 自动读取关节范围和限制 -----
-        # 从模型中提取物理限位，用于 IK 过程中的碰撞避免和目标修正
-        self.arm_range = self._get_joint_range(self.arm_qpos_ids)
-        self.hand_range = self._get_joint_range(self.hand_qpos_ids)
+        # ✅ 直接用 joint_ids 取范围，安全可靠
+        self.arm_range  = model.jnt_range[self.arm_joint_ids]
+        self.hand_range = model.jnt_range[self.hand_joint_ids]
         
         # 读取力矩限制，用于底层饱和处理
         self._torque_min = base.torque_min
@@ -925,40 +928,16 @@ class IK_PositionController:
         np.clip(self._hand_torques, self._torque_min[self.base.ARM_DOF:], 
                 self._torque_max[self.base.ARM_DOF:], out=self._hand_torques)
 
-    def _get_joint_range(self, qpos_ids):
-        """
-        根据位置自由度 ID 获取关节运动范围。
-        
-        Args:
-            qpos_ids: 位置自由度索引列表。
-        
-        Returns:
-            2D 数组，形状为 (n_joints, 2)，包含 [下限, 上限]。
-        """
-        ranges = []
-        for qid in qpos_ids:
-            # 找到该 qpos 对应的 joint 索引
-            joint_id = np.where(self.model.jnt_qposadr == qid)[0][0]
-            ranges.append(self.model.jnt_range[joint_id])
-        return np.array(ranges)
-
     def _resolve_joint_ids(self, actuator_names):
-        """
-        将执行器名称列表转换为 MuJoCo 内部的 qpos 和 qvel 索引。
-        
-        MuJoCo 中 Actuator -> Joint -> qpos/qvel 是层级关系，需要通过查表转换。
-        
-        Args:
-            actuator_names: 执行器名称列表。
-        
-        Returns:
-            Tuple[np.ndarray, np.ndarray]: (qpos_ids, qvel_ids)
-        """
-        qpos_ids = []
-        qvel_ids = []
+        qpos_ids, qvel_ids, joint_ids = [], [], []
         for name in actuator_names:
-            act_id = self.base.actuator_map[name] # 名称 -> 执行器 ID
-            joint_id = self.model.actuator_trnid[act_id, 0] # 执行器 ID -> 关节 ID
-            qpos_ids.append(self.model.jnt_qposadr[joint_id]) # 关节 ID -> 位置索引
-            qvel_ids.append(self.model.jnt_dofadr[joint_id]) # 关节 ID -> 速度索引
-        return (np.array(qpos_ids, dtype=np.int32), np.array(qvel_ids, dtype=np.int32))
+            act_id   = self.base.actuator_map[name]
+            joint_id = self.model.actuator_trnid[act_id, 0]
+            joint_ids.append(joint_id)
+            qpos_ids.append(self.model.jnt_qposadr[joint_id])
+            qvel_ids.append(self.model.jnt_dofadr[joint_id])
+        return (
+            np.array(qpos_ids,  dtype=np.int32),
+            np.array(qvel_ids,  dtype=np.int32),
+            np.array(joint_ids, dtype=np.int32),
+        )

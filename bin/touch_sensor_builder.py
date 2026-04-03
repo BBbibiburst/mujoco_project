@@ -48,8 +48,8 @@ _BOTTOM_MN = (10, 7)   # 底部指节 skin_X_0_p  → 70 个传感器
 _MIDDLE_MN = (8,  5)   # 中部指节 skin_X_1_p  → 40 个传感器
 _TOP_MN    = (6,  5)   # 顶部指节 skin_X_2_p  → 30 个传感器
 
-# 默认 sensor site 半径（约 1 mm，可按需调整）
-_DEFAULT_SENSOR_RADIUS = 0.001
+# 默认 sensor site 半径（约 3 mm，可按需调整）
+_DEFAULT_SENSOR_RADIUS = 0.003
 
 # 15 块 skin 的完整配置
 # body_name 对应 XML 中 <body name="..."> 的名字（不含 inspirehand_ prefix）
@@ -167,40 +167,24 @@ def add_touch_sensors_to_spec(
     """
     configs = sensor_configs or SKIN_CONFIGS
     meshes_dir = Path(hand_path).parent / "meshes"
-
-    # ── 缓存 body 世界变换（避免重复编译）─────────────────────────────
-    # 不同 skin 可能共享同一个 body（如 skin_0_1_p 和 skin_0_2_p 都在 finger_second_0_p）
-    _body_cache: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
-
-    def _get_body_transform(full_body_name: str):
-        if full_body_name not in _body_cache:
-            _body_cache[full_body_name] = _body_world_transform(spec, full_body_name)
-        return _body_cache[full_body_name]
-
     sensor_map: Dict[str, List[str]] = {}
-    total_sensors = 0
-
+    total_sensors = 0                       
+    print(f"[TouchSensor] 开始添加 touch sensor，目标 skin 数量: {len(configs)}")
     for cfg in configs:
         stl_path = meshes_dir / cfg.stl_file
         if not stl_path.exists():
             raise FileNotFoundError(f"STL 文件不存在: {stl_path}")
 
-        # ── 1. 采样曲面点（STL 自身坐标系，即 mesh 局部坐标）─────────────
-        print(f"[TouchSensor] 采样 {cfg.mesh_name} ({cfg.m}×{cfg.n})...")
         pts_mesh = generate_surface_mesh_points_from_stl(stl_path, cfg.m, cfg.n)
-        # pts_mesh: (m*n, 3)，坐标系与 STL 文件一致（即 mesh 局部坐标系）
 
-        # ── 2. 将 mesh 局部坐标变换到世界坐标 ────────────────────────────
-        # 从 XML 中读取 skin geom 的 pos 和 quat（相对于 parent body）
-        geom_pos_local, geom_quat_local = _get_skin_geom_pose_in_body(spec, cfg.mesh_name, prefix)
-        # mesh 局部 → body 局部（通过 geom 在 body 中的偏移）
+        geom_pos_local, geom_quat_local = _get_skin_geom_pose_in_body(
+            spec, cfg.mesh_name, prefix
+        )
         pts_body = _apply_geom_transform(pts_mesh, geom_pos_local, geom_quat_local)
 
-        # ── 3. 获取 parent body，直接用 body 局部坐标添加 site ────────────
         full_body_name = prefix + cfg.body_name
         target_body = spec.body(full_body_name)
 
-        # ── 4. 在 parent body 下批量添加 site + touch sensor ─────────────
         skin_sensors: List[str] = []
         for idx, pt in enumerate(pts_body):
             site_name   = f"touch_site_{cfg.mesh_name}_{idx}"
@@ -228,7 +212,7 @@ def add_touch_sensors_to_spec(
 
         sensor_map[cfg.mesh_name] = skin_sensors
         total_sensors += len(skin_sensors)
-        print(f"[TouchSensor]   → 添加了 {len(skin_sensors)} 个 sensor")
+        print(f"[TouchSensor]   → 在 '{cfg.mesh_name}' 上添加 {cfg.m} * {cfg.n} = {len(skin_sensors)} 个 sensor")
 
     print(f"[TouchSensor] 完成！共添加 {total_sensors} 个 touch sensor，"
           f"覆盖 {len(configs)} 块 skin mesh。")

@@ -3,3 +3,5 @@
 /home/zmy/MyProject/bin/hand_arm_controller.py
 /home/zmy/MyProject/bin/position_controller.py
 /home/zmy/MyProject/bin/robot_arm_system.py
+/home/zmy/MyProject/bin/stl_mesh_sampler.py
+/home/zmy/MyProject/bin/touch_sensor_builder.py

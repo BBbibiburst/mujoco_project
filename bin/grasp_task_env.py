@@ -50,7 +50,7 @@ def build_custom_grasp_environment() -> Tuple[mujoco.MjModel, mujoco.MjData]:
 
     # 获取组合机器人模型规格，机械手安装在"right_hand"连接点
     # rot_xyz_deg: 机械手相对机械臂的旋转角度（度）
-    spec = get_combined_spec(
+    spec, _ = get_combined_spec(
         rot_xyz_deg=(-90, 0, 0),           # 绕X轴旋转-90度，调整机械手姿态
         attach_point_name="right_hand",     # 机械臂腕部连接点名称
     )
@@ -87,6 +87,21 @@ def build_custom_grasp_environment() -> Tuple[mujoco.MjModel, mujoco.MjData]:
         xyaxes=[0, 1, 0, -1, 0, 0],        # 相机坐标系朝向：俯视-Z轴
         fovy=calc_fovy,                     # 垂直视野角度（自动计算）
     )
+    
+    # 添加一个可抓取的红色立方体目标物体
+    cube= worldbody.add_body(
+        name="target_cube",                 # 物体名称
+        pos=TARGET_POS,                    # 物体初始位置
+    )
+    cube.add_geom(
+        type=mjtGeom.mjGEOM_BOX,           # 几何形状：立方体
+        size=[0.025, 0.025, 0.025],     # 立方体尺寸：边长5cm
+        rgba=[1.0, 0.0, 0.0, 1.0],           # 颜色：红色
+        mass = 1)  # 质量：100克，适合抓取
+    cube.add_joint(
+        type=mjtJoint.mjJNT_FREE,          # 关节类型：自由度，允许物体被抓取后自由移动
+    )
+    
 
     print("[EnvBuilder] 模型构建完成，正在编译并生成仿真对象...")
     # 编译模型规格，生成可仿真的模型对象
@@ -122,7 +137,8 @@ def main():
         hand_range = np.array([1600, 1600, 1400, 1800, 1200, 2000])  # 每个手部控制的范围
         hand_target_sequence[:, 1:] = hand_target_sequence[:, 1:] / hand_range * 0.01
         # 将每一行的所有值设为第一列的值
-        hand_target_sequence = np.column_stack([hand_target_sequence[:, 1]] * 7)
+        single_channel = hand_target_sequence[:, 1]              # (N,)，归一化后的第1列
+        hand_target_sequence = np.tile(single_channel[:, None], (1, 6))   # (N, 6)
         print(f"Loaded hand target sequence with shape: {hand_target_sequence.shape}")
         # ===== 2. viewer =====
         with mujoco.viewer.launch_passive(model, data) as viewer:
@@ -140,7 +156,7 @@ def main():
                 # ⭐ 手爪目标（位置控制！）
                 # =========================
 
-                hand_target = hand_target_sequence[int(sim_time / 0.01) % len(hand_target_sequence), 1:]  # 循环使用手部目标序列
+                hand_target = hand_target_sequence[int(sim_time / 0.01) % len(hand_target_sequence)]  # 循环使用手部目标序列
 
                 # =========================
                 # ⭐ 使用 PD 控制器（关键）
@@ -156,10 +172,6 @@ def main():
                 viewer.sync()
 
                 # ===== 调试输出 =====
-                # 打印真实 torque（验证 gear 是否正确）
-                ctrl = data.ctrl[controller.all_indices]
-                torque = ctrl * controller.gear[controller.all_indices]
-
                 print(
                     f"\r[Sim {sim_time:.2f}s] hand={hand_target.round(4)}",
                     end=" " * 20,   # 清除残留字符

@@ -160,63 +160,22 @@ class HandArmController:
     # -----------------------------
     # 控制接口：力矩分发
     # -----------------------------
+    def _to_ctrl_signal(self, torques: np.ndarray, indices: np.ndarray) -> np.ndarray:
+        """力矩 → 控制信号转换 + 安全限幅（内部复用）"""
+        ctrl = torques / self.gear[indices]
+        return np.clip(ctrl, self.ctrl_min[indices], self.ctrl_max[indices])
+
     def apply_control(self, data, arm_torques, hand_torques):
-        """
-        应用力矩控制指令。
-        
-        这是主要的控制入口。接收物理力矩，转换为控制信号，并写入 `data.ctrl`。
-        
-        Args:
-            data: MuJoCo 数据对象。
-            arm_torques: 机械臂力矩向量 [N·m]，形状 (7,)。
-            hand_torques: 手部力矩向量 [N·m]，形状 (6,)。
-            
-        Raises:
-            ValueError: 如果输入向量维度不匹配。
-        """
-        # 1. 维度检查 (防御性编程)
         if arm_torques.shape != (self.ARM_DOF,):
-            raise ValueError(f"Arm torque shape mismatch: {arm_torques.shape} vs {(self.ARM_DOF,)}")
+            raise ValueError(f"Arm torque shape mismatch: {arm_torques.shape}")
         if hand_torques.shape != (self.HAND_DOF,):
-            raise ValueError(f"Hand torque shape mismatch: {hand_torques.shape} vs {(self.HAND_DOF,)}")
+            raise ValueError(f"Hand torque shape mismatch: {hand_torques.shape}")
 
-        # 2. 合并力矩向量
         all_torque = np.concatenate([arm_torques, hand_torques])
-
-        # ⭐ 物理量转换：Torque → Control Signal
-        # MuJoCo 内部通常使用 ctrl * gear 来计算力矩，因此我们需要反解 ctrl
-        # 公式：ctrl = Torque / Gear
-        ctrl = all_torque / self.gear[self.all_indices]
-
-        # ⭐ 最终安全限幅
-        # 即使上层做了饱和处理，这里仍需限制 ctrl 范围，防止数值溢出或模型定义变更导致的问题
-        ctrl = np.clip(
-            ctrl,
-            self.ctrl_min[self.all_indices],
-            self.ctrl_max[self.all_indices]
-        )
-
-        # 3. 写入仿真器
-        data.ctrl[self.all_indices] = ctrl
+        data.ctrl[self.all_indices] = self._to_ctrl_signal(all_torque, self.all_indices)
 
     def apply_control_vector(self, data, control_vector):
-        """
-        应用合并后的控制向量（便捷接口）。
-        
-        适用于已经将所有自由度合并为一个向量的场景（如某些强化学习策略）。
-        
-        Args:
-            control_vector: 合并后的力矩向量 [N·m]，形状 (13,)。
-        """
         if control_vector.shape != (self.TOTAL_DOF,):
-            raise ValueError(f"Control vector shape mismatch: {control_vector.shape} vs {(self.TOTAL_DOF,)}")
+            raise ValueError(f"Control vector shape mismatch: {control_vector.shape}")
 
-        # 同样需要 torque→ctrl 转换与限幅
-        ctrl = control_vector / self.gear[self.all_indices]
-        ctrl = np.clip(
-            ctrl,
-            self.ctrl_min[self.all_indices],
-            self.ctrl_max[self.all_indices]
-        )
-
-        data.ctrl[self.all_indices] = ctrl
+        data.ctrl[self.all_indices] = self._to_ctrl_signal(control_vector, self.all_indices)
