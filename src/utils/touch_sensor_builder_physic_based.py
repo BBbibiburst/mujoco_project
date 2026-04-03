@@ -11,7 +11,7 @@ import numpy as np
 from src.utils.stl_mesh_sampler import generate_surface_mesh_points_from_stl
 
 # ====================== 物理参数常量 ======================
-TAXEL_RADIUS = 0.0004  # 接触球半径 [m]
+TAXEL_RADIUS = 0.001  # 接触球半径 [m]
 ELASTIC_STIFFNESS = 200.0  # 弹性刚度 [N/m]
 ELASTIC_DAMPING = 2.0  # 阻尼 [N·s/m]
 ELASTIC_RANGE = 0.002  # 最大压缩量 [m]

@@ -90,7 +90,7 @@ def build_custom_grasp_environment() -> Tuple[mujoco.MjModel, mujoco.MjData]:
     # ----- 1. 机器人模型组装 -----
     # 使用组合规格加载机器人，机械手安装于 "right_hand" 接口
     # 旋转配置：绕 X 轴旋转 -90 度，使机械手手掌朝前
-    spec, _ = get_combined_spec(
+    spec, phalanx_arrays  = get_combined_spec(
         rot_xyz_deg=(-90, 0, 0),
         attach_point_name="right_hand",
     )
@@ -145,7 +145,7 @@ def build_custom_grasp_environment() -> Tuple[mujoco.MjModel, mujoco.MjData]:
     print("[EnvBuilder] 模型构建完成，正在编译...")
     model = spec.compile()
     data = mujoco.MjData(model)
-    return model, data
+    return model, data, phalanx_arrays 
 
 
 # ====================== 轨迹数据处理 ======================
@@ -200,85 +200,115 @@ def load_and_process_hand_trajectory(csv_path: str, hand_range_raw: List[float])
 
 # ====================== 主程序 ======================
 
-def main():
-    """抓取环境演示主循环.
+import cv2  # 新增依赖，用于实时显示触觉图像
+from src.utils.touch_sensor_builder_physic_based import bind_all, read_all_tactile
 
-    流程：
-    1. 初始化：构建环境，加载控制器，预处理轨迹数据。
-    2. 控制循环：基于仿真时间索引轨迹数据，执行 PD 控制。
-    3. 渲染：同步 Viewer 显示。
-    4. 异常处理：捕获并打印致命错误，确保资源释放。
-    """
+def main():
+    """抓取环境演示主循环：集成实时触觉图像显示."""
     model: Optional[mujoco.MjModel] = None
     data: Optional[mujoco.MjData] = None
     PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
     CSV_PATH = PROJECT_ROOT / "data" / "position_log.csv"
     
     try:
-        # ===== 1. 环境与硬件抽象层初始化 =====
-        model, data = build_custom_grasp_environment()
+        # ===== 1. 环境与触觉系统初始化 =====
+        # 修改 get_combined_spec 以获取 phalanx_arrays 描述符[cite: 2]
+        model, data, phalanx_arrays = build_custom_grasp_environment()
         
-        # 底层硬件抽象接口
+        # 将描述符与编译后的模型 ID 绑定
+        bind_all(phalanx_arrays, model)
+        
+        # 硬件与运动控制器初始化[cite: 1]
         hardware_interface = HandArmController(model)
-        
-        # 上层运动控制器 (OSC)
-        pos_controller = OSC_PositionController(
-            base=hardware_interface, 
-            model=model
-        )
+        pos_controller = OSC_PositionController(base=hardware_interface, model=model)
 
-        # ===== 2. 轨迹数据加载 =====
+        # ===== 2. 轨迹数据与位姿准备[cite: 1] =====
         HAND_RANGE_RAW = [1600, 1600, 1400, 1800, 1200, 2000]
-        hand_target_sequence = load_and_process_hand_trajectory(
-            CSV_PATH, 
-            HAND_RANGE_RAW
-        )
+        hand_target_sequence = load_and_process_hand_trajectory(CSV_PATH, HAND_RANGE_RAW)
+        ARM_POSE_DEG = np.array([9.25, 82.21, -18.44, 133.08, 7.34, -125.17, 113.68])
+        arm_target = np.radians(ARM_POSE_DEG)
 
-        # ===== 3. 预定义目标配置 =====
-        # 机械臂参考构型（单位：度），需转换为弧度
-        ARM_POSE_DEG = np.array([
-            9.25, 82.21, -18.44, 133.08, 
-            7.34, -125.17, 113.68
-        ])
-        arm_target = np.radians(ARM_POSE_DEG)  # 转换为弧度制
-
-        # ===== 4. Viewer 启动与主循环 =====
-        # 使用上下文管理器确保 Viewer 正确关闭
+        # ===== 3. 主循环与触觉可视化 =====
         with mujoco.viewer.launch_passive(model, data) as viewer:
-            print("=== [Simulation] 开始运行，按 [ESC] 退出 ===")
+            print("=== [Simulation] 运行中，触觉窗口已开启 ===")
             
             while viewer.is_running():
-                sim_time = data.time  # 使用仿真内部时间更准确
-
-                # ----- 控制逻辑计算 -----
-                # 索引手部轨迹（循环播放）
-                # 频率假设：0.01秒/步
+                sim_time = data.time
+                
+                # ----- 运动控制 -----
                 seq_idx = int(sim_time / 0.01) % len(hand_target_sequence)
-                hand_target = hand_target_sequence[seq_idx]
-
-                # 执行关节空间 PD 控制
-                # 注意：此处使用 set_target 退化为纯关节 PD 模式
                 pos_controller.set_target(
                     data=data,
                     arm_target=arm_target,
-                    hand_target=hand_target
+                    hand_target=hand_target_sequence[seq_idx]
                 )
 
                 # ----- 物理步进 -----
                 mujoco.mj_step(model, data)
 
+                # ----- 触觉图像读取与显示 -----
+                # ----- 触觉图像读取与显示 -----
+                tactile_images = read_all_tactile(phalanx_arrays, data)
+                
+                SUB_H, SUB_W = 160, 120 
+                # 获取有序的 key 列表，确保显示顺序固定
+                sensor_keys = list(tactile_images.keys())
+                vis_frames = []
+
+                for name in sensor_keys:
+                    img = tactile_images[name]
+                    
+                    # 1. 增强显示与缩放
+                    enhanced_img = np.clip(img.astype(np.float32) * 5.0, 0, 255).astype(np.uint8)
+                    resized_img = cv2.resize(enhanced_img, (SUB_W, SUB_H), interpolation=cv2.INTER_NEAREST)
+                    heatmap = cv2.applyColorMap(resized_img, cv2.COLORMAP_JET)
+                    
+                    # 2. 安全解析名称 (修复 IndexError)
+                    parts = name.split('_')
+                    if "thumb" in parts:
+                        # 拇指格式: thumb_bottom -> T_Bot
+                        short_name = f"T_{parts[1][:3].capitalize()}"
+                    else:
+                        # 手指格式: finger_0_bottom -> F0_Bot
+                        short_name = f"F{parts[1]}_{parts[2][:3].capitalize()}"
+                    
+                    # 3. 绘制标题背景
+                    cv2.rectangle(heatmap, (0, 0), (SUB_W, 25), (0, 0, 0), -1)
+                    cv2.putText(heatmap, short_name, (5, 18), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+                    
+                    vis_frames.append(heatmap)
+                
+                # 4. 逻辑矩阵拼接 (按手指垂直排列: 第一行指尖，第二行中节，第三行指根)
+                # 假设 sensor_keys 顺序是: [F0_B, F0_M, F0_T, F1_B, F1_M, F1_T, ... T_B, T_M, T_T]
+                grid_rows = []
+                # 注意：我们要显示的是：
+                # Row 0: Top (索引 2, 5, 8, 11, 14)
+                # Row 1: Mid (索引 1, 4, 7, 10, 13)
+                # Row 2: Bot (索引 0, 3, 6, 9, 12)
+                for row_offset in [2, 1, 0]: # 从指尖到指根
+                    row_data = [vis_frames[f_idx * 3 + row_offset] for f_idx in range(5)]
+                    grid_rows.append(np.hstack(row_data))
+                
+                combined_heatmap = np.vstack(grid_rows)
+                
+                # 5. 显示并处理 OpenCV 窗口响应
+                cv2.imshow("Tactile Heatmap (Grid: Top/Mid/Bot)", combined_heatmap)
+                
+                # 必须加 waitKey，否则窗口会无响应
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+
                 # ----- 渲染同步 -----
                 viewer.sync()
-
-                # ----- 状态监控 (可选) -----
-                # print(f"\r[Time: {sim_time:.2f}s] Hand State: {hand_target}", end="")
 
     except Exception as e:
         print(f"\n[致命错误] 仿真异常终止: {e}")
         import traceback
         traceback.print_exc()
     finally:
-        print("\n=== [Cleanup] 仿真结束，资源已释放 ===")
+        cv2.destroyAllWindows()
+        print("\n=== [Cleanup] 仿真与触觉窗口已关闭 ===")
 
 
 if __name__ == "__main__":
