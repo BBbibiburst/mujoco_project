@@ -35,7 +35,7 @@ from typing import Dict, List, NamedTuple, Optional, Tuple
 
 import mujoco
 import numpy as np
-from ..utils.stl_mesh_sampler import generate_surface_mesh_points_from_stl
+from src.utils.stl_mesh_sampler import generate_surface_mesh_points_from_stl
 
 
 # ====================== 传感器布局配置 ======================

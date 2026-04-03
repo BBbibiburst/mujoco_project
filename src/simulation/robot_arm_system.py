@@ -29,6 +29,7 @@ from mujoco import viewer
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 from src.utils.touch_sensor_builder import add_touch_sensors_to_spec
+from src.utils.touch_sensor_builder_physic_based import add_elastic_taxel_arrays
 
 # ====================== 路径配置 ======================
 
@@ -424,15 +425,22 @@ def get_combined_spec(
     # 为 skin_0_0_p ~ skin_4_2_p 共 15 块皮肤在曲面上布置 touch sensor
     # 底部指节 [10,7]=70个, 中部指节 [8,5]=40个, 顶部指节 [6,5]=30个
     # 合计每根手指 140 个，4 根手指 + 拇指共 700 个 touch sensor
-    touch_sensor_map = add_touch_sensors_to_spec(
+    # touch_sensor_map = add_touch_sensors_to_spec(
+    #     spec=arm_spec,
+    #     hand_path=hand_path,
+    #     prefix="inspirehand_",
+    #     site_group=4,
+    #     site_rgba=(1.0, 0.35, 0.0, 0.5),
+    # )
+    
+    # return arm_spec, touch_sensor_map
+    phalanx_arrays = add_elastic_taxel_arrays(
         spec=arm_spec,
         hand_path=hand_path,
         prefix="inspirehand_",
-        site_group=4,
-        site_rgba=(1.0, 0.35, 0.0, 0.5),
     )
-    
-    return arm_spec, touch_sensor_map
+
+    return arm_spec, phalanx_arrays
 
 
 def load_combined_model(
