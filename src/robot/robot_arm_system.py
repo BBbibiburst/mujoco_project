@@ -28,7 +28,7 @@ import mujoco
 from mujoco import viewer
 import numpy as np
 from scipy.spatial.transform import Rotation as R
-from src.utils.tactile_sensor import TactileReader
+from src.sensors.tactile_sensor import TactileReader
 
 # ====================== 路径配置 ======================
 

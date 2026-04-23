@@ -9,10 +9,10 @@ import numpy as np
 from typing import Tuple, List, Optional
 from dataclasses import dataclass, field
 
-from src.simulation.robot_arm_system import get_combined_spec
+from src.robot.robot_arm_system import get_combined_spec
 from src.controllers.position_controller import OSC_PositionController
 from src.controllers.hand_arm_controller import HandArmController
-from src.utils.tactile_sensor import TactileReader, DISPLAY_ORDER, FINGER_PHALANX_ORDER  # ← 导入 TactileReader
+from src.sensors.tactile_sensor import TactileReader, DISPLAY_ORDER, FINGER_PHALANX_ORDER  # ← 导入 TactileReader
 
 
 # ====================== 配置数据类 ======================

@@ -23,7 +23,7 @@ import numpy as np
 import time
 from typing import Tuple, Optional
 from dataclasses import dataclass, field
-from src.simulation.robot_arm_system import get_combined_spec
+from src.robot.robot_arm_system import get_combined_spec
 from src.controllers.position_controller import OSC_PositionController
 from src.controllers.hand_arm_controller import HandArmController
 

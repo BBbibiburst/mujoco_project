@@ -240,7 +240,7 @@ class MultiPointAvgMixin:
         Returns:
             pts: shape (rows, cols, 3, 3, 3)，每个 taxel 对应一个 (3,3,3) 局部点阵
         """
-        from src.utils.stl_mesh_sampler import generate_surface_mesh_points_from_stl
+        from src.sensors.stl_mesh_sampler import generate_surface_mesh_points_from_stl
         
         fine_rows, fine_cols = rows * self.SUBGRID, cols * self.SUBGRID
         pts_fine = generate_surface_mesh_points_from_stl(stl_path, fine_rows, fine_cols)
@@ -269,7 +269,7 @@ class SimpleReader(TactileReader):
 
     def build(self, spec, hand_path, prefix="inspirehand_", site_group=4,
               site_rgba=(1.0, 0.2, 0.2, 0.6), **kwargs):
-        from src.utils.stl_mesh_sampler import generate_surface_mesh_points_from_stl
+        from src.sensors.stl_mesh_sampler import generate_surface_mesh_points_from_stl
 
         configs = [
             # (skin_name, body_name, stl_file, rows, cols)
@@ -369,7 +369,7 @@ class PhysicsReader(TactileReader):
         self.site_rgba = site_rgba
 
     def build(self, spec, hand_path, prefix="inspirehand_", **kwargs):
-        from src.utils.stl_mesh_sampler import generate_surface_mesh_points_from_stl
+        from src.sensors.stl_mesh_sampler import generate_surface_mesh_points_from_stl
 
         configs = [
             ("finger_0_bottom", "finger_first_0_p",  "skin_0_0_p.STL", 10, 7),
@@ -483,7 +483,7 @@ class SimpleAvgReader(TactileReader, MultiPointAvgMixin):
 
     def build(self, spec, hand_path, prefix="inspirehand_", site_group=4,
               site_rgba=(1.0, 0.2, 0.2, 0.6), **kwargs):
-        from src.utils.stl_mesh_sampler import generate_surface_mesh_points_from_stl
+        from src.sensors.stl_mesh_sampler import generate_surface_mesh_points_from_stl
 
         configs = [
             ("skin_0_0_p", "finger_first_0_p",  "skin_0_0_p.STL", 10, 7),
@@ -611,7 +611,7 @@ class PhysicsAvgReader(PhysicsReader, MultiPointAvgMixin):
         self._arrays: Dict[str, _MultiPhalanxArray] = {}
 
     def build(self, spec, hand_path, prefix="inspirehand_", **kwargs):
-        from src.utils.stl_mesh_sampler import generate_surface_mesh_points_from_stl
+        from src.sensors.stl_mesh_sampler import generate_surface_mesh_points_from_stl
 
         configs = [
             ("finger_0_bottom", "finger_first_0_p",  "skin_0_0_p.STL", 10, 7),
