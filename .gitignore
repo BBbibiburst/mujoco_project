@@ -13,3 +13,8 @@ src/tools/path.txt
 
 # MuJoCo
 MUJOCO_LOG.TXT
+
+# 测试文件
+test/
+
+next_step.md

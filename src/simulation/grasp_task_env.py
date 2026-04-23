@@ -109,9 +109,7 @@ def load_and_process_hand_trajectory(
 # ====================== 主程序 ======================
 
 import cv2
-from src.utils.touch_sensor_builder_physic_based import (
-    bind_all, read_all_tactile, DISPLAY_ORDER, FINGER_PHALANX_ORDER
-)
+from src.utils.tactile_adapter import DISPLAY_ORDER, FINGER_PHALANX_ORDER
 
 def main():
     """抓取环境演示主循环：集成实时触觉图像显示."""
@@ -122,8 +120,8 @@ def main():
 
     try:
         # ===== 1. 环境与触觉系统初始化 =====
-        model, data, phalanx_arrays = build_custom_grasp_environment()
-        bind_all(phalanx_arrays, model)
+        model, data, reader = build_custom_grasp_environment()
+        reader.bind(model)
 
         hardware_interface = HandArmController(model)
         pos_controller     = OSC_PositionController(base=hardware_interface, model=model)
@@ -155,7 +153,7 @@ def main():
                 mujoco.mj_step(model, data)
 
                 # ----- 触觉图像读取 -----
-                tactile_images = read_all_tactile(phalanx_arrays, data)
+                tactile_images = reader.read_image(data)
 
                 # ----- 按固定顺序生成每个指节的热力图帧 -----
                 # 【修正 Bug5】原代码依赖 dict 迭代顺序来做 f_idx*3+offset 索引，

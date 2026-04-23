@@ -28,8 +28,7 @@ import mujoco
 from mujoco import viewer
 import numpy as np
 from scipy.spatial.transform import Rotation as R
-from src.utils.touch_sensor_builder import add_touch_sensors_to_spec
-from src.utils.touch_sensor_builder_physic_based import add_elastic_taxel_arrays
+from src.utils.tactile_adapter import TactileReaderFactory
 
 # ====================== 路径配置 ======================
 
@@ -289,6 +288,7 @@ def get_combined_spec(
     rot_xyz_deg: Tuple[float, float, float] = (-90.0, 0.0, 0.0),
     attach_point_name: str = "right_hand",
     physics: Optional[PhysicsConfig] = None,
+    tactile_backend: str = "physics",
 ) -> Tuple[mujoco.MjSpec, Dict[str, List[str]]]:
     """
     加载并合并机械臂与机械手模型，返回未编译的 MjSpec 对象.
@@ -434,13 +434,9 @@ def get_combined_spec(
     # )
     
     # return arm_spec, touch_sensor_map
-    phalanx_arrays = add_elastic_taxel_arrays(
-        spec=arm_spec,
-        hand_path=hand_path,
-        prefix="inspirehand_",
-    )
-
-    return arm_spec, phalanx_arrays
+    reader = TactileReaderFactory.create(tactile_backend)
+    reader.build_sensor(arm_spec, hand_path, prefix="inspirehand_")
+    return arm_spec, reader
 
 
 def load_combined_model(
