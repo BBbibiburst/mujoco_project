@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from src.simulation.robot_arm_system import get_combined_spec
 from src.controllers.position_controller import OSC_PositionController
 from src.controllers.hand_arm_controller import HandArmController
-from src.utils.tactile_adapter import TactileReader, DISPLAY_ORDER, FINGER_PHALANX_ORDER  # ← 导入 TactileReader
+from src.utils.tactile_sensor import TactileReader, DISPLAY_ORDER, FINGER_PHALANX_ORDER  # ← 导入 TactileReader
 
 
 # ====================== 配置数据类 ======================
@@ -143,7 +143,7 @@ def main():
     try:
         # ===== 1. 环境与触觉系统初始化 =====
         # 返回的 reader 已经是绑定好的，无需再调用 bind
-        model, data, reader = build_custom_grasp_environment(tactile_backend="physics")
+        model, data, reader = build_custom_grasp_environment(tactile_backend="simple_avg")
 
         hardware_interface = HandArmController(model)
         pos_controller = OSC_PositionController(base=hardware_interface, model=model)
@@ -175,7 +175,7 @@ def main():
                 mujoco.mj_step(model, data)
 
                 # ----- 触觉图像读取（reader 已绑定，直接用）-----
-                tactile_images = reader.read_image(data)  # ← 现在 reader 是 TactileReader
+                tactile_images = reader.read_image(data) 
 
                 # ----- 按固定顺序生成每个指节的热力图帧 -----
                 frames: dict = {}
