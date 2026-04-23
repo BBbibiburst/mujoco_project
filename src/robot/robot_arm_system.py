@@ -289,64 +289,23 @@ def get_combined_spec(
     attach_point_name: str = "right_hand",
     physics: Optional[PhysicsConfig] = None,
     tactile_backend: str = "physics",
-) -> Tuple[mujoco.MjSpec, Dict[str, List[str]]]:
+) -> Tuple[mujoco.MjSpec, "TactileReader"]:  # ✅ 修正类型
     """
     加载并合并机械臂与机械手模型，返回未编译的 MjSpec 对象.
 
-    这是核心构建函数，执行完整的模型合并流程：
-        1. 路径解析与文件验证
-        2. XML 加载为 MjSpec
-        3. 手模型根节点偏移修复
-        4. 寻找挂载点并 attach
-        5. 应用姿态变换（欧拉角转四元数）
-        6. 可选：应用物理参数覆盖
-
-    返回未编译的 MjSpec，允许调用者继续添加物体、相机、光照等，
-    最后手动调用 spec.compile() 生成可仿真模型。
-
-    Args:
-        arm_path: 机械臂 XML 文件路径。None → 使用 DEFAULT_ARM_PATH。
-        hand_path: 机械手 XML 文件路径。None → 使用 DEFAULT_HAND_PATH。
-        rot_xyz_deg: 手部安装姿态修正欧拉角 (roll, pitch, yaw) [度]。
-            默认 (-90, 0, 0) 表示绕 X 轴旋转 -90 度（常见手爪朝前配置）。
-            按 XYZ 内旋顺序（extrinsic rotations）应用。
-        attach_point_name: 机械臂中用于挂载机械手的 body 名称。
-            必须是 arm_spec 中存在的 body 名称。
-        physics: 物理参数配置对象。None → 使用 DEFAULT_GRASP_PHYSICS。
-            传入 PhysicsConfig() 空对象则保留 XML 原始值（所有字段为 None）。
+    ...
 
     Returns:
-        Tuple[mujoco.MjSpec, Dict[str, List[str]]]: 
+        Tuple[mujoco.MjSpec, TactileReader]:
             - 已合并、可选已修改物理参数的未编译规格对象。
               包含完整的机械臂+手爪结构，可直接编译或进一步修改。
-            - 触觉传感器名称映射字典，键为皮肤名称，值为传感器名称列表。
-
-    Raises:
-        FileNotFoundError: 模型文件不存在（路径错误或文件缺失）。
-        ValueError: 手模型缺少根节点，或找不到指定的挂载点 body。
+            - 触觉传感器读取器（已 build，未 bind）。
+              需在 compile 后调用 reader.bind(model)。
 
     Examples:
-        >>> # 基础用法：使用默认路径和姿态
-        >>> spec, touch_sensor_map = get_combined_spec()
+        >>> spec, reader = get_combined_spec()
         >>> model = spec.compile()
-        
-        >>> # 高级用法：自定义物理参数和安装姿态
-        >>> cfg = PhysicsConfig(
-        ...     hand_defaults=JointPhysicsConfig(stiffness=2.0, damping=0.5),
-        ...     per_joint_overrides={
-        ...         "inspirehand_finger1_joint1": JointPhysicsConfig(stiffness=5.0)
-        ...     },
-        ... )
-        >>> spec, touch_sensor_map = get_combined_spec(
-        ...     rot_xyz_deg=(0, -90, 0),  # 手爪朝下
-        ...     physics=cfg
-        ... )
-        >>> # 继续添加环境物体...
-        >>> spec.worldbody.add_geom(
-        ...     type=mujoco.mjtGeom.mjGEOM_BOX, 
-        ...     size=[0.1, 0.1, 0.1]
-        ... )
-        >>> model = spec.compile()
+        >>> reader.bind(model)
     """
     # ----- 路径解析与文件检查 -----
     # 使用 Path 对象统一处理字符串和 Path 输入，自动适配操作系统路径分隔符
@@ -444,10 +403,14 @@ def load_combined_model(
     hand_path: Optional[PathLike] = None,
     rot_xyz_deg: Tuple[float, float, float] = (-90.0, 0.0, 0.0),
     physics: Optional[PhysicsConfig] = None,
-    tactile_backend: str = "physics",  # ← 新增参数
-) -> Tuple[mujoco.MjModel, mujoco.MjData, TactileReader]:  # ← 返回 reader
+    tactile_backend: str = "physics",
+) -> Tuple[mujoco.MjModel, mujoco.MjData, "TactileReader"]:
     """
     便捷函数：加载、合并、编译并绑定，返回可直接仿真的三元组.
+
+    Returns:
+        Tuple[MjModel, MjData, TactileReader]: 
+            编译好的模型、仿真数据、已绑定的触觉读取器。
     """
     spec, reader = get_combined_spec(
         arm_path, hand_path, rot_xyz_deg, 

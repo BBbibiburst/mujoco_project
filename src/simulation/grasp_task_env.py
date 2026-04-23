@@ -37,7 +37,7 @@ class ObjectConfig:
 
 def build_custom_grasp_environment(
     tactile_backend: str = "physics",
-) -> Tuple[mujoco.MjModel, mujoco.MjData, TactileReader]:  # ← 返回 TactileReader，不是 dict
+) -> Tuple[mujoco.MjModel, mujoco.MjData, TactileReader]:
     """
     构建自定义抓取环境，返回编译好的模型和已绑定的触觉读取器.
     
@@ -99,7 +99,7 @@ def build_custom_grasp_environment(
     reader.bind(model)
     print(f"[EnvBuilder] 触觉读取器已绑定: {reader}")
 
-    return model, data, reader  # ← 返回 reader，不是 dict
+    return model, data, reader
 
 
 # ====================== 轨迹数据处理 ======================
