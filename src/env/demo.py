@@ -137,7 +137,7 @@ def demo_random_policy(n_episodes: int = 3, render: bool = True,
                     break
 
                 # 可选：显示相机图像
-                # cv2.imshow("Camera", cv2.cvtColor(obs['camera_rgb'], cv2.COLOR_RGB2BGR))
+                cv2.imshow("Camera", cv2.cvtColor(obs['camera_rgb'], cv2.COLOR_RGB2BGR))
 
                 viewer.sync()
 
