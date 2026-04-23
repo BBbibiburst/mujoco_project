@@ -28,7 +28,7 @@ import mujoco
 from mujoco import viewer
 import numpy as np
 from scipy.spatial.transform import Rotation as R
-from src.utils.tactile_adapter import TactileReaderFactory
+from src.utils.tactile_adapter import TactileReader
 
 # ====================== 路径配置 ======================
 
@@ -434,8 +434,8 @@ def get_combined_spec(
     # )
     
     # return arm_spec, touch_sensor_map
-    reader = TactileReaderFactory.create(tactile_backend)
-    reader.build_sensor(arm_spec, hand_path, prefix="inspirehand_")
+    reader = TactileReader.create(tactile_backend)  
+    reader.build(arm_spec, hand_path, prefix="inspirehand_")  
     return arm_spec, reader
 
 
@@ -444,60 +444,26 @@ def load_combined_model(
     hand_path: Optional[PathLike] = None,
     rot_xyz_deg: Tuple[float, float, float] = (-90.0, 0.0, 0.0),
     physics: Optional[PhysicsConfig] = None,
-) -> Tuple[mujoco.MjModel, mujoco.MjData]:
+    tactile_backend: str = "physics",  # ← 新增参数
+) -> Tuple[mujoco.MjModel, mujoco.MjData, TactileReader]:  # ← 返回 reader
     """
-    便捷函数：加载、合并并直接编译模型，返回可立即仿真的对象对.
-
-    这是 get_combined_spec 的封装，适用于无需进一步修改模型的场景。
-    内部调用 get_combined_spec → compile → MjData 创建。
-
-    Args:
-        arm_path: 机械臂 XML 路径。None → 使用默认路径。
-        hand_path: 机械手 XML 路径。None → 使用默认路径。
-        rot_xyz_deg: 姿态修正欧拉角 (roll, pitch, yaw) [度]。
-        physics: 物理参数配置。None → 使用 DEFAULT_GRASP_PHYSICS。
-
-    Returns:
-        Tuple[mujoco.MjModel, mujoco.MjData]: 
-            - model: 编译好的 MuJoCo 模型，包含完整动力学信息
-            - data: 对应的仿真数据对象，已初始化但尚未步进
-
-    Examples:
-        >>> # 使用默认物理参数快速启动
-        >>> model, data = load_combined_model()
-        
-        >>> # 自定义物理参数：统一调高全臂阻尼，并单独加强拇指刚度
-        >>> cfg = PhysicsConfig(
-        ...     arm_defaults=JointPhysicsConfig(damping=1.0, armature=0.01),
-        ...     hand_defaults=JointPhysicsConfig(
-        ...         stiffness=1.5, damping=0.3, frictionloss=0.05
-        ...     ),
-        ...     per_joint_overrides={
-        ...         "inspirehand_thumb_proximal": JointPhysicsConfig(
-        ...             stiffness=8.0, damping=0.8
-        ...         ),
-        ...     },
-        ...     geom_friction=(0.8, 0.005, 0.0001),  # 高滑动摩擦，低扭转/滚动摩擦
-        ... )
-        >>> model, data = load_combined_model(physics=cfg)
-        >>> # 现在可以开始仿真
-        >>> mujoco.mj_step(model, data)
+    便捷函数：加载、合并、编译并绑定，返回可直接仿真的三元组.
     """
-    # 获取合并后的 spec（未编译）
-    spec, _ = get_combined_spec(arm_path, hand_path, rot_xyz_deg, physics=physics)
-
-    # 编译生成可仿真模型
+    spec, reader = get_combined_spec(
+        arm_path, hand_path, rot_xyz_deg, 
+        physics=physics, 
+        tactile_backend=tactile_backend,
+    )
+    
     print("[SpecBuilder] 正在编译模型...")
     model = spec.compile()
-    # 创建对应的仿真数据对象
-    data = mujoco.MjData(model)
-
-    # 日志输出：确认模型结构
-    print(f"[SpecBuilder] 编译完成。自由度 (nv): {model.nv}, 执行器 (nu): {model.nu}")
-    actuator_names = [model.actuator(i).name for i in range(model.nu)]
-    print(f"[SpecBuilder] 可用执行器列表: {actuator_names}")
     
-    return model, data
+    reader.bind(model)
+    
+    data = mujoco.MjData(model)
+    print(f"[SpecBuilder] 编译完成。nv={model.nv}, nu={model.nu}")
+    
+    return model, data, reader  # ← 返回 reader
 
 
 # ====================== 独立运行入口 ======================
@@ -520,7 +486,7 @@ if __name__ == "__main__":
     print("--- 独立运行模式：预览合成机械臂 ---")
     try:
         # 加载并编译模型
-        model, data = load_combined_model()
+        model, data, reader = load_combined_model()
 
         # 启动被动查看器（非阻塞，允许外部控制循环）
         with viewer.launch_passive(model, data) as v:

@@ -8,9 +8,11 @@ import mujoco
 import numpy as np
 from typing import Tuple, List, Optional
 from dataclasses import dataclass, field
+
 from src.simulation.robot_arm_system import get_combined_spec
 from src.controllers.position_controller import OSC_PositionController
 from src.controllers.hand_arm_controller import HandArmController
+from src.utils.tactile_adapter import TactileReader, DISPLAY_ORDER, FINGER_PHALANX_ORDER  # ← 导入 TactileReader
 
 
 # ====================== 配置数据类 ======================
@@ -33,17 +35,31 @@ class ObjectConfig:
 
 # ====================== 环境构建 ======================
 
-def build_custom_grasp_environment() -> Tuple[mujoco.MjModel, mujoco.MjData, dict]:
+def build_custom_grasp_environment(
+    tactile_backend: str = "physics",
+) -> Tuple[mujoco.MjModel, mujoco.MjData, TactileReader]:  # ← 返回 TactileReader，不是 dict
+    """
+    构建自定义抓取环境，返回编译好的模型和已绑定的触觉读取器.
+    
+    Args:
+        tactile_backend: "physics"（弹性taxel，推荐）或 "simple"（轻量site）
+    
+    Returns:
+        (model, data, reader): 已编译模型、仿真数据、已绑定的 TactileReader
+    """
     print("=== [EnvBuilder] 开始构建自定义抓取环境 ===")
     cfg_cam = CameraConfig()
     cfg_obj = ObjectConfig()
 
-    spec, phalanx_arrays = get_combined_spec(
+    # 1. 获取 spec 和 reader（此时 reader 已 build，未 bind）
+    spec, reader = get_combined_spec(  # ← 返回 (spec, reader)
         rot_xyz_deg=(-90, 0, 0),
         attach_point_name="right_hand",
+        tactile_backend=tactile_backend,
     )
     worldbody = spec.worldbody
 
+    # 2. 添加环境元素（光照、相机、物体）
     worldbody.add_light(
         name="top_light",
         pos=[0.0, 0.0, 2.0],
@@ -52,9 +68,9 @@ def build_custom_grasp_environment() -> Tuple[mujoco.MjModel, mujoco.MjData, dic
         ambient=[0.3, 0.3, 0.3],
     )
 
-    base_pos  = np.array([0.0, 0.0, 0.0])
+    base_pos = np.array([0.0, 0.0, 0.0])
     target_pos = cfg_obj.pos
-    mid_point  = (base_pos + target_pos) / 2.0
+    mid_point = (base_pos + target_pos) / 2.0
     horizontal_span = np.linalg.norm(target_pos - base_pos) * cfg_cam.base_to_target_dist_scale
     fovy = 2 * np.degrees(np.arctan2(horizontal_span / 2, cfg_cam.cam_height))
 
@@ -74,10 +90,16 @@ def build_custom_grasp_environment() -> Tuple[mujoco.MjModel, mujoco.MjData, dic
     )
     cube.add_joint(type=mujoco.mjtJoint.mjJNT_FREE)
 
+    # 3. 编译模型
     print("[EnvBuilder] 模型构建完成，正在编译...")
     model = spec.compile()
-    data  = mujoco.MjData(model)
-    return model, data, phalanx_arrays
+    data = mujoco.MjData(model)
+
+    # 4. 【关键】绑定 reader（必须在 compile 之后）
+    reader.bind(model)
+    print(f"[EnvBuilder] 触觉读取器已绑定: {reader}")
+
+    return model, data, reader  # ← 返回 reader，不是 dict
 
 
 # ====================== 轨迹数据处理 ======================
@@ -93,9 +115,9 @@ def load_and_process_hand_trajectory(
             for row in reader:
                 raw_data.append([float(x) for x in row])
 
-        raw_array      = np.array(raw_data)
+        raw_array = np.array(raw_data)
         normalized_part = raw_array[:, 1:] / np.array(hand_range_raw) * 0.01
-        single_channel  = normalized_part[:, 0:1]
+        single_channel = normalized_part[:, 0:1]
         hand_target_sequence = np.tile(single_channel, (1, 6))
 
         print(f"Loaded hand target sequence with shape: {hand_target_sequence.shape}")
@@ -109,28 +131,28 @@ def load_and_process_hand_trajectory(
 # ====================== 主程序 ======================
 
 import cv2
-from src.utils.tactile_adapter import DISPLAY_ORDER, FINGER_PHALANX_ORDER
+
 
 def main():
     """抓取环境演示主循环：集成实时触觉图像显示."""
     model: Optional[mujoco.MjModel] = None
-    data:  Optional[mujoco.MjData]  = None
+    data: Optional[mujoco.MjData] = None
     PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
     CSV_PATH = PROJECT_ROOT / "data" / "position_log.csv"
 
     try:
         # ===== 1. 环境与触觉系统初始化 =====
-        model, data, reader = build_custom_grasp_environment()
-        reader.bind(model)
+        # 返回的 reader 已经是绑定好的，无需再调用 bind
+        model, data, reader = build_custom_grasp_environment(tactile_backend="physics")
 
         hardware_interface = HandArmController(model)
-        pos_controller     = OSC_PositionController(base=hardware_interface, model=model)
+        pos_controller = OSC_PositionController(base=hardware_interface, model=model)
 
         # ===== 2. 轨迹数据准备 =====
         HAND_RANGE_RAW = [1600, 1600, 1400, 1800, 1200, 2000]
         hand_target_sequence = load_and_process_hand_trajectory(CSV_PATH, HAND_RANGE_RAW)
         ARM_POSE_DEG = np.array([9.25, 82.21, -18.44, 133.08, 7.34, -125.17, 113.68])
-        arm_target   = np.radians(ARM_POSE_DEG)
+        arm_target = np.radians(ARM_POSE_DEG)
 
         SUB_H, SUB_W = 160, 120
 
@@ -152,31 +174,26 @@ def main():
                 # ----- 物理步进 -----
                 mujoco.mj_step(model, data)
 
-                # ----- 触觉图像读取 -----
-                tactile_images = reader.read_image(data)
+                # ----- 触觉图像读取（reader 已绑定，直接用）-----
+                tactile_images = reader.read_image(data)  # ← 现在 reader 是 TactileReader
 
                 # ----- 按固定顺序生成每个指节的热力图帧 -----
-                # 【修正 Bug5】原代码依赖 dict 迭代顺序来做 f_idx*3+offset 索引，
-                # 一旦某个指节构建失败或顺序不同就会 IndexError。
-                # 修正：使用 DISPLAY_ORDER 显式按名字取帧，再按手指分组拼图。
                 frames: dict = {}
                 for name in DISPLAY_ORDER:
                     if name not in tactile_images:
-                        # 某指节缺失时用纯黑帧占位，不影响其他指节显示
                         frames[name] = np.zeros((SUB_H, SUB_W, 3), dtype=np.uint8)
                         continue
 
                     img = tactile_images[name]
-                    enhanced  = np.clip(img.astype(np.float32) * 5.0, 0, 255).astype(np.uint8)
-                    resized   = cv2.resize(enhanced, (SUB_W, SUB_H), interpolation=cv2.INTER_NEAREST)
-                    heatmap   = cv2.applyColorMap(resized, cv2.COLORMAP_JET)
+                    enhanced = np.clip(img.astype(np.float32) * 5.0, 0, 255).astype(np.uint8)
+                    resized = cv2.resize(enhanced, (SUB_W, SUB_H), interpolation=cv2.INTER_NEAREST)
+                    heatmap = cv2.applyColorMap(resized, cv2.COLORMAP_JET)
 
                     # 标题文字
                     parts = name.split('_')
                     if parts[0] == "thumb":
                         short_name = f"T_{parts[1][:3].capitalize()}"
                     else:
-                        # finger_0_bottom -> F0_Bot
                         short_name = f"F{parts[1]}_{parts[2][:3].capitalize()}"
 
                     cv2.rectangle(heatmap, (0, 0), (SUB_W, 25), (0, 0, 0), -1)
@@ -185,7 +202,6 @@ def main():
                     frames[name] = heatmap
 
                 # ----- 按"指尖/中节/指根 × 5根手指"网格拼图 -----
-                # 行顺序：top（指尖）→ middle → bottom（指根）
                 finger_keys = ["finger_0", "finger_1", "finger_2", "finger_3", "thumb"]
                 phalanx_levels = ["top", "middle", "bottom"]
 
