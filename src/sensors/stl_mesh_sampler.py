@@ -359,11 +359,11 @@ def generate_surface_mesh_points_from_stl(
         key = _get_cache_key(stl_path, m, n, ransac_iters, inlier_tol)
         fpath = _cache_path(key)
         if fpath.exists():
-            print(f"[STLSampler] 命中缓存: {stl_path.name} (m={m}, n={n})")
+            # print(f"[STLSampler] 命中缓存: {stl_path.name} (m={m}, n={n})")
             return joblib.load(fpath)
 
     # ----- 实际计算 -----
-    print(f"[STLSampler] 计算采样点云: {stl_path.name} (m={m}, n={n})...")
+    # print(f"[STLSampler] 计算采样点云: {stl_path.name} (m={m}, n={n})...")
 
     # 1. 加载网格
     mesh = trimesh.load(stl_path)
@@ -468,7 +468,7 @@ def generate_surface_mesh_points_from_stl(
     # ----- 缓存写入 -----
     if use_cache:
         joblib.dump(sample_pts, fpath)
-        print(f"[STLSampler] 已写入缓存: {fpath.name}")
+        # print(f"[STLSampler] 已写入缓存: {fpath.name}")
         
     return sample_pts
 

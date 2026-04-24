@@ -121,7 +121,7 @@ class EnvStats:
 
 # ====================== 基类 ======================
 
-class RobotArmEnvBase(ABC):
+class RobotArmEnvBase(gym.Env, ABC):
     """
     机械臂+灵巧手强化学习环境基类.
 
@@ -146,12 +146,14 @@ class RobotArmEnvBase(ABC):
         - 终止判断
     """
 
+    metadata = {"render_modes": ["human"]}  # gym.Env 要求
     # ---- 子类需要声明的常量（可覆盖） ----
     ARM_DOF: int = 7
     HAND_DOF: int = 6
     TOTAL_DOF: int = 13
 
     def __init__(self, config: Optional[RobotConfig] = None):
+        super().__init__()
         self.cfg = config or RobotConfig()
         self.stats = EnvStats()
 
@@ -277,15 +279,13 @@ class RobotArmEnvBase(ABC):
 
     # ====================== 公开接口 ======================
 
-    def reset(self, seed: Optional[int] = None) -> Tuple[np.ndarray, Dict]:
+    def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         """
         重置环境，返回初始观测.
-
+        
         Args:
             seed: 随机数种子（可选）。
-
-        Returns:
-            (obs, info): 初始观测和调试信息。
+            options: 额外选项（Gymnasium 标准接口，可选）。
         """
         if seed is not None:
             np.random.seed(seed)
@@ -428,7 +428,6 @@ class RobotArmEnvBase(ABC):
 
     def _init_simulation(self) -> None:
         """初始化 MuJoCo 仿真（加载模型、初始化控制器）."""
-        print(f"[{self.__class__.__name__}] 正在初始化仿真环境...")
 
         # 1. 获取合并后的未编译 spec
         spec, reader = get_combined_spec(
@@ -442,7 +441,6 @@ class RobotArmEnvBase(ABC):
         self._build_scene(spec)
 
         # 3. 编译模型
-        print(f"[{self.__class__.__name__}] 编译模型中...")
         self.model = spec.compile()
         self.data = mujoco.MjData(self.model)
 
@@ -455,11 +453,6 @@ class RobotArmEnvBase(ABC):
 
         # 6. 初始化控制器
         self._rebuild_controller()
-
-        print(
-            f"[{self.__class__.__name__}] 初始化完成。"
-            f" nv={self.model.nv}, nu={self.model.nu}"
-        )
 
     def _reset_robot_pose(self) -> None:
         """

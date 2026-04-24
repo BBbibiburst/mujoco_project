@@ -280,7 +280,7 @@ def make_env(rank: int = 0, seed: int = 0):
 def main():
     N_ENVS = 4
     TOTAL_TIMESTEPS = 5_000_000
-    SAVE_DIR = PROJECT_ROOT / "models" / "ppo_pickplace"
+    SAVE_DIR = PROJECT_ROOT / "rl_models" / "ppo_pickplace"
     SAVE_DIR.mkdir(parents=True, exist_ok=True)
     
     print(f"=== PPO 训练启动 ===")

@@ -263,11 +263,11 @@ def _apply_physics_to_spec(
                 geom.condim = physics.geom_condim
 
     # 日志输出：确认应用情况，便于调试
-    print(
-        f"[SpecBuilder] 物理参数已应用 (arm_defaults={physics.arm_defaults}, "
-        f"hand_defaults={physics.hand_defaults}, "
-        f"overrides={list(physics.per_joint_overrides.keys())})"
-    )
+    # print(
+    #     f"[SpecBuilder] 物理参数已应用 (arm_defaults={physics.arm_defaults}, "
+    #     f"hand_defaults={physics.hand_defaults}, "
+    #     f"overrides={list(physics.per_joint_overrides.keys())})"
+    # )
 
 
 # ====================== 公开接口 ======================
@@ -305,8 +305,8 @@ def get_combined_spec(
     if not hand_path.exists():
         raise FileNotFoundError(f"机械手模型文件不存在: {hand_path}")
 
-    print(f"[SpecBuilder] 加载机械臂: {arm_path.name}")
-    print(f"[SpecBuilder] 加载机械手: {hand_path.name}")
+    # print(f"[SpecBuilder] 加载机械臂: {arm_path.name}")
+    # print(f"[SpecBuilder] 加载机械手: {hand_path.name}")
 
     # ----- 加载 MjSpec -----
     # from_file 是 MjSpec 的静态工厂方法，解析 XML 但不编译
@@ -322,7 +322,7 @@ def get_combined_spec(
 
     original_pos = np.array(hand_root.pos)
     if np.linalg.norm(original_pos) > 1e-6:  # 检测到显著偏移（>1微米）
-        print(f"[SpecBuilder] 检测到根节点偏移 {original_pos}，已重置为 [0, 0, 0]")
+        # print(f"[SpecBuilder] 检测到根节点偏移 {original_pos}，已重置为 [0, 0, 0]")
         hand_root.pos = [0.0, 0.0, 0.0]
 
     # ----- 寻找挂载点 -----
@@ -342,7 +342,7 @@ def get_combined_spec(
     attach_frame = attach_body.add_frame()
     # 2. 将手模型根 body attach 到该 frame，自动添加前缀避免命名冲突
     attached_body = attach_frame.attach_body(hand_root, prefix="inspirehand_", suffix="")
-    print(f"[SpecBuilder] 成功挂载: '{attached_body.name}' → '{attach_body.name}'")
+    # print(f"[SpecBuilder] 成功挂载: '{attached_body.name}' → '{attach_body.name}'")
 
     # ----- 设置位姿变换（欧拉角 → 四元数）-----
     # 使用 scipy 进行旋转合成：先单位旋转，再应用指定欧拉角
@@ -353,7 +353,7 @@ def get_combined_spec(
     q_xyzw = rotation.as_quat()
     # 格式转换：scipy [x,y,z,w] → MuJoCo [w,x,y,z]
     attach_frame.quat = [q_xyzw[3], q_xyzw[0], q_xyzw[1], q_xyzw[2]]
-    print(f"[SpecBuilder] 姿态设定完成: Euler={rot_xyz_deg} deg")
+    # print(f"[SpecBuilder] 姿态设定完成: Euler={rot_xyz_deg} deg")
 
     # ----- 应用物理参数（可选）-----
     if physics is not None:
@@ -395,11 +395,11 @@ def load_combined_model(
         physics=physics,
         tactile_backend=tactile_backend,
     )
-    print("[SpecBuilder] 正在编译模型...")
+    # print("[SpecBuilder] 正在编译模型...")
     model = spec.compile()
     reader.bind(model)
     data = mujoco.MjData(model)
-    print(f"[SpecBuilder] 编译完成。nv={model.nv}, nu={model.nu}")
+    # print(f"[SpecBuilder] 编译完成。nv={model.nv}, nu={model.nu}")
     return model, data, reader  # ← 返回 reader
 
 
