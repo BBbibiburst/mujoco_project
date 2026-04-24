@@ -41,7 +41,7 @@ def render_tactile_heatmap(tactile_dict: dict, sub_h: int = 120, sub_w: int = 16
     """
     from src.sensors.tactile_sensor import FINGER_PHALANX_ORDER
     
-    # ✅ FIX: 显式指定手指顺序，与 pick_place_env.py 保持一致
+    # 显式指定手指顺序，与 pick_place_env.py 保持一致
     finger_keys = ["finger_0", "finger_1", "finger_2", "finger_3", "thumb"]
     phalanx_levels = ["top", "middle", "bottom"]  # 显示顺序：指尖在上，指根在下
     

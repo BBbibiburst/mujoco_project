@@ -100,8 +100,8 @@ class RobotConfig:
     ik_gains: Optional[PDGains] = None    # IK 控制器增益，None 时使用默认
 
     # 初始构型（弧度）
-    init_arm_qpos: Optional[np.ndarray] = None   # None 时使用模型默认值
-    init_hand_qpos: Optional[np.ndarray] = None  # None 时使用模型默认值
+    init_arm_qpos: Optional[np.ndarray] = None   # None 时使用模型 qpos0 默认值
+    init_hand_qpos: Optional[np.ndarray] = None  # None 时使用模型 qpos0 默认值
 
     @property
     def n_sim_steps_per_control(self) -> int:
@@ -304,8 +304,8 @@ class RobotArmEnvBase(ABC):
         # 前向推算（更新 xpos, site_xpos 等）
         mujoco.mj_forward(self.model, self.data)
 
-        # 重置控制器状态
-        self.controller.reset_targets(self.data)
+        # ---- 重建控制器，彻底消除上一回合状态残留 ----
+        self._rebuild_controller()
 
         # 任务特定重置
         self._reset_scene()
@@ -321,6 +321,30 @@ class RobotArmEnvBase(ABC):
         obs = self._get_obs()
         info = self._get_info()
         return obs, info
+    
+    def _rebuild_controller(self) -> None:
+        """重新初始化控制器（用于 reset 时彻底重置状态）."""
+        ctrl_type = self.cfg.controller_type
+
+        if ctrl_type == "osc":
+            gains = self.cfg.osc_gains if self.cfg.osc_gains is not None else OSCGains()
+            self.controller = OSC_PositionController(
+                base=self.hw,
+                model=self.model,
+                gains=gains,
+            )
+        elif ctrl_type == "ik":
+            gains = self.cfg.ik_gains if self.cfg.ik_gains is not None else PDGains()
+            self.controller = IK_PositionController(
+                base=self.hw,
+                model=self.model,
+                gains=gains,
+            )
+        else:
+            raise ValueError(
+                f"Unknown controller_type: '{ctrl_type}'. "
+                f"Expected 'osc' or 'ik'."
+            )
 
     def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict]:
         """
@@ -426,31 +450,11 @@ class RobotArmEnvBase(ABC):
         reader.bind(self.model)
         self.reader = reader
 
-        # 5. 初始化控制器（根据 controller_type 选择）
+        # 5. 初始化 HandArmController（底层运动学/动力学接口，不存状态，无需重建）
         self.hw = HandArmController(self.model)
-        ctrl_type = self.cfg.controller_type
 
-        if ctrl_type == "osc":
-            gains = self.cfg.osc_gains if self.cfg.osc_gains is not None else OSCGains()
-            self.controller = OSC_PositionController(
-                base=self.hw,
-                model=self.model,
-                gains=gains,
-            )
-            print(f"[{self.__class__.__name__}] 使用 OSC 控制器")
-        elif ctrl_type == "ik":
-            gains = self.cfg.ik_gains if self.cfg.ik_gains is not None else PDGains()
-            self.controller = IK_PositionController(
-                base=self.hw,
-                model=self.model,
-                gains=gains,
-            )
-            print(f"[{self.__class__.__name__}] 使用 IK 控制器")
-        else:
-            raise ValueError(
-                f"Unknown controller_type: '{ctrl_type}'. "
-                f"Expected 'osc' or 'ik'."
-            )
+        # 6. 初始化控制器
+        self._rebuild_controller()
 
         print(
             f"[{self.__class__.__name__}] 初始化完成。"
@@ -458,11 +462,28 @@ class RobotArmEnvBase(ABC):
         )
 
     def _reset_robot_pose(self) -> None:
-        """将机器人重置到初始构型."""
+        """
+        将机器人重置到初始构型.
+        """
+        arm_ids  = self.controller.arm_qpos_ids
+        hand_ids = self.controller.hand_qpos_ids
+
+        # --- 机械臂 ---
         if self.cfg.init_arm_qpos is not None:
-            self.data.qpos[self.controller.arm_qpos_ids] = self.cfg.init_arm_qpos
+            self.data.qpos[arm_ids] = self.cfg.init_arm_qpos
+        else:
+            # 回退到模型默认构型（XML 中 <key> 或 <default> 定义的 qpos0）
+            self.data.qpos[arm_ids] = self.model.qpos0[arm_ids]
+
+        # --- 灵巧手 ---
         if self.cfg.init_hand_qpos is not None:
-            self.data.qpos[self.controller.hand_qpos_ids] = self.cfg.init_hand_qpos
+            self.data.qpos[hand_ids] = self.cfg.init_hand_qpos
+        else:
+            self.data.qpos[hand_ids] = self.model.qpos0[hand_ids]
+
+        # --- 速度清零（防止残留速度导致初始抖动）---
+        self.data.qvel[arm_ids]  = 0.0
+        self.data.qvel[hand_ids] = 0.0
 
     def _apply_action(self, action: np.ndarray) -> None:
         """
