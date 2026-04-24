@@ -18,3 +18,5 @@ MUJOCO_LOG.TXT
 test/
 
 next_step.md
+
+rl_models/

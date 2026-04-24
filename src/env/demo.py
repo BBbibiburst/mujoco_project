@@ -1,5 +1,5 @@
 """
-抓取放置环境运行演示（视觉-触觉-本体感觉版本）.
+抓取放置环境运行演示（视觉-触觉-本体感觉版本，适配扁平化观测空间）.
 
 运行方式：
     # 从项目根目录执行
@@ -28,61 +28,64 @@ from src.env.pick_place_env import PickPlaceEnv, RobotConfig, PickPlaceConfig
 
 # ====================== 可视化工具 ======================
 
-def render_tactile_heatmap(tactile_dict: dict, sub_h: int = 120, sub_w: int = 160) -> np.ndarray:
+def render_tactile_heatmap(obs: dict, sub_h: int = 200, sub_w: int = 260) -> np.ndarray:
     """
-    将分组触觉图像渲染为热力图网格（与 grasp_task_env.py 一致）.
-    
+    将扁平化触觉图像渲染为热力图网格。
+
+    从 obs 字典中读取 tactile_bottom / tactile_middle / tactile_top，
+    按手指×指节层级拼接为可视化热力图。
+
     Args:
-        tactile_dict: {"bottom": (5,10,7), "middle": (5,8,5), "top": (5,6,5)}
+        obs: 观测字典，包含 tactile_bottom/middle/top 键
         sub_h, sub_w: 每块皮肤的显示尺寸
-    
+
     Returns:
         np.ndarray: 拼接后的热力图 (3*sub_h, 5*sub_w, 3)
     """
     from src.sensors.tactile_sensor import FINGER_PHALANX_ORDER
-    
+
     # 显式指定手指顺序，与 pick_place_env.py 保持一致
     finger_keys = ["finger_0", "finger_1", "finger_2", "finger_3", "thumb"]
     phalanx_levels = ["top", "middle", "bottom"]  # 显示顺序：指尖在上，指根在下
-    
-    # 建立 (name -> image) 映射
-    name_to_img = {}
-    for level, imgs in tactile_dict.items():
-        for idx, finger in enumerate(finger_keys):
-            phalanx_name = FINGER_PHALANX_ORDER[finger][
-                {"top": 2, "middle": 1, "bottom": 0}[level]
-            ]
-            name_to_img[phalanx_name] = imgs[idx]
-    
+
+    # 建立 (level, finger_idx) -> image 映射
+    level_to_key = {"top": "tactile_top", "middle": "tactile_middle", "bottom": "tactile_bottom"}
+
     # 按网格生成热力图
     grid_rows = []
     for level in phalanx_levels:
+        tac_key = level_to_key[level]
+        if tac_key not in obs:
+            continue
+        imgs = obs[tac_key]  # (5, H, W)
+
         row_frames = []
-        for finger in finger_keys:
-            phalanx_name = FINGER_PHALANX_ORDER[finger][
-                {"top": 2, "middle": 1, "bottom": 0}[level]
-            ]
-            img = name_to_img.get(phalanx_name, np.zeros((7, 10)))
-            
+        for finger_idx, finger in enumerate(finger_keys):
+            # 获取对应指节的图像
+            img = imgs[finger_idx]  # (H, W)
+
             # 增强对比度
             enhanced = np.clip(img.astype(np.float32) * 5.0, 0, 255).astype(np.uint8)
             resized = cv2.resize(enhanced, (sub_w, sub_h), interpolation=cv2.INTER_NEAREST)
             heatmap = cv2.applyColorMap(resized, cv2.COLORMAP_JET)
-            
+
             # 标题文字
+            phalanx_name = FINGER_PHALANX_ORDER[finger][
+                {"top": 2, "middle": 1, "bottom": 0}[level]
+            ]
             parts = phalanx_name.split('_')
             if parts[0] == "thumb":
                 short_name = f"T_{parts[1][:3].capitalize()}"
             else:
                 short_name = f"F{parts[1]}_{parts[2][:3].capitalize()}"
-            
+
             cv2.rectangle(heatmap, (0, 0), (sub_w, 25), (0, 0, 0), -1)
             cv2.putText(heatmap, short_name, (5, 18),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
             row_frames.append(heatmap)
-        
+
         grid_rows.append(np.hstack(row_frames))
-    
+
     return np.vstack(grid_rows)
 
 
@@ -115,18 +118,19 @@ def demo_random_policy(n_episodes: int = 3, render: bool = True,
         obs, info = env.reset(seed=42)
         print(f"\n[Episode 1] 已重置。")
         print(f"  obs keys: {list(obs.keys())}")
-        
+
         # 安全访问各观测 key
         if 'camera_rgb' in obs:
             print(f"  camera_rgb shape: {obs['camera_rgb'].shape}")
-        if 'tactile' in obs:
-            if 'bottom' in obs['tactile']:
-                print(f"  tactile bottom shape: {obs['tactile']['bottom'].shape}")
-            else:
-                print(f"  tactile keys: {list(obs['tactile'].keys())}")
+        if 'tactile_bottom' in obs:
+            print(f"  tactile_bottom shape: {obs['tactile_bottom'].shape}")
+        if 'tactile_middle' in obs:
+            print(f"  tactile_middle shape: {obs['tactile_middle'].shape}")
+        if 'tactile_top' in obs:
+            print(f"  tactile_top shape: {obs['tactile_top'].shape}")
         if 'proprioception' in obs:
             print(f"  proprioception shape: {obs['proprioception'].shape}")
-        
+
         print(f"  action_dim: {env.action_space.shape[0]}")
 
         with mujoco.viewer.launch_passive(env.model, env.data) as viewer:
@@ -141,13 +145,17 @@ def demo_random_policy(n_episodes: int = 3, render: bool = True,
                 step += 1
 
                 # 显示触觉热力图
-                tactile_heatmap = render_tactile_heatmap(obs['tactile'])
+                tactile_heatmap = render_tactile_heatmap(obs)
+                cv2.namedWindow("Tactile Heatmap (Top / Mid / Bot)", cv2.WINDOW_NORMAL)
                 cv2.imshow("Tactile Heatmap (Top / Mid / Bot)", tactile_heatmap)
+                cv2.resizeWindow("Tactile Heatmap (Top / Mid / Bot)", 1300, 650)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
 
                 # 可选：显示相机图像
+                cv2.namedWindow("Camera", cv2.WINDOW_NORMAL)
                 cv2.imshow("Camera", cv2.cvtColor(obs['camera_rgb'], cv2.COLOR_RGB2BGR))
+                cv2.resizeWindow("Camera", 640, 480)
 
                 viewer.sync()
 
@@ -233,7 +241,7 @@ def demo_scripted_policy(render: bool = True,
         pos, _ = env.get_ee_pose()
         return pos
 
-    # ✅ FIX: viewer 作为参数传入 move_to，避免闭包隐式依赖
+    # viewer 作为参数传入 move_to，避免闭包隐式依赖
     def move_to(target_pos, hand_target, viewer, tol=0.03, max_steps=100):
         """控制末端移动到目标位置."""
         for _ in range(max_steps):
@@ -345,9 +353,13 @@ def demo_verify_observation_space():
     env._verify_tactile_shapes()
 
     # 验证相机图像可视化
+    cv2.namedWindow("Camera RGB", cv2.WINDOW_NORMAL)
     cv2.imshow("Camera RGB", cv2.cvtColor(obs['camera_rgb'], cv2.COLOR_RGB2BGR))
-    tactile_heatmap = render_tactile_heatmap(obs['tactile'])
+    cv2.resizeWindow("Camera RGB", 640, 480)
+    tactile_heatmap = render_tactile_heatmap(obs)
+    cv2.namedWindow("Tactile Heatmap", cv2.WINDOW_NORMAL)
     cv2.imshow("Tactile Heatmap", tactile_heatmap)
+    cv2.resizeWindow("Tactile Heatmap", 1300, 650)
     print("\n按任意键关闭窗口...")
     cv2.waitKey(0)
     cv2.destroyAllWindows()

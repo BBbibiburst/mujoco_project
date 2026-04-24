@@ -121,7 +121,7 @@ for finger, phalanges in FINGER_PHALANX_ORDER.items():
 
 class PickPlaceEnv(RobotArmEnvBase):
     """
-    抓取放置任务强化学习环境（视觉-触觉-本体感觉版本，SB3 兼容扁平化观测）.
+    抓取放置任务强化学习环境.
     """
 
     def __init__(
