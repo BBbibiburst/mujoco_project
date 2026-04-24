@@ -1,5 +1,6 @@
 """
-PPO 训练脚本 — 扁平化观测版本（解耦观测空间 shape）
+PPO 训练脚本 — 适配扁平化 Dict 观测空间（SB3 MultiInputPolicy）
+修复: VecTransposeImage 误判触觉数据为图像空间的问题
 """
 
 import sys
@@ -22,220 +23,163 @@ import torch.nn as nn
 from src.env.pick_place_env import PickPlaceEnv, RobotConfig, PickPlaceConfig
 
 
-# ====================== 环境包装器：扁平化观测（动态读取观测空间） ======================
+# ====================== 观测包装器：触觉数据维度扩展（避免被识别为图像） ======================
 
-class FlattenObservationWrapper(gym.ObservationWrapper):
+class TactileShapeWrapper(gym.ObservationWrapper):
     """
-    将 Dict 观测空间扁平化为 Box，适配 SB3 标准策略。
-    
-    从环境 observation_space 动态读取 shape，不硬编码任何维度。
-    支持的结构：
-        {
-            "camera_rgb": (H, W, C) uint8,
-            "tactile": Dict { level: (N_fingers, rows, cols) uint8, ... },
-            "proprioception": (D,) float32,
-        }
-    
-    输出: (flattened_dim,) float32 — 所有数据归一化后拼接
+    将触觉数据从 (5, H, W) 扩展为 (5, H, W, 1)，避免被 SB3 VecTransposeImage 误判为图像空间。
+
+    SB3 的 is_image_space 对 3D Box 且 shape[-1] 较小时会误判为图像。
+    扩展为 4D 后 len(shape)==4，不会被识别为图像，从而避免强制转置。
     """
-    
-    # 观测 key 的约定（换任务时保持 key 名一致即可）
-    CAM_KEY = "camera_rgb"
-    TACTILE_KEY = "tactile"
-    PROP_KEY = "proprioception"
-    
+
+    TACTILE_KEYS = ["tactile_bottom", "tactile_middle", "tactile_top"]
+
     def __init__(self, env: gym.Env):
         super().__init__(env)
-        
-        obs_space = env.observation_space
-        assert isinstance(obs_space, spaces.Dict), (
-            f"FlattenObservationWrapper 需要 Dict 观测空间，"
-            f"实际类型: {type(obs_space)}"
-        )
-        
-        # 动态读取各组件维度
-        self._cam_shape = obs_space[self.CAM_KEY].shape  # (H, W, C)
-        self._cam_dim = int(np.prod(self._cam_shape))
-        
-        self._tac_shapes = {}  # {level: shape}
-        self._tac_dim = 0
-        if self.TACTILE_KEY in obs_space.spaces:
-            tac_space = obs_space[self.TACTILE_KEY]
-            assert isinstance(tac_space, spaces.Dict), (
-                f"tactile 必须是 Dict，实际: {type(tac_space)}"
-            )
-            for level, space in tac_space.spaces.items():
-                self._tac_shapes[level] = space.shape
-                self._tac_dim += int(np.prod(space.shape))
-        
-        self._prop_shape = obs_space[self.PROP_KEY].shape
-        self._prop_dim = int(np.prod(self._prop_shape))
-        
-        self.flattened_dim = self._cam_dim + self._tac_dim + self._prop_dim
-        
-        self.observation_space = spaces.Box(
-            low=-1.0, high=1.0, 
-            shape=(self.flattened_dim,), 
-            dtype=np.float32
-        )
-        
-        self.last_raw_obs = None
-        
-        # 打印维度分解（方便调试）
-        # print(f"[FlattenWrapper] 观测维度: {self.flattened_dim:,}")
-        # print(f"  camera ({self.CAM_KEY}): {self._cam_dim:,} "
-        #       f"({self._cam_dim/self.flattened_dim*100:.1f}%) "
-        #       f"shape={self._cam_shape}")
-        # if self._tac_dim > 0:
-        #     tac_detail = ", ".join(f"{k}={v}" for k, v in self._tac_shapes.items())
-        #     print(f"  tactile ({self.TACTILE_KEY}): {self._tac_dim:,} "
-        #           f"({self._tac_dim/self.flattened_dim*100:.1f}%) "
-        #           f"[{tac_detail}]")
-        # else:
-        #     print(f"  tactile: 0 (禁用)")
-        # print(f"  proprioception ({self.PROP_KEY}): {self._prop_dim} "
-        #       f"({self._prop_dim/self.flattened_dim*100:.1f}%) "
-        #       f"shape={self._prop_shape}")
 
-    def observation(self, obs: dict) -> np.ndarray:
-        self.last_raw_obs = obs
-        
-        parts = []
-        
-        # 1. 相机图像：uint8 [0,255] → float32 [0,1]
-        cam = obs[self.CAM_KEY].astype(np.float32).flatten() / 255.0
-        parts.append(cam)
-        
-        # 2. 触觉：uint8 [0,255] → float32 [0,1]
-        if self.TACTILE_KEY in obs and self._tac_dim > 0:
-            tac_flat = []
-            for level in self._tac_shapes.keys():
-                tac_flat.append(
-                    obs[self.TACTILE_KEY][level].astype(np.float32).flatten() / 255.0
+        assert isinstance(env.observation_space, spaces.Dict), (
+            f"TactileShapeWrapper 需要 Dict 观测空间，实际: {type(env.observation_space)}"
+        )
+
+        # 复制并修改观测空间：触觉键从 (5, H, W) -> (5, H, W, 1)
+        new_spaces = dict(env.observation_space.spaces)
+        for key in self.TACTILE_KEYS:
+            if key in new_spaces:
+                old_shape = new_spaces[key].shape  # e.g. (5, 10, 7)
+                new_spaces[key] = spaces.Box(
+                    low=0, high=255,
+                    shape=(*old_shape, 1),  # e.g. (5, 10, 7, 1)
+                    dtype=np.uint8
                 )
-            parts.append(np.concatenate(tac_flat))
-        
-        # 3. 本体感觉：已经是 float32，做简单归一化
-        prop = obs[self.PROP_KEY].astype(np.float32)
-        prop = np.clip(prop / np.pi, -1.0, 1.0)
-        parts.append(prop)
-        
-        return np.concatenate(parts)
+
+        self.observation_space = spaces.Dict(new_spaces)
+
+    def observation(self, obs: dict) -> dict:
+        new_obs = dict(obs)
+        for key in self.TACTILE_KEYS:
+            if key in new_obs:
+                # (5, H, W) -> (5, H, W, 1)
+                new_obs[key] = np.expand_dims(new_obs[key], axis=-1)
+        return new_obs
 
 
-# ====================== 可选：CNN 特征提取器（动态 reshape） ======================
+# ====================== CNN 特征提取器（适配 4D 触觉数据） ======================
 
-class CustomCNN(BaseFeaturesExtractor):
+class MultiModalFeatureExtractor(BaseFeaturesExtractor):
     """
-    当观测包含图像时，用 CNN 提取特征。
-    从 FlattenObservationWrapper 动态读取 shape，不硬编码分辨率。
-    """
-    
-    def __init__(self, observation_space: spaces.Box, features_dim: int = 256):
-        super().__init__(observation_space, features_dim)
-        
-        # 注意：CustomCNN 必须与 FlattenObservationWrapper 配合使用
-        # 这里假设 wrapper 已经初始化，且 observation_space 是扁平化后的 Box
-        
-        # 需要从环境获取原始 shape 信息，这里通过全局约定或额外参数传递
-        # 实际使用时，推荐在 make_env 中把 shape 信息存到 env.metadata 或 wrapper 属性
-        # 为简化，这里保留从环境创建时的显式参数方式
-        
-        raise NotImplementedError(
-            "CustomCNN 需要配合 FlattenObservationWrapper 使用，"
-            "请通过 policy_kwargs 传入 cam_shape 和 tac_shapes，"
-            "或改用下面的 DynamicCNNFeatureExtractor。"
-        )
+    多模态 CNN 特征提取器：适配扁平化 Dict 观测空间（无嵌套 Dict）。
 
+    处理键：
+        - camera_rgb:      (C, H, W)   已被 VecTransposeImage 转置为 channel-first
+        - tactile_bottom:  (5, H, W, 1) 4D，避免被识别为图像
+        - tactile_middle:  (5, H, W, 1)
+        - tactile_top:     (5, H, W, 1)
+        - proprioception:  (13,)
 
-class DynamicCNNFeatureExtractor(BaseFeaturesExtractor):
-    """
-    动态 CNN 特征提取器：接收原始 Dict 观测，内部处理各模态。
-    
-    这个提取器直接包装在环境之前（不经过 FlattenObservationWrapper），
-    因此可以直接访问原始 Dict 观测空间的 shape 信息。
-    
     使用方式：
         policy_kwargs = dict(
-            features_extractor_class=DynamicCNNFeatureExtractor,
-            features_extractor_kwargs=dict(features_dim=256),
+            features_extractor_class=MultiModalFeatureExtractor,
+            features_extractor_kwargs=dict(features_dim=512),
         )
     """
-    
-    def __init__(self, observation_space: spaces.Dict, features_dim: int = 256):
+
+    TACTILE_KEYS = ["tactile_bottom", "tactile_middle", "tactile_top"]
+
+    def __init__(self, observation_space: spaces.Dict, features_dim: int = 512):
         super().__init__(observation_space, features_dim)
-        
-        # 从 Dict 空间动态读取
+
+        # ---- 1. 相机图像处理 ----
         cam_space = observation_space["camera_rgb"]
-        self.cam_shape = cam_space.shape  # (H, W, C)
-        H, W, C = self.cam_shape
-        
-        # CNN 处理相机图像: (C, H, W)
+        # 注意：经过 VecTransposeImage 后，shape 已经是 (C, H, W)
+        C, H, W = cam_space.shape
+
         self.camera_cnn = nn.Sequential(
-            nn.Conv2d(C, 32, kernel_size=8, stride=4),
+            nn.Conv2d(C, 32, kernel_size=8, stride=4),   # -> (32, ~58, ~78)
             nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=4, stride=2),
+            nn.Conv2d(32, 64, kernel_size=4, stride=2),  # -> (64, ~28, ~38)
             nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, stride=1),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1),  # -> (64, ~26, ~36)
             nn.ReLU(),
             nn.Flatten(),
         )
-        
-        # 计算 CNN 输出维度
+
         with torch.no_grad():
             sample = torch.zeros(1, C, H, W)
-            cam_features_dim = self.camera_cnn(sample).shape[1]
-        
-        # 触觉 MLP
-        tac_dim = 0
-        if "tactile" in observation_space.spaces:
-            tac_space = observation_space["tactile"]
-            for level, space in tac_space.spaces.items():
-                tac_dim += int(np.prod(space.shape))
-        
+            cam_flat_dim = self.camera_cnn(sample).shape[1]
+
+        total_concat_size = cam_flat_dim
+
+        # ---- 2. 触觉图像处理 ----
+        self.tactile_cnns = nn.ModuleDict()
+        for key in self.TACTILE_KEYS:
+            if key not in observation_space.spaces:
+                continue
+
+            tac_shape = observation_space[key].shape  # (5, rows, cols, 1)
+            n_fingers, rows, cols, _ = tac_shape
+
+            # 输入: (B, 5, rows, cols) —— squeeze 掉最后一维后
+            tac_cnn = nn.Sequential(
+                nn.Conv2d(n_fingers, 16, kernel_size=3, padding=1),  # -> (16, rows, cols)
+                nn.ReLU(),
+                nn.Conv2d(16, 32, kernel_size=3, padding=1),         # -> (32, rows, cols)
+                nn.ReLU(),
+                nn.Flatten(),
+            )
+
+            with torch.no_grad():
+                sample_tac = torch.zeros(1, n_fingers, rows, cols)
+                tac_flat_dim = tac_cnn(sample_tac).shape[1]
+
+            self.tactile_cnns[key] = tac_cnn
+            total_concat_size += tac_flat_dim
+
+        # ---- 3. 本体感觉处理 ----
         prop_dim = int(np.prod(observation_space["proprioception"].shape))
-        
-        self.tac_prop_mlp = nn.Sequential(
-            nn.Linear(tac_dim + prop_dim, 128),
-            nn.ReLU(),
-            nn.Linear(128, 64),
+        self.proprio_mlp = nn.Sequential(
+            nn.Linear(prop_dim, 64),
             nn.ReLU(),
         )
-        
-        # 融合层
+        total_concat_size += 64
+
+        # ---- 4. 融合层 ----
         self.fusion = nn.Sequential(
-            nn.Linear(cam_features_dim + 64, features_dim),
+            nn.Linear(total_concat_size, features_dim),
             nn.ReLU(),
         )
 
+        # 保存维度信息（调试用）
+        self._cam_flat_dim = cam_flat_dim
+        self._total_concat_size = total_concat_size
+        self._features_dim = features_dim
+
     def forward(self, observations: dict) -> torch.Tensor:
-        # 处理相机: (B, H, W, C) -> (B, C, H, W)
+        encoded = []
+
+        # --- 相机图像 ---
+        # VecTransposeImage 已将 (B, H, W, C) -> (B, C, H, W)
         cam = observations["camera_rgb"].float() / 255.0
-        cam = cam.permute(0, 3, 1, 2)  # NHWC -> NCHW
         cam_features = self.camera_cnn(cam)
-        
-        # 处理触觉
-        tac_parts = []
-        if "tactile" in observations:
-            for level in sorted(observations["tactile"].keys()):
-                tac_parts.append(
-                    observations["tactile"][level].float().flatten(start_dim=1) / 255.0
-                )
-        
-        # 处理本体感觉
+        encoded.append(cam_features)
+
+        # --- 触觉图像 ---
+        # 输入: (B, 5, rows, cols, 1) -> squeeze -> (B, 5, rows, cols)
+        for key in self.TACTILE_KEYS:
+            if key in observations:
+                tac = observations[key].float() / 255.0   # (B, 5, rows, cols, 1)
+                tac = tac.squeeze(-1)                      # (B, 5, rows, cols)
+                tac_features = self.tactile_cnns[key](tac)
+                encoded.append(tac_features)
+
+        # --- 本体感觉 ---
         prop = observations["proprioception"].float()
         prop = torch.clamp(prop / np.pi, -1.0, 1.0)
-        
-        # 拼接触觉+本体感觉
-        if tac_parts:
-            tac_prop = torch.cat(tac_parts + [prop], dim=1)
-        else:
-            tac_prop = prop
-        
-        tac_prop_features = self.tac_prop_mlp(tac_prop)
-        
-        # 融合
-        combined = torch.cat([cam_features, tac_prop_features], dim=1)
+        prop_features = self.proprio_mlp(prop)
+        encoded.append(prop_features)
+
+        # --- 融合 ---
+        combined = torch.cat(encoded, dim=1)
         return self.fusion(combined)
 
 
@@ -256,7 +200,7 @@ def make_env(rank: int = 0, seed: int = 0):
             init_arm_qpos=np.array([0.0, 0.5, 0.0, 1.5, 0.0, -1.0, 0.0]),
             init_hand_qpos=np.zeros(6),
         )
-        
+
         task_cfg = PickPlaceConfig(
             r_step_penalty=-0.005,
             r_place_bonus=100.0,
@@ -264,13 +208,15 @@ def make_env(rank: int = 0, seed: int = 0):
             reach_threshold=0.05,
             grasp_threshold=0.04,
         )
-        
+
         env = PickPlaceEnv(robot_cfg, task_cfg)
-        
-        # 包装器顺序：Monitor 最外层，然后是 Flatten
-        env = FlattenObservationWrapper(env)
+
+        # 包装器顺序（从内到外）:
+        # 1. TactileShapeWrapper: 扩展触觉维度，避免 SB3 图像转置误判
+        # 2. Monitor: 记录 episode 统计（最外层）
+        env = TactileShapeWrapper(env)
         env = Monitor(env)
-        
+
         return env
     return _init
 
@@ -282,29 +228,32 @@ def main():
     TOTAL_TIMESTEPS = 5_000_000
     SAVE_DIR = PROJECT_ROOT / "rl_models" / "ppo_pickplace"
     SAVE_DIR.mkdir(parents=True, exist_ok=True)
-    
+
     print(f"=== PPO 训练启动 ===")
     print(f"  并行环境数: {N_ENVS}")
     print(f"  总训练步数: {TOTAL_TIMESTEPS:,}")
     print(f"  模型保存路径: {SAVE_DIR}")
-    
+
     if N_ENVS == 1:
         vec_env = DummyVecEnv([make_env(0, seed=42)])
     else:
         vec_env = SubprocVecEnv([make_env(i, seed=42+i) for i in range(N_ENVS)])
-    
+
     checkpoint_callback = CheckpointCallback(
         save_freq=100_000,
         save_path=str(SAVE_DIR / "checkpoints"),
         name_prefix="ppo_pickplace",
     )
-    
+
     policy_kwargs = dict(
+        features_extractor_class=MultiModalFeatureExtractor,
+        features_extractor_kwargs=dict(features_dim=512),
         net_arch=dict(pi=[256, 256], vf=[256, 256]),
     )
-    
+
+    # 使用 MultiInputPolicy 处理 Dict 观测空间
     model = PPO(
-        "MlpPolicy",
+        "MultiInputPolicy",
         vec_env,
         learning_rate=3e-4,
         n_steps=2048,
@@ -319,18 +268,18 @@ def main():
         policy_kwargs=policy_kwargs,
         device="auto",
     )
-    
+
     print("\n=== 开始训练 ===")
     model.learn(
         total_timesteps=TOTAL_TIMESTEPS,
         callback=checkpoint_callback,
         progress_bar=True,
     )
-    
+
     final_path = SAVE_DIR / "ppo_pickplace_final.zip"
     model.save(final_path)
     print(f"\n✓ 训练完成！模型已保存到: {final_path}")
-    
+
     vec_env.close()
 
 

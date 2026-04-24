@@ -1,17 +1,15 @@
 """
-抓取放置任务环境（视觉-触觉-本体感觉版本，指节分组）.
+抓取放置任务环境（视觉-触觉-本体感觉版本，触觉已扁平化）.
 
 任务描述：
     机械臂+灵巧手从桌面上抓取一个立方体，将其搬运到目标位置并放置。
 
-观测空间（Dict）：
+观测空间（扁平化 Dict，SB3 兼容）：
     - camera_rgb:      (240, 320, 3)  俯视相机 RGB 图像
-    - tactile:         Dict {
-        "bottom": (5, 10, 7),   # 5手指 × 10行 × 7列  底部指节
-        "middle": (5, 8, 5),    # 5手指 × 8行 × 5列   中部指节
-        "top":    (5, 6, 5),    # 5手指 × 6行 × 5列   顶部指节
-      }
-    - proprioception:  (13,)      机械臂7DOF + 手6DOF 关节角度
+    - tactile_bottom:  (5, 10, 7)     5手指 × 10行 × 7列  底部指节
+    - tactile_middle:  (5, 8, 5)      5手指 × 8行 × 5列   中部指节
+    - tactile_top:     (5, 6, 5)      5手指 × 6行 × 5列   顶部指节
+    - proprioception:  (13,)          机械臂7DOF + 手6DOF 关节角度
 
 动作空间（12维，OSC 6D位姿控制）：
     - 末端xyz位移(3) + 末端rpy旋转(3) + 手部6指增量(6)
@@ -101,13 +99,10 @@ class PickPlaceConfig:
 
 # ====================== 触觉传感器配置 ======================
 
-# ✅ FIX: 显式指定手指顺序，不依赖字典插入顺序
+# 显式指定手指顺序，不依赖字典插入顺序
 _FINGER_NAMES = ["finger_0", "finger_1", "finger_2", "finger_3", "thumb"]
 
-# ✅ FIX: 统一为 (rows, cols) 即 (H, W) 格式，与 tactile_sensor.py 一致
-# 底部指节 (bottom): 10行 × 7列 = 70 taxels
-# 中部指节 (middle): 8行 × 5列 = 40 taxels  
-# 顶部指节 (top):    6行 × 5列 = 30 taxels
+# 统一为 (rows, cols) 即 (H, W) 格式，与 tactile_sensor.py 一致
 _TACTILE_LEVELS = {
     "bottom": (10, 7),   # 10 rows, 7 cols
     "middle": (8, 5),    # 8 rows, 5 cols
@@ -126,7 +121,7 @@ for finger, phalanges in FINGER_PHALANX_ORDER.items():
 
 class PickPlaceEnv(RobotArmEnvBase):
     """
-    抓取放置任务强化学习环境（视觉-触觉-本体感觉版本）.
+    抓取放置任务强化学习环境（视觉-触觉-本体感觉版本，SB3 兼容扁平化观测）.
     """
 
     def __init__(
@@ -156,14 +151,13 @@ class PickPlaceEnv(RobotArmEnvBase):
     @property
     def observation_space(self):
         """
-        观测空间：Dict {
-            camera_rgb: (240, 320, 3),
-            tactile: Dict {
-                bottom: (5, 10, 7),
-                middle: (5, 8, 5),
-                top: (5, 6, 5),
-            },
-            proprioception: (13,),
+        观测空间：扁平化 Dict（SB3 MultiInputPolicy 兼容，无嵌套 Dict）
+        {
+            camera_rgb:      (240, 320, 3),
+            tactile_bottom:  (5, 10, 7),
+            tactile_middle:  (5, 8, 5),
+            tactile_top:     (5, 6, 5),
+            proprioception:  (13,),
         }
         """
         img_h, img_w = 240, 320
@@ -172,17 +166,15 @@ class PickPlaceEnv(RobotArmEnvBase):
             "camera_rgb": spaces.Box(
                 low=0, high=255, shape=(img_h, img_w, 3), dtype=np.uint8
             ),
-            "tactile": spaces.Dict({
-                "bottom": spaces.Box(
-                    low=0, high=255, shape=(5, 10, 7), dtype=np.uint8
-                ),
-                "middle": spaces.Box(
-                    low=0, high=255, shape=(5, 8, 5), dtype=np.uint8
-                ),
-                "top": spaces.Box(
-                    low=0, high=255, shape=(5, 6, 5), dtype=np.uint8
-                ),
-            }),
+            "tactile_bottom": spaces.Box(
+                low=0, high=255, shape=(5, 10, 7), dtype=np.uint8
+            ),
+            "tactile_middle": spaces.Box(
+                low=0, high=255, shape=(5, 8, 5), dtype=np.uint8
+            ),
+            "tactile_top": spaces.Box(
+                low=0, high=255, shape=(5, 6, 5), dtype=np.uint8
+            ),
             "proprioception": spaces.Box(
                 low=-np.inf, high=np.inf, shape=(13,), dtype=np.float32
             ),
@@ -245,13 +237,13 @@ class PickPlaceEnv(RobotArmEnvBase):
 
     def _get_obs(self) -> Dict[str, Any]:
         """
-        构造观测：相机图像 + 触觉图像（指节分组） + 本体感觉.
+        构造观测：相机图像 + 触觉图像（扁平化键名） + 本体感觉.
         """
         # --- 1. 相机图像 ---
         camera_rgb = self._render_camera()
 
-        # --- 2. 触觉图像（按指节类型分组） ---
-        tactile = self._get_tactile_grouped()
+        # --- 2. 触觉图像（按指节类型分组，扁平化输出） ---
+        tactile_grouped = self._get_tactile_grouped()
 
         # --- 3. 本体感觉 ---
         arm_q = self.get_arm_qpos()      # (7,)
@@ -260,7 +252,9 @@ class PickPlaceEnv(RobotArmEnvBase):
 
         return {
             "camera_rgb": camera_rgb,
-            "tactile": tactile,
+            "tactile_bottom": tactile_grouped["bottom"],
+            "tactile_middle": tactile_grouped["middle"],
+            "tactile_top": tactile_grouped["top"],
             "proprioception": proprioception,
         }
 
@@ -394,12 +388,12 @@ class PickPlaceEnv(RobotArmEnvBase):
                     # 使用 FINGER_PHALANX_ORDER 获取正确的指节名称
                     # 索引: 0=bottom, 1=middle, 2=top
                     phalanx_name = FINGER_PHALANX_ORDER[finger][level_idx]
-                    
+
                     if phalanx_name in tactile_imgs:
                         img = tactile_imgs[phalanx_name]
                         expected_h, expected_w = _TACTILE_LEVELS[level]
-                        
-                        # ✅ FIX: 统一按 (rows, cols) 即 (H, W) 处理
+
+                        # 统一按 (rows, cols) 即 (H, W) 处理
                         # 如果传感器返回的是 (W, H) 即 (cols, rows)，需要转置
                         if img.shape == (expected_w, expected_h):
                             img = img.T
@@ -415,7 +409,7 @@ class PickPlaceEnv(RobotArmEnvBase):
                         level_images.append(
                             np.zeros((expected_h, expected_w), dtype=np.uint8)
                         )
-                
+
                 result[level] = np.stack(level_images, axis=0)  # (5, H, W)
 
             return result
@@ -458,7 +452,7 @@ class PickPlaceEnv(RobotArmEnvBase):
 
         except Exception:
             return np.zeros(6)
-        
+
     def _verify_tactile_shapes(self):
         """
         调试用：验证触觉传感器实际分辨率.
@@ -504,19 +498,19 @@ class PickPlaceEnv(RobotArmEnvBase):
         if self._phase == TaskPhase.REACH:
             approach_point = obj_pos + np.array([0, 0, tc.approach_height])
             if np.linalg.norm(ee_pos - approach_point) < tc.reach_threshold:
-                print(f"  [Phase] REACH → GRASP")
+                print(f"  [Phase] REACH -> GRASP")
                 self._phase = TaskPhase.GRASP
 
         elif self._phase == TaskPhase.GRASP:
             if self._is_object_grasped():
-                print(f"  [Phase] GRASP → TRANSPORT")
+                print(f"  [Phase] GRASP -> TRANSPORT")
                 self._phase = TaskPhase.TRANSPORT
 
         elif self._phase == TaskPhase.TRANSPORT:
             horiz_dist = np.linalg.norm(obj_pos[:2] - self._target_pos[:2])
             if (horiz_dist < tc.transport_threshold and
                     obj_pos[2] > tc.obj_size + 0.05):
-                print(f"  [Phase] TRANSPORT → PLACE")
+                print(f"  [Phase] TRANSPORT -> PLACE")
                 self._phase = TaskPhase.PLACE
 
     def _is_object_grasped(self) -> bool:
@@ -550,7 +544,7 @@ class PickPlaceEnv(RobotArmEnvBase):
         self._obj_body_id = mujoco.mj_name2id(
             self.model, mujoco.mjtObj.mjOBJ_BODY, "target_object"
         )
-        # ✅ FIX: 加断言，防止静默失败
+        # 加断言，防止静默失败
         assert self._obj_body_id >= 0, (
             "target_object body not found in model. "
             "Make sure _build_scene() adds a body named 'target_object'."
