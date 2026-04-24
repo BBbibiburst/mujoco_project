@@ -7,9 +7,9 @@
 观测空间（Dict）：
     - camera_rgb:      (240, 320, 3)  俯视相机 RGB 图像
     - tactile:         Dict {
-        "bottom": (5, 7, 10),   # 5手指 × 7×10  底部指节
-        "middle": (5, 5, 8),    # 5手指 × 5×8   中部指节
-        "top":    (5, 5, 6),    # 5手指 × 5×6   顶部指节
+        "bottom": (5, 10, 7),   # 5手指 × 10行 × 7列  底部指节
+        "middle": (5, 8, 5),    # 5手指 × 8行 × 5列   中部指节
+        "top":    (5, 6, 5),    # 5手指 × 6行 × 5列   顶部指节
       }
     - proprioception:  (13,)      机械臂7DOF + 手6DOF 关节角度
 
@@ -101,19 +101,17 @@ class PickPlaceConfig:
 
 # ====================== 触觉传感器配置 ======================
 
-# 手指顺序（从 FINGER_PHALANX_ORDER 获取）
-_FINGER_NAMES = list(FINGER_PHALANX_ORDER.keys())
-# 预期: ["finger_0", "finger_1", "finger_2", "finger_3", "thumb"]
+# ✅ FIX: 显式指定手指顺序，不依赖字典插入顺序
+_FINGER_NAMES = ["finger_0", "finger_1", "finger_2", "finger_3", "thumb"]
 
-# 指节类型和对应分辨率 (H, W)
-# 从 grasp_task_env.py 的显示逻辑推断：
-#   底部指节 (bottom): 10×7 = 70 taxels
-#   中部指节 (middle): 8×5 = 40 taxels  
-#   顶部指节 (top):    6×5 = 30 taxels
+# ✅ FIX: 统一为 (rows, cols) 即 (H, W) 格式，与 tactile_sensor.py 一致
+# 底部指节 (bottom): 10行 × 7列 = 70 taxels
+# 中部指节 (middle): 8行 × 5列 = 40 taxels  
+# 顶部指节 (top):    6行 × 5列 = 30 taxels
 _TACTILE_LEVELS = {
-    "bottom": (7, 10),   # 底部指节: 10×7
-    "middle": (5, 8),    # 中部指节: 8×5
-    "top":    (5, 6),    # 顶部指节: 6×5
+    "bottom": (10, 7),   # 10 rows, 7 cols
+    "middle": (8, 5),    # 8 rows, 5 cols
+    "top":    (6, 5),    # 6 rows, 5 cols
 }
 
 # 指节名称到类型的映射（用于从 DISPLAY_ORDER 推断）
@@ -161,9 +159,9 @@ class PickPlaceEnv(RobotArmEnvBase):
         观测空间：Dict {
             camera_rgb: (240, 320, 3),
             tactile: Dict {
-                bottom: (5, 7, 10),
-                middle: (5, 5, 8),
-                top: (5, 5, 6),
+                bottom: (5, 10, 7),
+                middle: (5, 8, 5),
+                top: (5, 6, 5),
             },
             proprioception: (13,),
         }
@@ -176,13 +174,13 @@ class PickPlaceEnv(RobotArmEnvBase):
             ),
             "tactile": spaces.Dict({
                 "bottom": spaces.Box(
-                    low=0, high=255, shape=(5, 7, 10), dtype=np.uint8
+                    low=0, high=255, shape=(5, 10, 7), dtype=np.uint8
                 ),
                 "middle": spaces.Box(
-                    low=0, high=255, shape=(5, 5, 8), dtype=np.uint8
+                    low=0, high=255, shape=(5, 8, 5), dtype=np.uint8
                 ),
                 "top": spaces.Box(
-                    low=0, high=255, shape=(5, 5, 6), dtype=np.uint8
+                    low=0, high=255, shape=(5, 6, 5), dtype=np.uint8
                 ),
             }),
             "proprioception": spaces.Box(
@@ -284,12 +282,8 @@ class PickPlaceEnv(RobotArmEnvBase):
         elif self._phase == TaskPhase.GRASP:
             reward += tc.r_reach_scale * (1.0 - np.tanh(5 * dist_ee_obj))
             tac = self._get_tactile_feature_scalar()
-            # ✅ _get_tactile_feature_scalar 已归一化到 [0,1]
-            # 但为保险起见，显式处理两种可能值域
             tac_max = float(tac.max())
-            if tac_max > 1.0:  # 如果是 uint8 值域，先归一化
-                tac_max = tac_max / 255.0
-            if tac_max > 0.1:  # 现在阈值在正确值域
+            if tac_max > 0.1:
                 reward += 1.0 * tac_max
 
         elif self._phase == TaskPhase.TRANSPORT:
@@ -405,7 +399,8 @@ class PickPlaceEnv(RobotArmEnvBase):
                         img = tactile_imgs[phalanx_name]
                         expected_h, expected_w = _TACTILE_LEVELS[level]
                         
-                        # 确保形状为 (H, W)
+                        # ✅ FIX: 统一按 (rows, cols) 即 (H, W) 处理
+                        # 如果传感器返回的是 (W, H) 即 (cols, rows)，需要转置
                         if img.shape == (expected_w, expected_h):
                             img = img.T
                         elif img.shape != (expected_h, expected_w):
@@ -431,9 +426,9 @@ class PickPlaceEnv(RobotArmEnvBase):
     def _empty_tactile_grouped(self) -> Dict[str, np.ndarray]:
         """返回全零的分组触觉图像."""
         return {
-            "bottom": np.zeros((5, 7, 10), dtype=np.uint8),
-            "middle": np.zeros((5, 5, 8), dtype=np.uint8),
-            "top": np.zeros((5, 5, 6), dtype=np.uint8),
+            "bottom": np.zeros((5, 10, 7), dtype=np.uint8),
+            "middle": np.zeros((5, 8, 5), dtype=np.uint8),
+            "top": np.zeros((5, 6, 5), dtype=np.uint8),
         }
 
     def _get_tactile_feature_scalar(self) -> np.ndarray:
@@ -445,7 +440,6 @@ class PickPlaceEnv(RobotArmEnvBase):
             return np.zeros(6)
 
         try:
-            # ✅ 使用 read_raw 而非 read_image，直接获取物理力值（牛顿）
             raw_data = self.reader.read_raw(self.data)
             if not raw_data:
                 return np.zeros(6)
@@ -456,10 +450,8 @@ class PickPlaceEnv(RobotArmEnvBase):
                 vals = []
                 for name in phalanges:
                     if name in raw_data:
-                        # raw_data 是 float32 力值（牛顿），无需 /255
                         vals.append(float(raw_data[name].max()))
                 max_force = max(vals) if vals else 0.0
-                # 归一化到 [0, 1]，使用 FORCE_MAX_NEWTON=5.0
                 feats.append(min(max_force / TactileReader.FORCE_MAX_NEWTON, 1.0))
 
             return np.array(feats, dtype=np.float32)
@@ -490,7 +482,7 @@ class PickPlaceEnv(RobotArmEnvBase):
             else:
                 print(f"  {name}: MISSING")
 
-        print("\n=== 预期分辨率 ===")
+        print("\n=== 预期分辨率 (rows, cols) ===")
         for level, (h, w) in _TACTILE_LEVELS.items():
             print(f"  {level}: ({h}, {w})")
 
@@ -557,6 +549,11 @@ class PickPlaceEnv(RobotArmEnvBase):
         """缓存常用的 MuJoCo ID."""
         self._obj_body_id = mujoco.mj_name2id(
             self.model, mujoco.mjtObj.mjOBJ_BODY, "target_object"
+        )
+        # ✅ FIX: 加断言，防止静默失败
+        assert self._obj_body_id >= 0, (
+            "target_object body not found in model. "
+            "Make sure _build_scene() adds a body named 'target_object'."
         )
 
         jnt_id = mujoco.mj_name2id(

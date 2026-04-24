@@ -205,7 +205,6 @@ def main():
             print("=== [Simulation] 开始运行：青色点=实际位置，红色点=目标位置 ===")
             
             # 运行时状态变量
-            sim_step = 0
             last_hand_update = -cfg_runtime.hand_random_interval
             hand_target = np.zeros(pos_controller.base.HAND_DOF)  # 初始化手部目标
 
@@ -218,8 +217,10 @@ def main():
                 viewer.user_scn.ngeom = 0
 
                 # --- B. 轨迹规划 (圆周运动) ---
-                # 计算当前时间的角度 theta = w * t
-                angle = sim_step * model.opt.timestep * cfg_traj.speed
+                # 【关键修正】必须使用 data.time 获取绝对仿真时间
+                # 原逻辑 sim_step * dt 会导致 angle 随时间二次方增长，速度越来越快
+                current_time = data.time
+                angle = current_time * cfg_traj.speed
                 
                 # 计算目标位置：圆心 + 半径 * (cos(theta), sin(theta), 0)
                 ee_target_pos = cfg_traj.center + np.array([
@@ -228,11 +229,11 @@ def main():
                     cfg_traj.z_offset
                 ])
                 
-                # 固定的末端朝向（四元数）
+                # 固定的末端朝向（四元数 w, x, y, z）
+                # 注：[1, 0, 0, 0] 代表无旋转。若机械臂初始姿态需要特定朝向，请在此调整
                 ee_target_quat = np.array([1.0, 0.0, 0.0, 0.0])
 
                 # --- C. 随机手部动作 ---
-                current_time = data.time
                 if current_time - last_hand_update > cfg_runtime.hand_random_interval:
                     # 在物理限位范围内生成随机手部姿态
                     low, high = pos_controller.hand_range[:, 0], pos_controller.hand_range[:, 1]
@@ -272,7 +273,6 @@ def main():
                 viewer.sync()
 
                 # --- H. 时间管理 (固定步长) ---
-                sim_step += 1
                 time_until_next_step = model.opt.timestep - (time.time() - step_start)
                 if time_until_next_step > 0:
                     time.sleep(time_until_next_step)

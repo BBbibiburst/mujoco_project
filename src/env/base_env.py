@@ -42,6 +42,14 @@ except ImportError:
                 self.dtype = dtype
             def sample(self):
                 return np.random.uniform(self.low, self.high).astype(self.dtype)
+        
+        # ✅ FIX: 补充 Dict 占位类
+        class Dict:
+            def __init__(self, spaces_dict: Dict[str, Any]):
+                self.spaces = spaces_dict
+            
+            def sample(self):
+                return {k: v.sample() for k, v in self.spaces.items()}
 
 from src.robot.robot_arm_system import get_combined_spec, PhysicsConfig
 from src.controllers.position_controller import (
@@ -131,7 +139,7 @@ class RobotArmEnvBase(ABC):
         - 动作空间处理（末端位移/姿态或关节增量）
         - 统计信息维护
 
-    子类负责：
+    类负责：
         - 场景搭建（物体、相机）
         - 观测空间定义
         - 奖励函数

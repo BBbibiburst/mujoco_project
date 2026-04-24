@@ -3,7 +3,7 @@
 
 运行方式：
     # 从项目根目录执行
-    python -m rl_envs.demo
+    python -m src.env.demo
 
 功能：
     1. 随机策略回合演示（可视化仿真窗口 + 触觉热力图）
@@ -15,8 +15,8 @@ import sys
 import time
 from pathlib import Path
 
-# 将项目根目录加入路径（如果从 rl_envs 目录外运行）
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# 将项目根目录加入路径
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import mujoco
@@ -33,7 +33,7 @@ def render_tactile_heatmap(tactile_dict: dict, sub_h: int = 120, sub_w: int = 16
     将分组触觉图像渲染为热力图网格（与 grasp_task_env.py 一致）.
     
     Args:
-        tactile_dict: {"bottom": (5,7,10), "middle": (5,5,8), "top": (5,5,6)}
+        tactile_dict: {"bottom": (5,10,7), "middle": (5,8,5), "top": (5,6,5)}
         sub_h, sub_w: 每块皮肤的显示尺寸
     
     Returns:
@@ -41,6 +41,7 @@ def render_tactile_heatmap(tactile_dict: dict, sub_h: int = 120, sub_w: int = 16
     """
     from src.sensors.tactile_sensor import FINGER_PHALANX_ORDER
     
+    # ✅ FIX: 显式指定手指顺序，与 pick_place_env.py 保持一致
     finger_keys = ["finger_0", "finger_1", "finger_2", "finger_3", "thumb"]
     phalanx_levels = ["top", "middle", "bottom"]  # 显示顺序：指尖在上，指根在下
     
@@ -114,9 +115,18 @@ def demo_random_policy(n_episodes: int = 3, render: bool = True,
         obs, info = env.reset(seed=42)
         print(f"\n[Episode 1] 已重置。")
         print(f"  obs keys: {list(obs.keys())}")
-        print(f"  camera_rgb shape: {obs['camera_rgb'].shape}")
-        print(f"  tactile bottom shape: {obs['tactile']['bottom'].shape}")
-        print(f"  proprioception shape: {obs['proprioception'].shape}")
+        
+        # 安全访问各观测 key
+        if 'camera_rgb' in obs:
+            print(f"  camera_rgb shape: {obs['camera_rgb'].shape}")
+        if 'tactile' in obs:
+            if 'bottom' in obs['tactile']:
+                print(f"  tactile bottom shape: {obs['tactile']['bottom'].shape}")
+            else:
+                print(f"  tactile keys: {list(obs['tactile'].keys())}")
+        if 'proprioception' in obs:
+            print(f"  proprioception shape: {obs['proprioception'].shape}")
+        
         print(f"  action_dim: {env.action_space.shape[0]}")
 
         with mujoco.viewer.launch_passive(env.model, env.data) as viewer:
@@ -223,7 +233,8 @@ def demo_scripted_policy(render: bool = True,
         pos, _ = env.get_ee_pose()
         return pos
 
-    def move_to(target_pos, hand_target, tol=0.03, max_steps=100):
+    # ✅ FIX: viewer 作为参数传入 move_to，避免闭包隐式依赖
+    def move_to(target_pos, hand_target, viewer, tol=0.03, max_steps=100):
         """控制末端移动到目标位置."""
         for _ in range(max_steps):
             ee_pos = get_ee_pos()
@@ -247,7 +258,7 @@ def demo_scripted_policy(render: bool = True,
                 raise ValueError(f"Unknown action_mode: {env.cfg.action_mode}")
 
             env.step(action)
-            if render:
+            if render and viewer is not None:
                 viewer.sync()
         return False
 
@@ -269,13 +280,13 @@ def _scripted_steps(env, get_obj_pos, get_ee_pos, move_to, viewer):
     print("\n  阶段 1: 移到物体正上方...")
     obj = get_obj_pos()
     above_obj = obj + np.array([0, 0, 0.15])
-    success = move_to(above_obj, hand_target=0.0, tol=0.04)
+    success = move_to(above_obj, hand_target=0.0, viewer=viewer, tol=0.04)
     print(f"    {'到达' if success else '超时'}")
 
     print("  阶段 2: 下降到物体...")
     obj = get_obj_pos()
     near_obj = obj + np.array([0, 0, 0.02])
-    success = move_to(near_obj, hand_target=0.0, tol=0.03)
+    success = move_to(near_obj, hand_target=0.0, viewer=viewer, tol=0.03)
     print(f"    {'到达' if success else '超时'}")
 
     print("  阶段 3: 闭合手指 (50步)...")
@@ -295,7 +306,7 @@ def _scripted_steps(env, get_obj_pos, get_ee_pos, move_to, viewer):
     print("  阶段 4: 抬起物体...")
     ee = get_ee_pos()
     lift_target = ee + np.array([0, 0, 0.15])
-    success = move_to(lift_target, hand_target=1.0, tol=0.04)
+    success = move_to(lift_target, hand_target=1.0, viewer=viewer, tol=0.04)
     obj_final = get_obj_pos()
     print(f"    {'成功' if success else '超时'} | 物体高度: {obj_final[2]:.3f}m")
 

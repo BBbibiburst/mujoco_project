@@ -11,7 +11,6 @@ import numpy as np
 import cv2
 import mujoco
 from stable_baselines3 import PPO
-
 from src.rl.train_ppo import FlattenObservationWrapper, make_env
 from src.env.demo import render_tactile_heatmap
 
@@ -35,8 +34,8 @@ def evaluate(model_path: str, n_episodes: int = 5, render: bool = True):
         print(f"\n--- Episode {ep+1}/{n_episodes} ---")
         
         if render:
-            # 启动 MuJoCo 查看器
-            raw_env = env.env  # 解包 Monitor 和 FlattenWrapper
+            # 解包环境获取底层 PickPlaceEnv（用于 viewer.sync）
+            raw_env = env.env  # 解包 Monitor
             while hasattr(raw_env, 'env'):
                 raw_env = raw_env.env
             
@@ -48,12 +47,19 @@ def evaluate(model_path: str, n_episodes: int = 5, render: bool = True):
                     ep_reward += reward
                     ep_steps += 1
                     
-                    # 显示触觉热力图
-                    raw_obs = raw_env._get_obs()  # 获取原始 Dict 观测
-                    if 'tactile' in raw_obs:
-                        heatmap = render_tactile_heatmap(raw_obs['tactile'])
-                        cv2.imshow("Tactile", heatmap)
-                        cv2.waitKey(1)
+                    # ✅ FIX: 从 FlattenObservationWrapper 缓存获取原始 Dict 观测
+                    # 避免重复调用 _get_obs() 导致的性能浪费和时序问题
+                    flatten_wrapper = env.env  # Monitor -> FlattenWrapper
+                    while hasattr(flatten_wrapper, 'env') and not isinstance(flatten_wrapper, FlattenObservationWrapper):
+                        flatten_wrapper = flatten_wrapper.env
+                    
+                    # ✅ FIX: 用 is not None 判断，避免 falsy 误判
+                    if isinstance(flatten_wrapper, FlattenObservationWrapper) and flatten_wrapper.last_raw_obs is not None:
+                        raw_obs = flatten_wrapper.last_raw_obs
+                        if 'tactile' in raw_obs:
+                            heatmap = render_tactile_heatmap(raw_obs['tactile'])
+                            cv2.imshow("Tactile", heatmap)
+                            cv2.waitKey(1)
                     
                     viewer.sync()
         else:

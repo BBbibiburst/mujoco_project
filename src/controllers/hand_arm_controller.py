@@ -2,21 +2,20 @@
 机械臂与灵巧手底层控制接口模块.
 
 该模块负责 MuJoCo 模型与控制器之间的底层交互，提供物理透明的力矩控制接口。
-
 核心功能：
-    1. 执行器映射：解析模型中的执行器名称，建立逻辑索引（Arm/Hand分离）。
-    2. 物理约束提取：自动读取 XML 中定义的力矩限制和传动比。
-    3. 信号转换：将高层计算出的"物理力矩"转换为仿真器所需的"控制信号"，
-       并处理单位换算与安全限幅。
+1. 执行器映射：解析模型中的执行器名称，建立逻辑索引（Arm/Hand分离）。
+2. 物理约束提取：自动读取 XML 中定义的力矩限制和传动比。
+3. 信号转换：将高层计算出的"物理力矩"转换为仿真器所需的"控制信号"，
+   并处理单位换算与安全限幅。
 
 设计原则：
-    - 物理透明：对外暴露力矩接口（单位 N·m），内部处理 Gear 传动比换算。
-    - 安全优先：在写入数据前强制执行双重限幅（力矩限幅与信号限幅）。
-    - 性能优化：预计算索引数组，避免控制循环中的字符串查找。
+- 物理透明：对外暴露力矩接口（单位 N·m），内部处理 Gear 传动比换算。
+- 安全优先：在写入数据前强制执行双重限幅（力矩限幅与信号限幅）。
+- 性能优化：预计算索引数组，避免控制循环中的字符串查找。
 
 依赖：
-    - mujoco: MuJoCo 物理引擎接口
-    - numpy: 数值计算
+- mujoco: MuJoCo 物理引擎接口
+- numpy: 数值计算
 """
 
 import mujoco
@@ -31,17 +30,20 @@ class HandArmController:
     该类封装了 MuJoCo 的 `nu` (执行器数量) 和 `ctrl` (控制信号) 接口。
     它屏蔽了具体的执行器命名规则，向上层控制器提供统一的索引和物理限制数据。
 
-    执行器命名约定：
-        机械臂: "torq_joint{index}" (index 0-6)
-        灵巧手:
-            - "hand_act_push_{0-3}" → 四指弯曲 (finger_0-3)
-            - "hand_thumb_grasp"    → 拇指弯曲
-            - "hand_thumb_rotate"   → 拇指旋转
+    执行器命名约定（适配 TactileReader 输出）：
+    机械臂: "torq_joint{index}" (index 0-6)
+    灵巧手: 带有 "inspirehand_" 前缀的特定关键词
+        - "inspirehand_hand_act_push_0" → finger_0 (食指)
+        - "inspirehand_hand_act_push_1" → finger_1 (中指)
+        - "inspirehand_hand_act_push_2" → finger_2 (无名指)
+        - "inspirehand_hand_act_push_3" → finger_3 (小指)
+        - "inspirehand_hand_thumb_grasp" → thumb_grasp (拇指弯曲)
+        - "inspirehand_hand_thumb_rotate" → thumb_rotate (拇指旋转)
 
     物理约束说明：
-        MuJoCo 中 actuator.ctrl 是控制信号，实际输出力矩为：
-            torque = ctrl × gear
-        本类自动处理此换算，对外接口统一为物理力矩 [N·m]。
+    MuJoCo 中 actuator.ctrl 是控制信号，实际输出力矩为：
+        torque = ctrl × gear
+    本类自动处理此换算，对外接口统一为物理力矩 [N·m]。
 
     Attributes:
         ARM_DOF (int): 机械臂自由度数量，固定为7。
@@ -63,18 +65,17 @@ class HandArmController:
         >>> # 初始化控制器
         >>> model = mujoco.MjModel.from_xml_path("robot.xml")
         >>> controller = HandArmController(model)
-        >>> 
+        >>>
         >>> # 查看物理限制
         >>> print(f"Arm torque limits: {controller.torque_max[controller.arm_indices]}")
-        >>> 
+        >>>
         >>> # 应用力矩控制（物理单位 N·m）
-        >>> arm_tau = np.array([10.0, 5.0, 5.0, 2.0, 1.0, 0.5, 0.5])  # 7个关节
-        >>> hand_tau = np.array([0.5, 0.5, 0.5, 0.5, 1.0, 0.3])       # 6个手指
+        >>> arm_tau = np.array([10.0, 5.0, 5.0, 2.0, 1.0, 0.5, 0.5]) # 7个关节
+        >>> hand_tau = np.array([0.5, 0.5, 0.5, 0.5, 1.0, 0.3]) # 6个手指
         >>> controller.apply_control(data, arm_tau, hand_tau)
     """
-
     # 类常量：自由度配置
-    ARM_DOF = 7   # 7-DOF 机械臂（如 RM75B）
+    ARM_DOF = 7  # 7-DOF 机械臂（如 RM75B）
     HAND_DOF = 6  # 6-DOF 灵巧手（4指×1 + 拇指×2）
     TOTAL_DOF = 13  # ARM_DOF + HAND_DOF
 
@@ -83,21 +84,20 @@ class HandArmController:
         初始化执行器管理器.
 
         执行流程：
-            1. 存储模型引用
-            2. 构建名称到索引的映射表（_build_map）
-            3. 预计算整数索引数组（_build_index_arrays）
-            4. 提取执行器物理约束（_extract_actuator_limits）
+        1. 存储模型引用
+        2. 构建名称到索引的映射表（_build_map）
+        3. 预计算整数索引数组（_build_index_arrays）
+        4. 提取执行器物理约束（_extract_actuator_limits）
 
         Args:
             model: MuJoCo 模型对象，需包含完整的执行器定义。
-                要求模型中执行器命名符合类文档所述的命名约定。
+                   要求模型中执行器命名符合类文档所述的命名约定。
 
         Raises:
             KeyError: 如果模型中缺少预期的执行器名称。
             ValueError: 如果传动比为零（会导致除零错误）。
         """
         self.model = model
-
         # 初始化数据结构
         self.actuator_map: Dict[str, int] = {}
         self.arm_names: List[str] = []
@@ -106,7 +106,6 @@ class HandArmController:
         # 1. 解析名称与索引
         self._build_map()
         self._build_index_arrays()
-        
         # 2. 提取物理约束（确保控制器知晓硬件极限）
         self._extract_actuator_limits()
 
@@ -117,14 +116,14 @@ class HandArmController:
         遍历模型中的所有执行器，根据命名规则构建映射表.
 
         命名约定解析：
-            - 机械臂: 以 "torq_joint" 开头，后跟数字索引
-            - 灵巧手: 包含特定关键词，映射到逻辑名称
-                * "hand_act_push_0" → finger_0 (食指)
-                * "hand_act_push_1" → finger_1 (中指)
-                * "hand_act_push_2" → finger_2 (无名指)
-                * "hand_act_push_3" → finger_3 (小指)
-                * "hand_thumb_grasp" → thumb_grasp (拇指弯曲)
-                * "hand_thumb_rotate" → thumb_rotate (拇指旋转)
+        - 机械臂: 以 "torq_joint" 开头，后跟数字索引
+        - 灵巧手: 包含特定关键词，映射到逻辑名称
+            * "hand_act_push_0" → finger_0 (食指)
+            * "hand_act_push_1" → finger_1 (中指)
+            * "hand_act_push_2" → finger_2 (无名指)
+            * "hand_act_push_3" → finger_3 (小指)
+            * "hand_thumb_grasp" → thumb_grasp (拇指弯曲)
+            * "hand_thumb_rotate" → thumb_rotate (拇指旋转)
 
         Note:
             机械臂名称按数字索引自然排序，确保索引顺序与物理关节顺序一致。
@@ -165,30 +164,32 @@ class HandArmController:
         同时定义了手部的逻辑顺序，确保多指协同控制时的数据一致性。
 
         构建的索引数组：
-            - arm_indices: 机械臂7个关节的执行器索引
-            - hand_indices: 灵巧手6个自由度的执行器索引（按标准顺序）
-            - all_indices: 合并后的13个执行器索引（用于批量操作）
+        - arm_indices: 机械臂7个关节的执行器索引
+        - hand_indices: 灵巧手6个自由度的执行器索引（按标准顺序）
+        - all_indices: 合并后的13个执行器索引（用于批量操作）
 
         手部标准顺序：
-            [finger_0, finger_1, finger_2, finger_3, thumb_grasp, thumb_rotate]
+        [finger_0, finger_1, finger_2, finger_3, thumb_grasp, thumb_rotate]
         """
         # 机械臂索引数组
         self.arm_indices = np.array(
-            [self.actuator_map[n] for n in self.arm_names],
-            dtype=np.int32
+            [self.actuator_map[n] for n in self.arm_names], dtype=np.int32
         )
 
         # 定义手部自由度的标准顺序（逻辑顺序，与物理布局无关）
         self.hand_key_order = [
-            "finger_0", "finger_1", "finger_2", "finger_3",
-            "thumb_grasp", "thumb_rotate"
+            "finger_0",
+            "finger_1",
+            "finger_2",
+            "finger_3",
+            "thumb_grasp",
+            "thumb_rotate",
         ]
 
         # 手部索引数组（按标准顺序）
         self.hand_indices = np.array(
-            [self.actuator_map[self.hand_names[k]]
-             for k in self.hand_key_order if k in self.hand_names],
-            dtype=np.int32
+            [self.actuator_map[self.hand_names[k]] for k in self.hand_key_order if k in self.hand_names],
+            dtype=np.int32,
         )
 
         # 合并所有受控执行器的索引，用于批量操作
@@ -200,12 +201,10 @@ class HandArmController:
 
         MuJoCo 的控制信号通常是归一化的或通过 Gear 缩放的。
         为了在上层进行物理意义上的力矩控制，我们需要知道：
-
         1. ctrlrange: 控制信号范围 [ctrl_min, ctrl_max]
         2. gear: 传动系数，实际力矩公式为 torque = ctrl × gear
 
         此方法计算真实的物理力矩限制，供上层控制器进行饱和处理。
-
         计算公式：
             torque_min = ctrl_min × gear
             torque_max = ctrl_max × gear
@@ -217,12 +216,10 @@ class HandArmController:
         ctrl_min = []
         ctrl_max = []
         gear = []
-
         for i in range(self.model.nu):
             # 提取控制信号范围（来自 XML 中 actuator 的 ctrlrange 属性）
             ctrl_min.append(self.model.actuator_ctrlrange[i][0])
             ctrl_max.append(self.model.actuator_ctrlrange[i][1])
-            
             # 提取传动比（来自 XML 中 actuator 的 gear 属性）
             # 假设单轴执行器，取第一个元素
             gear.append(self.model.actuator_gear[i][0])
@@ -251,9 +248,9 @@ class HandArmController:
             ctrl = torque / gear
 
         安全限幅：
-            1. 首先根据物理力矩限制裁剪输入力矩（torque_min/max）
-            2. 然后转换为控制信号
-            3. 最后根据控制信号范围裁剪（ctrl_min/max）
+        1. 首先根据物理力矩限制裁剪输入力矩（torque_min/max）
+        2. 然后转换为控制信号
+        3. 最后根据控制信号范围裁剪（ctrl_min/max）
 
         Args:
             torques: 物理力矩数组 [N·m]，shape 与 indices 匹配。
@@ -267,10 +264,8 @@ class HandArmController:
         """
         # 第一重限幅：物理力矩限制（保护硬件）
         torque_clipped = np.clip(torques, self.torque_min[indices], self.torque_max[indices])
-        
         # 转换为控制信号
         ctrl = torque_clipped / self.gear[indices]
-        
         # 第二重限幅：控制信号限制（保护仿真器）
         return np.clip(ctrl, self.ctrl_min[indices], self.ctrl_max[indices])
 
@@ -283,9 +278,9 @@ class HandArmController:
         Args:
             data: MuJoCo MjData 对象，其 ctrl 数组将被修改。
             arm_torques: 机械臂关节力矩 [N·m]，shape (7,)。
-                顺序与 arm_names 一致（通常按关节编号 0-6）。
+                         顺序与 arm_names 一致（通常按关节编号 0-6）。
             hand_torques: 灵巧手关节力矩 [N·m]，shape (6,)。
-                顺序为 [finger_0, finger_1, finger_2, finger_3, thumb_grasp, thumb_rotate]。
+                          顺序为 [finger_0, finger_1, finger_2, finger_3, thumb_grasp, thumb_rotate]。
 
         Raises:
             ValueError: 如果输入数组形状不匹配。
@@ -293,7 +288,7 @@ class HandArmController:
         Examples:
             >>> # PD 控制示例
             >>> arm_tau = kp_arm * (q_target - q) + kd_arm * (dq_target - dq)
-            >>> hand_tau = np.array([0.5, 0.5, 0.5, 0.5, 1.0, 0.3])  # 恒定抓握力
+            >>> hand_tau = np.array([0.5, 0.5, 0.5, 0.5, 1.0, 0.3]) # 恒定抓握力
             >>> controller.apply_control(data, arm_tau, hand_tau)
         """
         # 输入验证
@@ -319,14 +314,14 @@ class HandArmController:
         Args:
             data: MuJoCo MjData 对象，其 ctrl 数组将被修改。
             control_vector: 完整控制向量 [N·m]，shape (13,)。
-                顺序为 [arm_joint_0-6, finger_0-3, thumb_grasp, thumb_rotate]。
+                            顺序为 [arm_joint_0-6, finger_0-3, thumb_grasp, thumb_rotate]。
 
         Raises:
             ValueError: 如果输入向量形状不是 (13,)。
 
         Examples:
             >>> # 神经网络策略输出
-            >>> action = policy_network(observation)  # shape (13,)
+            >>> action = policy_network(observation) # shape (13,)
             >>> controller.apply_control_vector(data, action)
         """
         if control_vector.shape != (self.TOTAL_DOF,):
@@ -334,7 +329,6 @@ class HandArmController:
                 f"Control vector shape mismatch: expected {(self.TOTAL_DOF,)}, "
                 f"got {control_vector.shape}"
             )
-
         data.ctrl[self.all_indices] = self._to_ctrl_signal(control_vector, self.all_indices)
 
     # ====================== 查询接口（可选） ======================
