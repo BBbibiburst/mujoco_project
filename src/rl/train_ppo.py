@@ -82,20 +82,20 @@ class FlattenObservationWrapper(gym.ObservationWrapper):
         self.last_raw_obs = None
         
         # 打印维度分解（方便调试）
-        print(f"[FlattenWrapper] 观测维度: {self.flattened_dim:,}")
-        print(f"  camera ({self.CAM_KEY}): {self._cam_dim:,} "
-              f"({self._cam_dim/self.flattened_dim*100:.1f}%) "
-              f"shape={self._cam_shape}")
-        if self._tac_dim > 0:
-            tac_detail = ", ".join(f"{k}={v}" for k, v in self._tac_shapes.items())
-            print(f"  tactile ({self.TACTILE_KEY}): {self._tac_dim:,} "
-                  f"({self._tac_dim/self.flattened_dim*100:.1f}%) "
-                  f"[{tac_detail}]")
-        else:
-            print(f"  tactile: 0 (禁用)")
-        print(f"  proprioception ({self.PROP_KEY}): {self._prop_dim} "
-              f"({self._prop_dim/self.flattened_dim*100:.1f}%) "
-              f"shape={self._prop_shape}")
+        # print(f"[FlattenWrapper] 观测维度: {self.flattened_dim:,}")
+        # print(f"  camera ({self.CAM_KEY}): {self._cam_dim:,} "
+        #       f"({self._cam_dim/self.flattened_dim*100:.1f}%) "
+        #       f"shape={self._cam_shape}")
+        # if self._tac_dim > 0:
+        #     tac_detail = ", ".join(f"{k}={v}" for k, v in self._tac_shapes.items())
+        #     print(f"  tactile ({self.TACTILE_KEY}): {self._tac_dim:,} "
+        #           f"({self._tac_dim/self.flattened_dim*100:.1f}%) "
+        #           f"[{tac_detail}]")
+        # else:
+        #     print(f"  tactile: 0 (禁用)")
+        # print(f"  proprioception ({self.PROP_KEY}): {self._prop_dim} "
+        #       f"({self._prop_dim/self.flattened_dim*100:.1f}%) "
+        #       f"shape={self._prop_shape}")
 
     def observation(self, obs: dict) -> np.ndarray:
         self.last_raw_obs = obs
