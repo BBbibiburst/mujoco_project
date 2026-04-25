@@ -17,7 +17,7 @@ import mujoco
 from stable_baselines3 import PPO
 
 from src.rl.train_ppo import make_env
-from src.env.demo import render_tactile_heatmap
+from src.env.pick_place_demo import render_tactile_heatmap
 
 
 def unwrap_env(env):
