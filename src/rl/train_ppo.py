@@ -3,14 +3,14 @@
 
 用法：
     # 从项目根目录执行
-    python -m src.env.train_ppo --task pick_place
-    python -m src.env.train_ppo --task stack
-    python -m src.env.train_ppo --task insert
-    python -m src.env.train_ppo --task reorient
-    python -m src.env.train_ppo --task push
+    python -m src.rl.train_ppo --task pick_place
+    python -m src.rl.train_ppo --task stack
+    python -m src.rl.train_ppo --task insert
+    python -m src.rl.train_ppo --task reorient
+    python -m src.rl.train_ppo --task push
 
 完整参数示例：
-    python -m src.env.train_ppo \\
+    python -m src.rl.train_ppo \\
         --task insert \\
         --n-envs 8 \\
         --total-steps 10_000_000 \\
@@ -515,7 +515,7 @@ def parse_args() -> argparse.Namespace:
                         default="simple_avg")
 
     # ---- 训练超参 ----
-    parser.add_argument("--n-envs",      type=int,   default=4,
+    parser.add_argument("--n-envs",      type=int,   default=32,
                         help="并行环境数（1 → DummyVecEnv，>1 → SubprocVecEnv）")
     parser.add_argument("--total-steps", type=int,   default=None,
                         help="总训练步数（None → 使用任务推荐值）")
