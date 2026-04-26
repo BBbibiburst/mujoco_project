@@ -1109,3 +1109,10 @@ class IK_PositionController:
             np.array(qvel_ids, dtype=np.int32),
             np.array(joint_ids, dtype=np.int32),
         )
+        
+    def get_ee_pose(self, data: mujoco.MjData) -> Tuple[np.ndarray, np.ndarray]:
+        """获取当前末端位姿（位置和四元数）."""
+        pos = data.site_xpos[self.ee_id].copy()
+        quat = np.zeros(4)
+        mujoco.mju_mat2Quat(quat, data.site_xmat[self.ee_id])
+        return pos, quat

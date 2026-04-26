@@ -5,14 +5,14 @@
 
 运行方式：
     # 从项目根目录执行
-    python -m src.env.task_demo --task pick_place
-    python -m src.env.task_demo --task stack
-    python -m src.env.task_demo --task insert
-    python -m src.env.task_demo --task reorient
-    python -m src.env.task_demo --task push
+    python -m src.env.demo --task pick_place
+    python -m src.env.demo --task stack
+    python -m src.env.demo --task insert
+    python -m src.env.demo --task reorient
+    python -m src.env.emo --task push
 
 完整参数示例：
-    python -m src.env.task_demo \\
+    python -m src.env.demo \\
         --task stack \\
         --mode random \\
         --episodes 5 \\
@@ -694,7 +694,97 @@ def demo_compare_configs(task_name: str = "pick_place"):
             )
         except Exception as e:
             print(f"  [错误] {e}")
+            
+            
+# ====================== 演示模式6：机械手 Sweep 测试 ======================
+def demo_hand_sweep(
+    task_name: str = "pick_place",
+    duration_sec: float = 10.0,
+    freq: float = 0.2,
+    action_mode: str = "osc_pose",
+    controller_type: str = "osc",
+    render: bool = True,
+):
+    """
+    机械手 sweep 测试：
+    - 机械臂固定
+    - 机械手做 sin 匀速运动
+    """
 
+    reg = TASK_REGISTRY[task_name]
+    print("=" * 65)
+    print(f"  [Hand Sweep Test] | 任务={reg['display_name']}")
+    print("=" * 65)
+
+    robot_cfg = RobotConfig(
+        action_mode=action_mode,
+        controller_type=controller_type,
+        max_episode_steps=10_000,
+        action_scale=0.0,          # ❗关键：禁用 arm 运动
+        action_scale_rot=0.0,
+        action_scale_hand=0.001,   # 保持合理 finger scale
+        control_freq=20.0,
+        tactile_backend="simple_avg",
+    )
+
+    env = _load_task(task_name, robot_cfg)
+    obs, info = env.reset(seed=0)
+
+    # 固定机械臂（非常关键）
+    arm_q = env.get_arm_qpos().copy()
+
+    print(f"  arm_q locked: {arm_q}")
+
+    steps = int(duration_sec * 20)  # control_freq=20Hz
+
+    if render:
+        with mujoco.viewer.launch_passive(env.model, env.data) as viewer:
+            for t in range(steps):
+                phase = 2 * np.pi * freq * (t / 20.0)
+
+                # sin sweep [-1, 1]
+                hand_action = np.sin(phase) * np.ones(6)
+
+                if action_mode == "osc_pose":
+                    action = np.concatenate([
+                        np.zeros(6),        # arm + rot = 0
+                        hand_action
+                    ])
+                elif action_mode == "osc_pos":
+                    action = np.concatenate([
+                        np.zeros(3),
+                        hand_action
+                    ])
+                else:
+                    action = np.concatenate([
+                        np.zeros(7),
+                        hand_action
+                    ])
+
+                obs, reward, done, trunc, info = env.step(action)
+
+                # 强制锁 arm（防 drift）
+                env.data.qpos[env.controller.arm_qpos_ids] = arm_q
+
+                viewer.sync()
+
+                if t % 20 == 0:
+                    print(f"[t={t}] hand_q={env.get_hand_qpos()}")
+
+    else:
+        for t in range(steps):
+            phase = 2 * np.pi * freq * (t / 20.0)
+            hand_action = np.sin(phase) * np.ones(6)
+
+            if action_mode == "osc_pose":
+                action = np.concatenate([np.zeros(6), hand_action])
+            else:
+                action = np.concatenate([np.zeros(3), hand_action])
+
+            obs, _, _, _, _ = env.step(action)
+            env.data.qpos[env.controller.arm_qpos_ids] = arm_q
+
+    env.close()
 
 # ====================== 入口 ======================
 
@@ -714,7 +804,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--mode",
-        choices=["random", "scripted", "verify", "benchmark", "compare"],
+        choices=["random", "scripted", "verify", "benchmark", "compare", "hand_sweep"],
         default="random",
         help="演示模式",
     )
@@ -766,3 +856,10 @@ if __name__ == "__main__":
         )
     elif args.mode == "compare":
         demo_compare_configs(task_name=args.task)
+    elif args.mode == "hand_sweep":
+        demo_hand_sweep(
+            task_name=args.task,
+            render=render,
+            action_mode=args.action_mode,
+            controller_type=args.controller,
+        )

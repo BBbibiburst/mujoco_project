@@ -94,6 +94,11 @@ class RobotConfig:
     action_scale: float = 0.05
     # 姿态增量单独缩放（可选，若 None 则使用 action_scale）
     action_scale_rot: Optional[float] = None
+    # 手部推杆增量单独缩放（单位 米，满量程 0.01 m）
+    # 推杆每步合理步长约 0.001 m（满量程的 10%），远小于臂的 action_scale。
+    # None 时 fallback 到 action_scale，但 action_scale=0.05 对推杆而言过大（5×满量程），
+    # 强烈建议显式设置为 0.001~0.002。
+    action_scale_hand: Optional[float] = 0.001
 
     # 控制器增益
     osc_gains: Optional[OSCGains] = None  # OSC 控制器增益，None 时使用默认
@@ -531,8 +536,9 @@ class RobotArmEnvBase(gym.Env, ABC):
         mujoco.mju_mulQuat(new_ee_quat, delta_quat, ee_quat)
         mujoco.mju_normalize4(new_ee_quat)
 
-        # 手部控制
-        hand_delta = action[6:] * self.cfg.action_scale
+        # 手部控制（推杆位移，满量程 0.01 m，需独立缩放）
+        scale_hand = self.cfg.action_scale_hand if self.cfg.action_scale_hand is not None else self.cfg.action_scale
+        hand_delta = action[6:] * scale_hand
         new_hand = self.get_hand_qpos() + hand_delta
 
         # 统一调用 set_ee_target（OSC 或 IK 控制器都支持）
@@ -556,8 +562,9 @@ class RobotArmEnvBase(gym.Env, ABC):
         delta_pos = action[:3] * self.cfg.action_scale
         new_ee_pos = ee_pos + delta_pos
 
-        # 手部控制
-        hand_delta = action[3:] * self.cfg.action_scale
+        # 手部控制（推杆位移，满量程 0.01 m，需独立缩放）
+        scale_hand = self.cfg.action_scale_hand if self.cfg.action_scale_hand is not None else self.cfg.action_scale
+        hand_delta = action[3:] * scale_hand
         new_hand = self.get_hand_qpos() + hand_delta
 
         # 姿态自由：不传 ee_quat_target
@@ -579,7 +586,9 @@ class RobotArmEnvBase(gym.Env, ABC):
         current_hand = self.get_hand_qpos()
 
         arm_delta = action[:self.ARM_DOF] * self.cfg.action_scale
-        hand_delta = action[self.ARM_DOF:] * self.cfg.action_scale
+        # 手部推杆位移增量（满量程 0.01 m，需独立缩放）
+        scale_hand = self.cfg.action_scale_hand if self.cfg.action_scale_hand is not None else self.cfg.action_scale
+        hand_delta = action[self.ARM_DOF:] * scale_hand
 
         # 统一调用 set_target（OSC 或 IK 控制器都支持）
         self.controller.set_target(
