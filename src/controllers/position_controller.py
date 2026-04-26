@@ -990,6 +990,59 @@ class IK_PositionController:
         # 4. 应用
         self.base.apply_control(data, self._arm_torques, self._hand_torques)
         return self._arm_torques.copy(), self._hand_torques.copy()
+    
+    def set_target(
+        self,
+        data: mujoco.MjData,
+        arm_target: np.ndarray,
+        hand_target: Optional[np.ndarray] = None,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        兼容旧版的关节空间 PD 控制接口.
+
+        直接在关节空间执行 PD 控制，适合初始化阶段或纯关节任务。
+        注意：此方法绕过 IK，直接使用关节目标。
+
+        Args:
+            data: MuJoCo 数据对象。
+            arm_target: 机械臂目标关节角度 [ARM_DOF,]。
+            hand_target: 手部目标关节角 [HAND_DOF,]，可选。
+        Returns:
+            Tuple[np.ndarray, np.ndarray]: (arm_torques, hand_torques)
+        """
+        # 检测模式切换
+        if self._ctrl_mode != _CtrlMode.JOINT_PD:
+            self._prev_tau = None
+            self._ctrl_mode = _CtrlMode.JOINT_PD
+
+        g = self.gains
+
+        # 缓存目标（保持行为一致性）
+        if self._arm_target is None:
+            self._arm_target = data.qpos[self.arm_qpos_ids].copy()
+
+        # 限幅到关节范围
+        self._arm_target = np.clip(
+            arm_target,
+            self.arm_range[:, 0],
+            self.arm_range[:, 1]
+        )
+
+        # 关节空间 PD（使用独立配置的增益）
+        e_q = self._arm_target - data.qpos[self.arm_qpos_ids]
+        e_qd = -data.qvel[self.arm_qvel_ids]
+        tau_arm = g.kp_arm * e_q + g.kd_arm * e_qd + data.qfrc_bias[self.arm_qvel_ids]
+
+        # 应用限制
+        tau_arm = self._apply_torque_limits(tau_arm, g)
+        self._arm_torques[:] = tau_arm
+
+        # 手部控制
+        self._update_hand(data, hand_target)
+
+        # 应用控制
+        self.base.apply_control(data, self._arm_torques, self._hand_torques)
+        return self._arm_torques.copy(), self._hand_torques.copy()
 
     def _solve_ik(
         self,
