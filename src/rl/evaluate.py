@@ -234,7 +234,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--action-scale-rot", type=float, default=0.06)
     parser.add_argument("--control-freq",     type=float, default=20.0)
     parser.add_argument("--sim-freq",         type=float, default=1000.0)
-    parser.add_argument("--tactile-backend",  choices=["simple_avg", "physics", "none"],
+    parser.add_argument("--tactile-backend",  choices=["simple", "physics", "simple_avg", "physics_avg"],
                         default="simple_avg")
     parser.add_argument("--max-episode-steps", type=int, default=None,
                         help="单回合最大步数（None → 使用任务推荐值）")
