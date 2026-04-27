@@ -998,52 +998,51 @@ class IK_PositionController:
         hand_target: Optional[np.ndarray] = None,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        兼容旧版的关节空间 PD 控制接口.
-
-        直接在关节空间执行 PD 控制，适合初始化阶段或纯关节任务。
-        注意：此方法绕过 IK，直接使用关节目标。
+        直接关节空间控制接口.
+        
+        绕过 IK 求解器，直接将机械臂关节移动到指定构型。
+        适用于已知关节角度目标的任务或机器人归位（Home）操作。
 
         Args:
             data: MuJoCo 数据对象。
             arm_target: 机械臂目标关节角度 [ARM_DOF,]。
             hand_target: 手部目标关节角 [HAND_DOF,]，可选。
+
         Returns:
-            Tuple[np.ndarray, np.ndarray]: (arm_torques, hand_torques)
+            Tuple[np.ndarray, np.ndarray]: (arm_torques, hand_torques) 实际应用的力矩。
         """
-        # 检测模式切换
-        if self._ctrl_mode != _CtrlMode.JOINT_PD:
-            self._prev_tau = None
-            self._ctrl_mode = _CtrlMode.JOINT_PD
-
-        g = self.gains
-
-        # 缓存目标（保持行为一致性）
+        # 1. 更新并限幅机械臂目标
         if self._arm_target is None:
             self._arm_target = data.qpos[self.arm_qpos_ids].copy()
-
-        # 限幅到关节范围
+        
         self._arm_target = np.clip(
             arm_target,
             self.arm_range[:, 0],
             self.arm_range[:, 1]
         )
 
-        # 关节空间 PD（使用独立配置的增益）
+        # 2. 计算机械臂关节空间 PD 力矩
+        # tau = Kp * (q_des - q) + Kd * (v_des - v)
+        # 注意：这里 v_des 默认为 0
         e_q = self._arm_target - data.qpos[self.arm_qpos_ids]
         e_qd = -data.qvel[self.arm_qvel_ids]
-        tau_arm = g.kp_arm * e_q + g.kd_arm * e_qd + data.qfrc_bias[self.arm_qvel_ids]
+        tau_arm = self.gains.kp_arm * e_q + self.gains.kd_arm * e_qd
 
-        # 应用限制
-        tau_arm = self._apply_torque_limits(tau_arm, g)
-        self._arm_torques[:] = tau_arm
+        # 3. 机械臂力矩安全限幅
+        self._arm_torques[:] = np.clip(
+            tau_arm,
+            self._torque_min[:self.base.ARM_DOF],
+            self._torque_max[:self.base.ARM_DOF],
+        )
 
-        # 手部控制
+        # 4. 更新手部控制 (复用类内私有方法)
         self._update_hand(data, hand_target)
 
-        # 应用控制
+        # 5. 应用控制信号
         self.base.apply_control(data, self._arm_torques, self._hand_torques)
+        
         return self._arm_torques.copy(), self._hand_torques.copy()
-
+    
     def _solve_ik(
         self,
         data: mujoco.MjData,

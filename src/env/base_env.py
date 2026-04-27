@@ -318,6 +318,13 @@ class RobotArmEnvBase(gym.Env, ABC):
         # 再次前向推算（反映场景重置后的状态）
         mujoco.mj_forward(self.model, self.data)
 
+        # ---- 初始化持久目标（防止零动作时漂移）----
+        # 以当前实际末端位姿为起点，后续所有增量在此基础上累积
+        _pos, _quat = self.get_ee_pose()
+        self._target_pos: np.ndarray = _pos.copy()
+        self._target_quat: np.ndarray = _quat.copy()
+        self._target_hand: np.ndarray = self.get_hand_qpos().copy()
+
         # 更新统计
         self.stats.episode_count += 1
         self.stats.episode_steps = 0
@@ -507,72 +514,64 @@ class RobotArmEnvBase(gym.Env, ABC):
 
     def _apply_osc_pose_action(self, action: np.ndarray) -> None:
         """
-        6D 位姿增量动作解析.
+        6D 位姿增量动作解析（基于持久目标累积增量）.
 
         action[0:3]  → 末端位置增量（×action_scale）
         action[3:6]  → 末端姿态增量（×action_scale_rot 或 action_scale）
-        action[6:]   → 手部目标增量（×action_scale）
+        action[6:]   → 手部目标增量（×action_scale_hand）
+
+        持久目标设计：
+            目标从上一步 _target_pos/_target_quat/_target_hand 出发累积，
+            而非每步从实际末端位置重算。这样零动作时目标不变，机械臂不漂移。
         """
-        ee_pos, ee_quat = self.get_ee_pose()
-
-        # 位置增量
+        # ---- 位置：在上一步目标基础上叠加增量 ----
         delta_pos = action[:3] * self.cfg.action_scale
-        new_ee_pos = ee_pos + delta_pos
+        self._target_pos = self._target_pos + delta_pos
 
-        # 姿态增量：轴角 → 四元数
+        # ---- 姿态：轴角增量叠加到上一步目标四元数 ----
         scale_rot = self.cfg.action_scale_rot if self.cfg.action_scale_rot is not None else self.cfg.action_scale
         delta_rpy = action[3:6] * scale_rot
-        
-        delta_quat = np.zeros(4)
         angle = np.linalg.norm(delta_rpy)
         if angle > 1e-6:
-            axis = delta_rpy / angle
-            mujoco.mju_axisAngle2Quat(delta_quat, axis, angle)
-        else:
-            delta_quat = np.array([1.0, 0.0, 0.0, 0.0])
+            delta_quat = np.zeros(4)
+            mujoco.mju_axisAngle2Quat(delta_quat, delta_rpy / angle, angle)
+            new_quat = np.zeros(4)
+            mujoco.mju_mulQuat(new_quat, delta_quat, self._target_quat)
+            mujoco.mju_normalize4(new_quat)
+            self._target_quat = new_quat
+        # angle ≈ 0 时目标四元数保持不变
 
-        # 组合姿态：new_quat = delta_quat ⊗ current_quat
-        new_ee_quat = np.zeros(4)
-        mujoco.mju_mulQuat(new_ee_quat, delta_quat, ee_quat)
-        mujoco.mju_normalize4(new_ee_quat)
-
-        # 手部控制（推杆位移，满量程 0.01 m，需独立缩放）
+        # ---- 手部：在上一步目标基础上叠加增量 ----
         scale_hand = self.cfg.action_scale_hand if self.cfg.action_scale_hand is not None else self.cfg.action_scale
-        hand_delta = action[6:] * scale_hand
-        new_hand = self.get_hand_qpos() + hand_delta
+        self._target_hand = self._target_hand + action[6:] * scale_hand
 
         # 统一调用 set_ee_target（OSC 或 IK 控制器都支持）
         self.controller.set_ee_target(
             self.data,
-            ee_pos_target=new_ee_pos,
-            ee_quat_target=new_ee_quat,
-            hand_target=new_hand,
+            ee_pos_target=self._target_pos,
+            ee_quat_target=self._target_quat,
+            hand_target=self._target_hand,
         )
 
     def _apply_osc_pos_action(self, action: np.ndarray) -> None:
         """
-        3D 位置增量动作解析（姿态自由）.
+        3D 位置增量动作解析（姿态自由，基于持久目标累积增量）.
 
         action[0:3]  → 末端位置增量（×action_scale）
-        action[3:]   → 手部目标增量（×action_scale）
+        action[3:]   → 手部目标增量（×action_scale_hand）
         """
-        ee_pos, _ = self.get_ee_pose()
-
-        # 位置增量
         delta_pos = action[:3] * self.cfg.action_scale
-        new_ee_pos = ee_pos + delta_pos
+        self._target_pos = self._target_pos + delta_pos
 
-        # 手部控制（推杆位移，满量程 0.01 m，需独立缩放）
         scale_hand = self.cfg.action_scale_hand if self.cfg.action_scale_hand is not None else self.cfg.action_scale
-        hand_delta = action[3:] * scale_hand
-        new_hand = self.get_hand_qpos() + hand_delta
+        self._target_hand = self._target_hand + action[3:] * scale_hand
 
         # 姿态自由：不传 ee_quat_target
         self.controller.set_ee_target(
             self.data,
-            ee_pos_target=new_ee_pos,
+            ee_pos_target=self._target_pos,
             ee_quat_target=None,
-            hand_target=new_hand,
+            hand_target=self._target_hand,
         )
 
     def _apply_joint_pd_action(self, action: np.ndarray) -> None:
