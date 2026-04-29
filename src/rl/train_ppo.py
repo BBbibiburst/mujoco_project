@@ -14,7 +14,7 @@
         --task insert \\
         --n-envs 8 \\
         --total-steps 10_000_000 \\
-        --action-mode osc_pose \\
+        --action-mode joint \\
         --controller osc \\
         --n-steps 2048 \\
         --batch-size 256 \\
@@ -504,8 +504,7 @@ def parse_args() -> argparse.Namespace:
     )
 
     # ---- 机器人与控制器 ----
-    parser.add_argument("--action-mode",  choices=["osc_pose", "osc_pos", "joint_pd"],
-                        default="osc_pose")
+    parser.add_argument("--action-mode",  choices=["joint", "ee"], default="joint")
     parser.add_argument("--controller",   choices=["osc", "ik"], default="osc")
     parser.add_argument("--action-scale",     type=float, default=0.03)
     parser.add_argument("--action-scale-rot", type=float, default=0.06)

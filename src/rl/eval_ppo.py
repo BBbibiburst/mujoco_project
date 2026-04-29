@@ -227,8 +227,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-camera",  action="store_true", help="关闭相机图像窗口")
 
     # ---- 机器人与控制器（需与训练时一致）----
-    parser.add_argument("--action-mode",  choices=["osc_pose", "osc_pos", "joint_pd"],
-                        default="osc_pose")
+    parser.add_argument("--action-mode",  choices=["joint", "ee"],
+                        default="joint")
     parser.add_argument("--controller",   choices=["osc", "ik"], default="osc")
     parser.add_argument("--action-scale",     type=float, default=0.03)
     parser.add_argument("--action-scale-rot", type=float, default=0.06)
