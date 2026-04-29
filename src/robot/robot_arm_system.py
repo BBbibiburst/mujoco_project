@@ -31,15 +31,11 @@ from scipy.spatial.transform import Rotation as R
 from src.sensors.tactile_sensor import TactileReader
 
 # ====================== 路径配置 ======================
-# 项目根目录推断：假设本文件位于 <project>/src/robot_arm_system.py
-# 则 PROJECT_ROOT 指向 <project>/
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
-# 默认模型路径配置（相对于项目根目录）
-DEFAULT_ARM_PATH = PROJECT_ROOT / "models" / "rm75b" / "rm75b.xml"  # RM75B 7-DOF 机械臂
-DEFAULT_HAND_PATH = PROJECT_ROOT / "models" / "inspirehand" / "inspirehand.xml"  # Inspire 灵巧手
+DEFAULT_ARM_PATH = PROJECT_ROOT / "models" / "rm75b" / "rm75b.xml"
+DEFAULT_HAND_PATH = PROJECT_ROOT / "models" / "inspirehand" / "inspirehand.xml"
 
-# 类型别名：支持字符串或 Path 对象的路径参数
 PathLike = Union[str, Path]
 
 
@@ -48,8 +44,7 @@ PathLike = Union[str, Path]
 class JointPhysicsConfig:
     """
     单关节物理参数配置容器.
-    采用 dataclass 实现不可变配置对象，所有字段默认为 None。
-    None 表示"不覆盖，沿用 XML 原始值"，因此可以只指定需要修改的字段，其余字段保持原样。
+    所有字段默认为 None，表示不覆盖，沿用 XML 原始值。
 
     物理意义说明：
     stiffness: 弹性刚度 [N·m/rad]。正值产生恢复力矩使关节趋向 ref 角度。
@@ -73,9 +68,7 @@ class JointPhysicsConfig:
         range: 关节限位元组，None 表示不修改。
 
     Examples:
-        >>> # 创建高阻尼配置
         >>> config = JointPhysicsConfig(damping=100.0, frictionloss=0.1)
-        >>> # 创建带限位的刚度配置
         >>> config = JointPhysicsConfig(stiffness=10.0, ref=0.0, range=(-1.57, 1.57))
     """
     stiffness: Optional[float] = None
@@ -117,13 +110,11 @@ class PhysicsConfig:
                      4/6: 含扭转/滚动的完整摩擦模型
 
     Examples:
-        >>> # 基础配置：区分臂和手的物理特性
         >>> cfg = PhysicsConfig(
         ...     arm_defaults=JointPhysicsConfig(damping=50.0),
         ...     hand_defaults=JointPhysicsConfig(damping=2.0),
         ... )
         >>>
-        >>> # 高级配置：精细调整特定关节
         >>> cfg = PhysicsConfig(
         ...     hand_defaults=JointPhysicsConfig(stiffness=1.0),
         ...     per_joint_overrides={
@@ -141,19 +132,16 @@ class PhysicsConfig:
 
 # ====================== 物理参数配置 ======================
 DEFAULT_GRASP_PHYSICS = PhysicsConfig(
-    # 机械臂默认物理参数：较高的阻尼确保运动平稳
     arm_defaults=JointPhysicsConfig(
-        damping=100.0,  # 关节阻尼系数，抑制振荡
-        frictionloss=0.1,  # 摩擦损耗，模拟关节摩擦
-        armature=0.01,  # 电机惯量，影响动态响应
+        damping=100.0,
+        frictionloss=0.1,
+        armature=0.01,
     ),
-    # 机械手默认物理参数：低阻尼以实现灵活抓取
     hand_defaults=JointPhysicsConfig(
-        damping=1,  # 手指关节低阻尼，保证灵活性
-        frictionloss=0.01,  # 手指摩擦系数
-        armature=0.1,  # 手指电机惯量
+        damping=1,
+        frictionloss=0.01,
+        armature=0.1,
     ),
-    # 特定关节参数覆盖：拇指旋转关节需要更高阻尼以保持稳定性
     per_joint_overrides={
         "thumb_rotate_act_push_j": JointPhysicsConfig(damping=10.0),
         "joint1": JointPhysicsConfig(damping=100.0),
@@ -184,7 +172,6 @@ def _apply_joint_config(joint: mujoco.MjsJoint, cfg: JointPhysicsConfig) -> None
         此函数直接修改输入的 joint 对象，无返回值。
         range 字段从元组转换为列表以适配 MuJoCo API。
     """
-    # 按 MuJoCo 文档标准顺序应用参数
     if cfg.stiffness is not None:
         joint.stiffness = cfg.stiffness
     if cfg.damping is not None:
@@ -196,7 +183,7 @@ def _apply_joint_config(joint: mujoco.MjsJoint, cfg: JointPhysicsConfig) -> None
     if cfg.ref is not None:
         joint.ref = cfg.ref
     if cfg.range is not None:
-        joint.range = list(cfg.range)  # 元组转列表适配 MuJoCo API
+        joint.range = list(cfg.range)
 
 
 def _apply_physics_to_spec(
@@ -226,48 +213,26 @@ def _apply_physics_to_spec(
     Note:
         此函数直接修改输入的 spec 对象，无返回值。
         修改会立即反映在所有引用该 spec 的地方。
-
-    Examples:
-        >>> spec = mujoco.MjSpec.from_file("robot.xml")
-        >>> physics = PhysicsConfig(arm_defaults=JointPhysicsConfig(damping=10.0))
-        >>> _apply_physics_to_spec(spec, physics, "base_link")
-        [SpecBuilder] 物理参数已应用 (arm_defaults=JointPhysicsConfig(...), ...)
     """
-    # ----- 1. 遍历所有关节应用物理参数 -----
-    # spec.joints 返回模型内全部 MjsJoint 的列表（包含臂和手）
     for joint in spec.joints:
         name: str = joint.name or ""
-        # 通过前缀判断关节归属（简单但有效的启发式规则）
         is_hand = name.startswith(hand_prefix)
 
-        # 应用分组默认值（机械臂或手爪）
         base_cfg = physics.hand_defaults if is_hand else physics.arm_defaults
         _apply_joint_config(joint, base_cfg)
 
-        # 应用精细覆盖（同时尝试带 prefix 和不带 prefix 的名称）
-        # 例如配置 "finger1" 可以匹配 "inspirehand_finger1"
         bare_name = name[len(hand_prefix):] if is_hand else name
         for lookup in (name, bare_name):
             if lookup in physics.per_joint_overrides:
                 _apply_joint_config(joint, physics.per_joint_overrides[lookup])
                 break
 
-    # ----- 2. 遍历所有几何体应用接触参数 -----
-    # 可选：修改全局接触摩擦属性
     if physics.geom_friction is not None or physics.geom_condim is not None:
         for geom in spec.geoms:
             if physics.geom_friction is not None:
-                # friction 需要 list 类型，元组会被拒绝
                 geom.friction = list(physics.geom_friction)
             if physics.geom_condim is not None:
                 geom.condim = physics.geom_condim
-
-    # 日志输出：确认应用情况，便于调试
-    # print(
-    #     f"[SpecBuilder] 物理参数已应用 (arm_defaults={physics.arm_defaults}, "
-    #     f"hand_defaults={physics.hand_defaults}, "
-    #     f"overrides={list(physics.per_joint_overrides.keys())})"
-    # )
 
 
 # ====================== 公开接口 ======================
@@ -294,80 +259,51 @@ def get_combined_spec(
         >>> model = spec.compile()
         >>> reader.bind(model)
     """
-    # ----- 路径解析与文件检查 -----
-    # 使用 Path 对象统一处理字符串和 Path 输入，自动适配操作系统路径分隔符
     arm_path = Path(arm_path) if arm_path else DEFAULT_ARM_PATH
     hand_path = Path(hand_path) if hand_path else DEFAULT_HAND_PATH
 
-    # 提前检查文件存在性，避免 MuJoCo 底层抛出难以理解的错误
     if not arm_path.exists():
         raise FileNotFoundError(f"机械臂模型文件不存在: {arm_path}")
     if not hand_path.exists():
         raise FileNotFoundError(f"机械手模型文件不存在: {hand_path}")
 
-    # print(f"[SpecBuilder] 加载机械臂: {arm_path.name}")
-    # print(f"[SpecBuilder] 加载机械手: {hand_path.name}")
-
-    # ----- 加载 MjSpec -----
-    # from_file 是 MjSpec 的静态工厂方法，解析 XML 但不编译
     arm_spec = mujoco.MjSpec.from_file(str(arm_path))
     hand_spec = mujoco.MjSpec.from_file(str(hand_path))
 
-    # ----- 修复手模型根节点偏移 -----
-    # 某些手模型 XML 根 body 带有非零位置，会导致 attach 后位置错误
-    # 规范做法：根 body 应位于原点，attach 时通过 frame 控制相对位姿
     hand_root = hand_spec.worldbody.first_body()
     if hand_root is None:
         raise ValueError("手模型 XML 缺少根节点 (worldbody 下无 body)。")
 
     original_pos = np.array(hand_root.pos)
-    if np.linalg.norm(original_pos) > 1e-6:  # 检测到显著偏移（>1微米）
-        # print(f"[SpecBuilder] 检测到根节点偏移 {original_pos}，已重置为 [0, 0, 0]")
+    if np.linalg.norm(original_pos) > 1e-6:
         hand_root.pos = [0.0, 0.0, 0.0]
 
-    # ----- 寻找挂载点 -----
-    # attach_point_name 必须是机械臂模型中已存在的 body 名称
     try:
         attach_body = arm_spec.body(attach_point_name)
     except KeyError:
-        # 挂载点不存在时，列出所有可用 body 帮助用户排查
         available = [b.name for b in arm_spec.worldbody.bodies()]
         raise ValueError(
             f"未在机械臂模型中找到挂载点 '{attach_point_name}'。\n"
             f"可用 body 名称: {available}"
         )
 
-    # ----- 挂载机械手 -----
-    # 1. 在挂载点 body 下创建 frame（局部坐标系）
     attach_frame = attach_body.add_frame()
-    # 2. 将手模型根 body attach 到该 frame，自动添加前缀避免命名冲突
     attached_body = attach_frame.attach_body(hand_root, prefix="inspirehand_", suffix="")
-    # print(f"[SpecBuilder] 成功挂载: '{attached_body.name}' → '{attach_body.name}'")
 
-    # ----- 设置位姿变换（欧拉角 → 四元数）-----
-    # 使用 scipy 进行旋转合成：先单位旋转，再应用指定欧拉角
-    # MuJoCo 使用 [w, x, y, z] 四元数格式，scipy 输出 [x, y, z, w]，需要转换
-    attach_frame.pos = [0.0, 0.0, 0.0]  # 无位置偏移，纯旋转
-    # 旋转合成：R = R_initial * R_euler，默认 R_initial 为单位旋转
+    attach_frame.pos = [0.0, 0.0, 0.0]
     rotation = R.from_quat([0, 0, 0, 1]) * R.from_euler("xyz", rot_xyz_deg, degrees=True)
     q_xyzw = rotation.as_quat()
-    # 格式转换：scipy [x,y,z,w] → MuJoCo [w,x,y,z]
     attach_frame.quat = [q_xyzw[3], q_xyzw[0], q_xyzw[1], q_xyzw[2]]
-    # print(f"[SpecBuilder] 姿态设定完成: Euler={rot_xyz_deg} deg")
 
-    # ----- 应用物理参数（可选）-----
     if physics is not None:
         _apply_physics_to_spec(arm_spec, physics, arm_root_name=attach_point_name)
     else:
         _apply_physics_to_spec(arm_spec, DEFAULT_GRASP_PHYSICS, arm_root_name=attach_point_name)
 
-    # 配置仿真参数：适配机械臂的高频控制和灵巧手的复杂约束
-    arm_spec.option.timestep = 0.001  # 1kHz 仿真频率
-    arm_spec.option.solver = mujoco.mjtSolver.mjSOL_NEWTON  # 牛顿法求解器
-    arm_spec.option.iterations = 100  # 增加迭代次数以处理灵巧手的复杂约束
+    arm_spec.option.timestep = 0.001
+    arm_spec.option.solver = mujoco.mjtSolver.mjSOL_NEWTON
+    arm_spec.option.iterations = 100
 
-    # ----- 初始化触觉传感器读取器 -----
-    # 使用 TactileReader 统一管理传感器逻辑，替代旧的 add_touch_sensors_to_spec 函数
     reader = TactileReader.create(tactile_backend)
     reader.build(arm_spec, hand_path, prefix="inspirehand_")
 
@@ -395,12 +331,10 @@ def load_combined_model(
         physics=physics,
         tactile_backend=tactile_backend,
     )
-    # print("[SpecBuilder] 正在编译模型...")
     model = spec.compile()
     reader.bind(model)
     data = mujoco.MjData(model)
-    # print(f"[SpecBuilder] 编译完成。nv={model.nv}, nu={model.nu}")
-    return model, data, reader  # ← 返回 reader
+    return model, data, reader
 
 
 # ====================== 独立运行入口 ======================
@@ -421,23 +355,17 @@ if __name__ == "__main__":
     """
     print("--- 独立运行模式：预览合成机械臂 ---")
     try:
-        # 加载并编译模型
         model, data, reader = load_combined_model()
 
-        # 启动被动查看器（非阻塞，允许外部控制循环）
         with viewer.launch_passive(model, data) as v:
             print("[Viewer] 查看器已启动，关闭窗口退出...")
             while v.is_running():
-                # 单步物理仿真
                 mujoco.mj_step(model, data)
-                # 同步查看器显示
                 v.sync()
 
     except FileNotFoundError as e:
-        # 模型文件缺失（常见首次运行错误）
         print(f"\n[错误] 文件未找到: {e}")
         print("请检查 'models/' 目录结构是否正确，确保包含 rm75b/ 和 inspirehand/ 子目录")
     except Exception as e:
-        # 捕获所有其他异常，打印完整堆栈
         print(f"\n[错误] 发生未知异常: {e}")
         traceback.print_exc()

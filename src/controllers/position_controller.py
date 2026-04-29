@@ -1,238 +1,206 @@
 """
-操作空间控制器（OSC）与兼容旧版 IK/PD 控制实现.
+位置控制器模块（基类 + OSC/IK 子类实现）.
 
-本模块实现两个核心控制器：
-1. OSC_PositionController: 基于动力学的力矩控制器。利用操作空间惯量矩阵 
-   将笛卡尔空间的期望加速度映射为关节力矩，实现动力学解耦。
-2. IK_PositionController: 基于数值 IK 的位置控制器（兼容旧版）。使用 
-   自适应 DLS 求解逆运动学，并在关节空间执行 PD 控制。
+架构：
+- BasePositionController: 抽象基类，封装关节索引解析、手部 PD、工具方法等公共逻辑。
+- OSCController: 基于操作空间动力学的力矩控制器（OSC）。
+- IKController: 基于数值 IK + 关节 PD 的位置控制器。
+
+统一接口：
+- set_ee_target(data, pos, quat, hand)  → 末端笛卡尔空间控制，同时更新前馈历史
+- set_joint_target(data, arm, hand)     → 关节空间控制
+- hold(data)                            → 保持当前目标，重算力矩，不更新前馈历史
+- reset(data)                           → 重置所有状态
+- get_ee_pose(data)                     → 获取当前末端位姿
+- get_joint_state(data)                 → 获取当前关节角和速度
+
+RL 使用模式（推荐）：
+    # 构造时不需要指定 RL 决策频率，自动测量
+    ctrl = OSCController(base, model)
+
+    # RL 步（任意频率）：更新目标，同时做一步仿真控制
+    ctrl.set_ee_target(data, pos, quat)
+
+    # 仿真步：保持目标，重算力矩
+    for _ in range(sim_steps_per_policy_step):
+        ctrl.hold(data)
+        mujoco.mj_step(model, data)
 
 设计要点：
-- OSC 直接在笛卡尔空间定义期望加速度，通过 Λ 映射到关节力矩。
-- 采用截断 SVD 伪逆处理奇异性，避免在不可控方向施加力。
-- 手部自由度独立处理，避免将手部纳入任务空间控制（手部位姿难以用单一刚体描述）。
-- 支持零空间恢复、速度前馈、力矩变化率限制和关节绝对限幅。
-- 兼容旧版接口：set_target 退化为关节 PD，set_ee_target 启用 OSC 或 IK。
+- hold 与 set_* 严格分离：hold 不触碰前馈历史，避免速度估计污染。
+- 速度前馈 dt 使用自动测量的真实策略周期，而非固定配置值，避免配置错误导致速度估计失真。
+- IKController 的关节 PD 包含重力补偿（qfrc_bias），与 OSCController 行为一致。
+- 预设增益通过工厂函数创建，避免模块级可变 ndarray 共享。
 
 依赖：
-- numpy: 数值计算
-- mujoco: 物理引擎接口
-- dataclasses: 配置管理
+    numpy, mujoco, dataclasses, time
 """
 
 import numpy as np
 import mujoco
+import time
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
-import warnings
 from enum import Enum, auto
 
-# ====================== 内部枚举 ======================
+
+# ====================== 枚举 ======================
+
 class _CtrlMode(Enum):
     """
-    控制器内部模式追踪.
-    用于检测控制模式切换，在切换时重置历史状态（速度前馈、力矩历史），
-    避免模式切换时的控制跳变。
+    控制模式追踪.
+    用于检测切换时清除历史状态（速度前馈、力矩历史），避免模式切换跳变。
     """
-    NONE = auto()      # 初始状态
-    JOINT_PD = auto()  # 关节空间 PD 模式（set_target）
-    OSC = auto()       # 操作空间控制模式（set_ee_target）
+    NONE = auto()
+    JOINT_PD = auto()
+    EE = auto()
 
-# ====================== 控制参数配置 ======================
+
+# ====================== 增益配置 ======================
+
 @dataclass
 class OSCGains:
     """
-    操作空间控制器增益配置.
-    所有增益均定义在笛卡尔任务空间，物理意义直观：
-    - Kp 对应弹簧刚度 [N/m 或 N·m/rad]
-    - Kd 对应阻尼系数 [N·s/m 或 N·m·s/rad]
-    临界阻尼条件：Kd ≈ 2 * sqrt(Kp)（对单位质量系统）
+    OSC 控制器增益配置.
 
     Attributes:
-        # 笛卡尔任务空间增益
-        kp_pos: 位置比例增益（笛卡尔刚度）[N/m]。建议范围：[100, 800]。
-        kd_pos: 位置微分增益（笛卡尔阻尼）[N·s/m]。
-                临界阻尼参考：2*sqrt(kp_pos)，例如 kp=400 → kd≈40。
+        kp_pos: 位置比例增益（笛卡尔刚度）[N/m]。
+        kd_pos: 位置微分增益（笛卡尔阻尼）[N·s/m]。临界阻尼参考：2*sqrt(kp_pos)。
         kp_rot: 姿态比例增益 [N·m/rad]。
         kd_rot: 姿态微分增益 [N·m·s/rad]。
-
-        # 关节空间增益（独立配置，不再从笛卡尔增益换算）
-        kp_joint: 机械臂关节比例增益（关节空间 PD）[N·m/rad]。
-                  仅用于 set_target 关节空间模式。通常比笛卡尔增益高 100 倍量级。
-        kd_joint: 机械臂关节微分增益 [N·m·s/rad]。
-
-        kp_hand: 机械手关节比例增益 [N·m/rad]。
-        kd_hand: 机械手关节微分增益 [N·m·s/rad]。
-
-        # 前馈与滤波
-        ff_scale: 速度前馈缩放系数 [0~1]。
-                  1.0 = 完全前馈目标速度（低延迟轨迹跟踪）；
-                  0.0 = 纯 PD（退化为经典 OSC）。
-                  建议：平滑目标用 0.8~1.0，有噪声目标用 0.3~0.6。
-        vel_filter_alpha: 目标速度低通滤波系数 [0~1]。
-                          越小越平滑，越大响应越快。建议 0.4~0.7。
-
-        # 数值稳定性
-        singular_thresh: SVD 截断阈值，低于此奇异值的方向被忽略。
-                         建议 [0.01, 0.1]，值越大奇异处越保守。
-
-        # 零空间控制
-        null_kp: 零空间姿态恢复增益（将冗余自由度拉向参考构型）。
-                 0 = 不使用零空间控制。
-        null_kd: 零空间阻尼增益，建议 2*sqrt(null_kp) 实现临界阻尼。
-                 None 时自动计算。
-
-        # 安全限制
+        kp_joint: 关节空间比例增益（仅 set_joint_target 使用）[N·m/rad]。
+        kd_joint: 关节空间微分增益 [N·m·s/rad]。
+        kp_hand: 手部关节比例增益（数组，支持各手指不同增益）。
+        kd_hand: 手部关节微分增益。
+        ff_scale: 速度前馈缩放系数 [0~1]。1.0=完全前馈，0.0=纯 PD。
+        vel_filter_alpha: 目标速度低通滤波系数 [0~1]。越小越平滑，越大响应越快。
+        singular_thresh: SVD 截断阈值，低于此值的奇异方向被忽略。建议 [0.01, 0.1]。
+        null_kp: 零空间姿态恢复比例增益。0=禁用零空间控制。
+        null_kd: 零空间阻尼增益，None 时自动计算为 2*sqrt(null_kp)。
         torque_rate_limit: 关节力矩变化率限制 [N·m/step]。
-                           防止力矩突变导致振动或硬件损坏。
-                           建议根据电机响应特性设置，通常 20-100 N·m/step。
     """
-    # 笛卡尔任务空间增益
     kp_pos: float = 400.0
     kd_pos: float = 40.0
     kp_rot: float = 100.0
     kd_rot: float = 20.0
 
-    # 关节空间增益（独立配置，避免魔法换算）
-    kp_joint: float = 40000.0  # 关节空间刚度通常比笛卡尔高 100 倍量级
-    kd_joint: float = 400.0    # 对应临界阻尼
+    kp_joint: float = 40000.0
+    kd_joint: float = 400.0
 
-    # 手部增益（数组，支持各手指不同增益）
-    kp_hand: np.ndarray = field(default_factory=lambda: np.full(6, 400000.))
-    kd_hand: np.ndarray = field(default_factory=lambda: np.full(6, 400.))
+    kp_hand: np.ndarray = field(default_factory=lambda: np.full(6, 400000.0))
+    kd_hand: np.ndarray = field(default_factory=lambda: np.full(6, 400.0))
 
-    # 前馈与滤波
     ff_scale: float = 0.9
     vel_filter_alpha: float = 0.5
-
-    # 数值稳定性
     singular_thresh: float = 0.01
 
-    # 零空间控制
     null_kp: float = 10.0
-    null_kd: Optional[float] = None  # None 时自动计算为 2*sqrt(null_kp)
-
-    # 安全限制
+    null_kd: Optional[float] = None
     torque_rate_limit: float = 50.0
 
     def __post_init__(self):
-        """自动计算默认零空间阻尼（若未指定）."""
         if self.null_kd is None:
             self.null_kd = 2.0 * np.sqrt(self.null_kp)
 
-# ====================== 预设增益配置 ======================
-Stable_OSCGains = OSCGains(
-    kp_pos=500, kd_pos=35,      # 轻微欠阻尼
-    kp_rot=120, kd_rot=16,
-    kp_joint=50000.0,           # 高刚度用于初始化
-    kd_joint=450.0,
-    ff_scale=0.95,
-    vel_filter_alpha=0.4,
-    singular_thresh=0.02,
-    null_kp=3, null_kd=3.5,     # 略高于临界阻尼，保守
-    torque_rate_limit=30.0,     # 保守的力矩变化率
-)
 
-FastTracking_OSCGains = OSCGains(
-    kp_pos=600,                 # 高刚度
-    kd_pos=30,                  # 欠阻尼（1.2*sqrt(600)≈29）
-    kp_rot=150, kd_rot=15,
-    kp_joint=60000.0, kd_joint=400.0,
-    ff_scale=1.0,               # 完全前馈
-    vel_filter_alpha=0.3,       # 快速响应，依赖平滑输入
-    singular_thresh=0.01,       # 较激进
-    null_kp=5, null_kd=4.5,     # 弱零空间约束
-    torque_rate_limit=80.0,     # 允许较快的力矩变化
-)
-
-FastPointToPoint_OSCGains = OSCGains(
-    kp_pos=800, kd_pos=28,      # 明显欠阻尼 ~sqrt(800)
-    kp_rot=200, kd_rot=20,
-    kp_joint=80000.0, kd_joint=350.0,
-    ff_scale=0.0,               # 纯 PD，无前馈（目标跳变时更稳定）
-    vel_filter_alpha=0.5,
-    singular_thresh=0.05,
-    null_kp=0,                  # 禁用零空间，全自由度用于速度
-    null_kd=0.0,
-    torque_rate_limit=100.0,    # 点到点运动允许快速调整
-)
-
-# ====================== OSC 控制器 ======================
-class OSC_PositionController:
+@dataclass
+class PDGains:
     """
-    操作空间控制器（OSC）+ 手部关节 PD 控制器.
-
-    OSC 核心：基于动力学模型的力矩控制器。
-    利用操作空间惯量矩阵 Λ 将笛卡尔空间的期望加速度映射为关节力矩，
-    实现动力学解耦，避免了旧版 IK+PD 的两层解耦结构性延迟。
-
-    接口兼容性：
-    - set_ee_target(data, ee_pos_target, ee_quat_target, hand_target) → OSC 模式
-    - set_target(data, arm_target, hand_target) → 退化为关节 PD
-    - reset_targets(data) → 重置所有状态
-
-    数学原理与控制流：
-    1. 任务空间动力学：Λ = (J M⁻¹ Jᵀ)⁻¹ （操作空间惯量矩阵）
-    2. 任务空间力：F = Λ (ẍ_des - J̇q̇) + μ + p
-    3. 关节力矩：τ = Jᵀ F + Nᵀ τ_null + (I - JᵀJ̄)ᵀ bias
-       其中：
-       - Λ：操作空间惯量矩阵（质量在任务空间的投影）
-       - J̄ = M⁻¹JᵀΛ：动力学一致性伪逆
-       - N = I - J̄J：零空间投影矩阵
-       - τ_null：零空间恢复力矩（将冗余自由度拉回参考构型）
+    IK 控制器增益配置.
 
     Attributes:
-        base: 硬件/模型抽象接口（HandArmController 实例）。
-        model: MuJoCo 模型对象。
-        gains: OSC 增益配置。
-        arm_qpos_ids: 机械臂 qpos 索引数组，shape (7,)。
-        arm_qvel_ids: 机械臂 qvel 索引数组，shape (7,)。
-        arm_joint_ids: 机械臂 joint 索引数组，shape (7,)。
-        arm_range: 机械臂关节限位 (7, 2)，[lower, upper]。
-        hand_qpos_ids/hand_qvel_ids/hand_joint_ids/hand_range: 同上，针对机械手。
-        _null_qpos_ref: 零空间恢复目标构型（默认为初始化时的 qpos）。
-        _prev_pos_target: 上帧位置目标（用于速度估计）。
-        _prev_quat_target: 上帧姿态目标（用于角速度估计）。
-        _vel_ff_pos: 滤波后的目标位置速度前馈。
-        _vel_ff_rot: 滤波后的目标角速度前馈。
-        ee_id: 末端 Site 的 MuJoCo ID。
-        jac_p/jac_r: 雅可比缓冲区（预分配，避免实时分配）。
-        _M_full: 完整惯量矩阵缓冲区（预分配，nv×nv）。
-        _arm_torques/_hand_torques: 力矩计算缓冲区。
-        _hand_target: 手部目标缓存。
-        _arm_target: 关节空间目标缓存（用于 set_target）。
-        _prev_tau: 上帧力矩（用于变化率限制）。
-        _ctrl_mode: 当前控制模式（用于检测切换）。
+        kp_arm: 机械臂关节比例增益 [N·m/rad]。
+        kd_arm: 机械臂关节微分增益 [N·m·s/rad]。
+        kp_hand: 手部关节比例增益。
+        kd_hand: 手部关节微分增益。
     """
+    kp_arm: np.ndarray = field(default_factory=lambda: np.full(7, 40000.0))
+    kd_arm: np.ndarray = field(default_factory=lambda: np.full(7, 400.0))
+    kp_hand: np.ndarray = field(default_factory=lambda: np.full(6, 40000.0))
+    kd_hand: np.ndarray = field(default_factory=lambda: np.full(6, 400.0))
+
+
+# ====================== 预设 OSC 增益（工厂函数） ======================
+
+def stable_osc_gains() -> OSCGains:
+    """稳定增益：保守的阻尼和力矩变化率，适合一般操作任务。"""
+    return OSCGains(
+        kp_pos=500, kd_pos=35,
+        kp_rot=120, kd_rot=16,
+        kp_joint=50000.0, kd_joint=450.0,
+        ff_scale=0.95, vel_filter_alpha=0.4,
+        singular_thresh=0.02,
+        null_kp=3, null_kd=3.5,
+        torque_rate_limit=30.0,
+    )
+
+
+def fast_tracking_osc_gains() -> OSCGains:
+    """快速跟踪增益：高刚度+完全前馈，适合平滑轨迹跟踪。"""
+    return OSCGains(
+        kp_pos=600, kd_pos=30,
+        kp_rot=150, kd_rot=15,
+        kp_joint=60000.0, kd_joint=400.0,
+        ff_scale=1.0, vel_filter_alpha=0.3,
+        singular_thresh=0.01,
+        null_kp=5, null_kd=4.5,
+        torque_rate_limit=80.0,
+    )
+
+
+def fast_point_to_point_osc_gains() -> OSCGains:
+    """点到点增益：高刚度+纯 PD（无前馈），适合目标跳变场景。"""
+    return OSCGains(
+        kp_pos=800, kd_pos=28,
+        kp_rot=200, kd_rot=20,
+        kp_joint=80000.0, kd_joint=350.0,
+        ff_scale=0.0, vel_filter_alpha=0.5,
+        singular_thresh=0.05,
+        null_kp=0, null_kd=0.0,
+        torque_rate_limit=100.0,
+    )
+
+
+# ====================== 基类 ======================
+
+class BasePositionController(ABC):
+    """
+    位置控制器抽象基类.
+
+    封装所有子类共用的基础设施：
+    - 关节索引解析（qpos / qvel / joint IDs）
+    - 关节范围与力矩限制
+    - 手部 PD 控制
+    - 末端位姿与关节状态读取
+
+    子类必须实现：
+        set_ee_target, set_joint_target, hold, reset
+
+    Attributes:
+        base: 硬件/模型抽象接口（提供 arm_names, hand_names, apply_control 等）。
+        model: MuJoCo 模型对象。
+        arm_qpos_ids: 机械臂 qpos 索引 (ARM_DOF,)。
+        arm_qvel_ids: 机械臂 qvel 索引 (ARM_DOF,)。
+        arm_joint_ids: 机械臂 joint 索引 (ARM_DOF,)。
+        arm_range: 机械臂关节限位 (ARM_DOF, 2)，[lower, upper]。
+        hand_qpos_ids / hand_qvel_ids / hand_joint_ids / hand_range: 同上，针对手部。
+        ee_id: 末端 Site 的 MuJoCo ID。
+        jac_p / jac_r: 雅可比缓冲区（预分配，nv 列）。
+        _arm_torques / _hand_torques: 力矩缓冲区（预分配）。
+        _arm_target / _hand_target: 当前目标缓存。
+    """
+
     def __init__(
         self,
         base,
         model: mujoco.MjModel,
-        gains: Optional[OSCGains] = None,
         ee_site_name: str = "right_hand_site",
-        null_qpos_ref: Optional[np.ndarray] = None,
     ):
-        """
-        初始化 OSC 控制器.
-
-        Args:
-            base: 硬件抽象接口，需提供：
-                - arm_names, hand_names, hand_key_order, actuator_map
-                - torque_min/max, ARM_DOF, HAND_DOF
-                - apply_control 方法
-            model: MuJoCo 模型对象。
-            gains: OSC 增益配置，None 时使用默认值。
-            ee_site_name: 末端执行器 Site 名称，默认 "right_hand_site"。
-            null_qpos_ref: 零空间恢复目标构型，None 时在首帧从 data.qpos 初始化。
-
-        Raises:
-            ValueError: 如果 ee_site_name 在模型中不存在。
-        """
         self.base = base
         self.model = model
-        self.gains = gains if gains is not None else OSCGains()
 
-        # ----- 1. 关节索引解析 -----
+        # 关节索引
         self.arm_qpos_ids, self.arm_qvel_ids, self.arm_joint_ids = \
             self._resolve_joint_ids(base.arm_names)
         self.hand_qpos_ids, self.hand_qvel_ids, self.hand_joint_ids = \
@@ -240,48 +208,34 @@ class OSC_PositionController:
                 [base.hand_names[k] for k in base.hand_key_order if k in base.hand_names]
             )
 
-        # ----- 2. 关节范围 -----
+        # 关节范围
         self.arm_range = model.jnt_range[self.arm_joint_ids]
         self.hand_range = model.jnt_range[self.hand_joint_ids]
 
-        # ----- 3. 力矩限制 -----
+        # 力矩限制
         self._torque_min = base.torque_min
         self._torque_max = base.torque_max
 
-        # ----- 4. 预分配缓冲区（性能优化） -----
+        # 预分配缓冲区（避免控制循环中频繁分配）
         nv = model.nv
         self.jac_p = np.zeros((3, nv))
         self.jac_r = np.zeros((3, nv))
-        self._M_full = np.zeros((nv, nv))
         self._arm_torques = np.zeros(base.ARM_DOF)
         self._hand_torques = np.zeros(base.HAND_DOF)
 
-        # ----- 5. 末端 Site ID -----
+        # 末端 Site ID
         self.ee_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, ee_site_name)
         if self.ee_id == -1:
             raise ValueError(f"Site '{ee_site_name}' not found in MuJoCo model.")
         self.ee_site_name = ee_site_name
 
-        # ----- 6. 零空间参考构型 -----
-        self._null_qpos_ref: Optional[np.ndarray] = (
-            null_qpos_ref.copy() if null_qpos_ref is not None else None
-        )
-
-        # ----- 7. 速度前馈状态 -----
-        self._prev_pos_target: Optional[np.ndarray] = None
-        self._prev_quat_target: Optional[np.ndarray] = None
-        self._vel_ff_pos = np.zeros(3)
-        self._vel_ff_rot = np.zeros(3)
-
-        # ----- 8. 目标缓存 -----
+        # 目标缓存（首次调用 set_* 时从 data.qpos 懒初始化）
+        self._arm_target: Optional[np.ndarray] = None
         self._hand_target: Optional[np.ndarray] = None
-        self._arm_target: Optional[np.ndarray] = None  # 用于 set_target 兼容
 
-        # ----- 9. 力矩变化率限制状态 -----
-        self._prev_tau: Optional[np.ndarray] = None
-        self._ctrl_mode = _CtrlMode.NONE  # 模式追踪
+    # ====================== 抽象接口 ======================
 
-    # ====================== 公共接口 1：OSC 模式 ======================
+    @abstractmethod
     def set_ee_target(
         self,
         data: mujoco.MjData,
@@ -290,134 +244,557 @@ class OSC_PositionController:
         hand_target: Optional[np.ndarray] = None,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        操作空间控制（OSC）主接口.
+        设置末端目标并计算控制力矩（RL 步调用，自动测量真实频率）.
 
-        计算并应用末端执行器的笛卡尔空间控制力矩，同时独立控制手部。
-        控制流程：
-        1. 更新速度前馈（低通滤波平滑）
-        2. 获取当前状态（位置、雅可比）
-        3. 计算笛卡尔误差（位置+姿态）
-        4. 计算任务空间期望加速度（PD 反馈力项）
-        5. 操作空间动力学计算（Λ 映射）
-        6. 零空间恢复力矩计算
-        7. 力矩限制与平滑（变化率限制）
-        8. 手部独立 PD 控制
-        9. 应用控制信号
+        更新目标缓存和前馈速度历史，计算并应用力矩。
+        真实控制周期通过 wall-clock 自动测量，无需手动配置。
 
         Args:
             data: MuJoCo 数据对象。
             ee_pos_target: 目标位置 [3,]，单位米。
-            ee_quat_target: 目标姿态四元数 [w,x,y,z] [4,]，可选。
-                            None 表示仅位置控制（姿态自由）。
-            hand_target: 手部目标关节角 [HAND_DOF,]，可选。
-                         None 表示保持当前缓存目标。
+            ee_quat_target: 目标姿态四元数 [w,x,y,z] [4,]，可选（None=仅位置）。
+            hand_target: 手部目标关节角 [HAND_DOF,]，可选（None=保持缓存）。
 
         Returns:
-            Tuple[np.ndarray, np.ndarray]: (arm_torques, hand_torques) 实际应用的力矩 [N·m]。
-
-        Raises:
-            ValueError: 如果目标数组形状不匹配。
-
-        Examples:
-            >>> # 纯位置控制（姿态自由）
-            >>> osc.set_ee_target(data, np.array([0.5, 0.2, 0.3]))
-            >>>
-            >>> # 全 6D 位姿控制
-            >>> osc.set_ee_target(data, pos, quat, hand_target=np.array([0.1]*6))
+            (arm_torques, hand_torques): 实际应用的力矩 [N·m]。
         """
-        # 检测模式切换，切换时清除历史力矩（避免突变）
-        if self._ctrl_mode != _CtrlMode.OSC:
+
+    @abstractmethod
+    def set_joint_target(
+        self,
+        data: mujoco.MjData,
+        arm_target: np.ndarray,
+        hand_target: Optional[np.ndarray] = None,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        设置关节目标并计算控制力矩（RL 步调用）.
+
+        Args:
+            data: MuJoCo 数据对象。
+            arm_target: 机械臂目标关节角度 [ARM_DOF,]。
+            hand_target: 手部目标关节角 [HAND_DOF,]，可选。
+
+        Returns:
+            (arm_torques, hand_torques): 实际应用的力矩 [N·m]。
+        """
+
+    @abstractmethod
+    def hold(self, data: mujoco.MjData) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        保持当前缓存目标，重新计算并应用力矩（仿真步调用）.
+
+        与 set_* 的核心区别：
+        - 不更新目标缓存
+        - 不更新前馈速度历史（避免污染下次 set_ee_target 的速度估计）
+        - 基于当前仿真状态重新计算力矩（动力学每步都在变，必须重算）
+
+        Args:
+            data: MuJoCo 数据对象。
+
+        Returns:
+            (arm_torques, hand_torques): 实际应用的力矩 [N·m]。
+        """
+
+    @abstractmethod
+    def reset(self, data: mujoco.MjData) -> None:
+        """
+        重置所有控制器状态.
+
+        在 episode 结束、轨迹切换或急停时调用。
+        子类至少应重置：目标缓存、历史速度/力矩状态。
+
+        Args:
+            data: MuJoCo 数据对象。
+        """
+
+    # ====================== 公共工具方法 ======================
+
+    def get_ee_pose(self, data: mujoco.MjData) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        获取当前末端位姿.
+
+        Returns:
+            (pos [3,], quat [w,x,y,z] [4,])
+        """
+        pos = data.site_xpos[self.ee_id].copy()
+        quat = np.zeros(4)
+        mujoco.mju_mat2Quat(quat, data.site_xmat[self.ee_id])
+        return pos, quat
+
+    def get_joint_state(
+        self, data: mujoco.MjData
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        获取机械臂当前关节角和角速度.
+
+        封装 qpos/qvel 索引，避免外部直接操作内部索引数组。
+
+        Returns:
+            (qpos [ARM_DOF,], qvel [ARM_DOF,])
+        """
+        return (
+            data.qpos[self.arm_qpos_ids].copy(),
+            data.qvel[self.arm_qvel_ids].copy(),
+        )
+
+    # ====================== 手部控制（共享实现） ======================
+
+    def _update_hand(
+        self,
+        data: mujoco.MjData,
+        hand_target: Optional[np.ndarray],
+        kp_hand: np.ndarray,
+        kd_hand: np.ndarray,
+    ) -> None:
+        """
+        手部关节 PD 控制（内部共享实现）.
+
+        手部不纳入末端任务空间控制，始终独立执行关节 PD。
+        首次调用时以当前关节角懒初始化目标；hand_target 为 None 时沿用缓存目标。
+
+        Args:
+            data: MuJoCo 数据。
+            hand_target: 手部目标，None 时保持缓存。
+            kp_hand: 手部比例增益数组。
+            kd_hand: 手部微分增益数组。
+        """
+        if self._hand_target is None:
+            self._hand_target = data.qpos[self.hand_qpos_ids].copy()
+
+        if hand_target is not None:
+            self._hand_target = np.clip(
+                hand_target, self.hand_range[:, 0], self.hand_range[:, 1]
+            )
+
+        e_q = self._hand_target - data.qpos[self.hand_qpos_ids]
+        e_qd = -data.qvel[self.hand_qvel_ids]
+        tau = kp_hand * e_q + kd_hand * e_qd
+
+        self._hand_torques[:] = np.clip(
+            tau,
+            self._torque_min[self.base.ARM_DOF:],
+            self._torque_max[self.base.ARM_DOF:],
+        )
+
+    # ====================== 私有工具方法 ======================
+
+    def _resolve_joint_ids(
+        self, actuator_names
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """将执行器名称列表解析为 qpos / qvel / joint 三组 MuJoCo 内部索引."""
+        qpos_ids, qvel_ids, joint_ids = [], [], []
+        for name in actuator_names:
+            act_id = self.base.actuator_map[name]
+            joint_id = self.model.actuator_trnid[act_id, 0]
+            joint_ids.append(joint_id)
+            qpos_ids.append(self.model.jnt_qposadr[joint_id])
+            qvel_ids.append(self.model.jnt_dofadr[joint_id])
+        return (
+            np.array(qpos_ids, dtype=np.int32),
+            np.array(qvel_ids, dtype=np.int32),
+            np.array(joint_ids, dtype=np.int32),
+        )
+
+
+# ====================== OSC 子类 ======================
+
+class OSCController(BasePositionController):
+    """
+    操作空间控制器（OSC）.
+
+    自动测量真实 RL 控制周期，用于速度前馈计算。
+    无需手动配置 policy_hz，自适应 20Hz/30Hz/50Hz 及异步推理场景。
+    """
+
+    def __init__(
+        self,
+        base,
+        model: mujoco.MjModel,
+        gains: Optional[OSCGains] = None,
+        ee_site_name: str = "right_hand_site",
+        null_qpos_ref: Optional[np.ndarray] = None,
+    ):
+        super().__init__(base, model, ee_site_name)
+
+        self.gains = gains if gains is not None else OSCGains()
+
+        # 初始策略周期（仅用于第一次调用前，会被自动测量覆盖）
+        self.policy_dt: float = 0.05  # 默认 20Hz 初值
+
+        # 完整惯量矩阵缓存
+        self._M_full = np.zeros((model.nv, model.nv))
+
+        # 零空间参考
+        self._null_qpos_ref = (
+            null_qpos_ref.copy() if null_qpos_ref is not None else None
+        )
+
+        # 前馈速度历史
+        self._prev_pos_target = None
+        self._prev_quat_target = None
+        self._vel_ff_pos = np.zeros(3)
+        self._vel_ff_rot = np.zeros(3)
+
+        # EE hold 缓存
+        self._cached_ee_pos_target = None
+        self._cached_ee_quat_target = None
+
+        # 力矩变化率限制历史
+        self._prev_tau = None
+
+        # 当前控制模式
+        self._ctrl_mode = _CtrlMode.NONE
+
+        # 策略周期自动测量
+        self._last_policy_time: Optional[float] = None
+
+    # ============================================================
+    # 策略周期自动测量
+    # ============================================================
+
+    def _update_policy_dt(self) -> None:
+        """
+        自动测量真实 RL 控制周期.
+
+        使用 wall-clock 时间估计两次 set_ee_target 间隔，
+        并进行低通滤波，避免抖动。
+        过滤异常值（暂停/断点/推理延迟尖峰），确保测量鲁棒。
+        """
+        now = time.perf_counter()
+
+        if self._last_policy_time is not None:
+            dt_measured = now - self._last_policy_time
+
+            # 过滤异常值（防止暂停/断点/推理延迟尖峰污染）
+            if 1e-4 < dt_measured < 1.0:
+                alpha = 0.2
+                self.policy_dt = (
+                    alpha * dt_measured
+                    + (1.0 - alpha) * self.policy_dt
+                )
+
+        self._last_policy_time = now
+
+    # ============================================================
+    # 公共接口
+    # ============================================================
+
+    def set_ee_target(
+        self,
+        data: mujoco.MjData,
+        ee_pos_target: np.ndarray,
+        ee_quat_target: Optional[np.ndarray] = None,
+        hand_target: Optional[np.ndarray] = None,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """RL 频率调用，自动测量真实周期."""
+
+        if self._ctrl_mode != _CtrlMode.EE:
             self._prev_tau = None
-            self._ctrl_mode = _CtrlMode.OSC
+            self._ctrl_mode = _CtrlMode.EE
 
-        g = self.gains
-        dt = self.model.opt.timestep
+        # 自动测量真实策略周期
+        self._update_policy_dt()
 
-        # 初始化零空间参考（首次调用）
         if self._null_qpos_ref is None:
             self._null_qpos_ref = data.qpos[self.arm_qpos_ids].copy()
 
-        # ==================== 1. 速度前馈计算 ====================
-        self._update_velocity_feedforward(ee_pos_target, ee_quat_target, dt, g)
+        g = self.gains
 
-        # ==================== 2. 当前状态获取 ====================
-        ee_pos = data.site_xpos[self.ee_id].copy()
-        # 计算末端雅可比（位置和旋转）
-        mujoco.mj_jacSite(self.model, data, self.jac_p, self.jac_r, self.ee_id)
-        J_p = self.jac_p[:, self.arm_qvel_ids].copy()  # 位置雅可比 (3, 7)
-        J_r = self.jac_r[:, self.arm_qvel_ids].copy()  # 旋转雅可比 (3, 7)
-        qd = data.qvel[self.arm_qvel_ids]              # 关节速度 (7,)
-        ee_vel = J_p @ qd                              # 末端线速度 (3,)
-
-        # ==================== 3. 笛卡尔误差计算 ====================
-        xacc_des, xacc_rot = self._compute_task_acceleration(
-            ee_pos, ee_pos_target, J_p, J_r, qd, g, ee_quat_target, data
+        # 更新速度前馈（使用自动测量的 policy_dt）
+        self._update_velocity_feedforward(
+            ee_pos_target,
+            ee_quat_target,
+            g,
         )
 
-        # ==================== 4. 操作空间动力学 ====================
-        tau_arm = self._compute_osc_torque(data, J_p, J_r, xacc_des, xacc_rot, g)
+        # 缓存 EE 目标
+        self._cached_ee_pos_target = ee_pos_target.copy()
+        self._cached_ee_quat_target = (
+            None if ee_quat_target is None else ee_quat_target.copy()
+        )
 
-        # ==================== 5. 力矩限制与平滑 ====================
+        # 更新手部目标
+        if hand_target is not None:
+            self._hand_target = np.clip(
+                hand_target,
+                self.hand_range[:, 0],
+                self.hand_range[:, 1],
+            )
+
+        return self._compute_and_apply_osc(
+            data,
+            ee_pos_target,
+            ee_quat_target,
+            g,
+        )
+
+    def set_joint_target(
+        self,
+        data: mujoco.MjData,
+        arm_target: np.ndarray,
+        hand_target: Optional[np.ndarray] = None,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """关节空间 PD."""
+
+        if self._ctrl_mode != _CtrlMode.JOINT_PD:
+            self._prev_tau = None
+            self._ctrl_mode = _CtrlMode.JOINT_PD
+
+        g = self.gains
+
+        self._arm_target = np.clip(
+            arm_target,
+            self.arm_range[:, 0],
+            self.arm_range[:, 1],
+        )
+
+        e_q = self._arm_target - data.qpos[self.arm_qpos_ids]
+        e_qd = -data.qvel[self.arm_qvel_ids]
+
+        tau_arm = (
+            g.kp_joint * e_q
+            + g.kd_joint * e_qd
+            + data.qfrc_bias[self.arm_qvel_ids]
+        )
+
         tau_arm = self._apply_torque_limits(tau_arm, g)
         self._arm_torques[:] = tau_arm
 
-        # ==================== 6. 手部控制 ====================
-        self._update_hand(data, hand_target)
+        self._update_hand(
+            data,
+            hand_target,
+            g.kp_hand,
+            g.kd_hand,
+        )
 
-        # ==================== 7. 应用控制 ====================
-        self.base.apply_control(data, self._arm_torques, self._hand_torques)
-        return self._arm_torques.copy(), self._hand_torques.copy()
+        self.base.apply_control(
+            data,
+            self._arm_torques,
+            self._hand_torques,
+        )
+
+        return (
+            self._arm_torques.copy(),
+            self._hand_torques.copy(),
+        )
+
+    def hold(
+        self,
+        data: mujoco.MjData,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """仿真频率调用."""
+
+        if self._ctrl_mode == _CtrlMode.EE:
+            if self._cached_ee_pos_target is None:
+                if self._arm_target is None:
+                    self._arm_target = data.qpos[self.arm_qpos_ids].copy()
+                return self._hold_joint_pd(data)
+            return self._hold_osc(data)
+
+        if self._arm_target is None:
+            self._arm_target = data.qpos[self.arm_qpos_ids].copy()
+
+        return self._hold_joint_pd(data)
+
+    def reset(self, data: mujoco.MjData) -> None:
+        """重置控制器."""
+
+        self._prev_pos_target = None
+        self._prev_quat_target = None
+
+        self._vel_ff_pos.fill(0.0)
+        self._vel_ff_rot.fill(0.0)
+
+        self._cached_ee_pos_target = None
+        self._cached_ee_quat_target = None
+
+        self._null_qpos_ref = data.qpos[self.arm_qpos_ids].copy()
+        self._arm_target = data.qpos[self.arm_qpos_ids].copy()
+        self._hand_target = data.qpos[self.hand_qpos_ids].copy()
+
+        self._prev_tau = None
+        self._ctrl_mode = _CtrlMode.NONE
+
+        # 清空策略周期测量状态
+        self._last_policy_time = None
+        self.policy_dt = 0.05  # 恢复默认初值
+
+    # ============================================================
+    # Hold
+    # ============================================================
+
+    def _hold_osc(
+        self,
+        data: mujoco.MjData,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """EE 模式保持."""
+
+        return self._compute_and_apply_osc(
+            data,
+            self._cached_ee_pos_target,
+            self._cached_ee_quat_target,
+            self.gains,
+        )
+
+    def _hold_joint_pd(
+        self,
+        data: mujoco.MjData,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """关节模式保持."""
+
+        g = self.gains
+
+        e_q = self._arm_target - data.qpos[self.arm_qpos_ids]
+        e_qd = -data.qvel[self.arm_qvel_ids]
+
+        tau_arm = (
+            g.kp_joint * e_q
+            + g.kd_joint * e_qd
+            + data.qfrc_bias[self.arm_qvel_ids]
+        )
+
+        tau_arm = self._apply_torque_limits(tau_arm, g)
+        self._arm_torques[:] = tau_arm
+
+        self._update_hand(
+            data,
+            None,
+            g.kp_hand,
+            g.kd_hand,
+        )
+
+        self.base.apply_control(
+            data,
+            self._arm_torques,
+            self._hand_torques,
+        )
+
+        return (
+            self._arm_torques.copy(),
+            self._hand_torques.copy(),
+        )
+
+    # ============================================================
+    # OSC 核心
+    # ============================================================
+
+    def _compute_and_apply_osc(
+        self,
+        data: mujoco.MjData,
+        ee_pos_target: np.ndarray,
+        ee_quat_target: Optional[np.ndarray],
+        g: OSCGains,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """OSC 主入口."""
+
+        mujoco.mj_jacSite(
+            self.model,
+            data,
+            self.jac_p,
+            self.jac_r,
+            self.ee_id,
+        )
+
+        J_p = self.jac_p[:, self.arm_qvel_ids].copy()
+        J_r = self.jac_r[:, self.arm_qvel_ids].copy()
+        qd = data.qvel[self.arm_qvel_ids]
+
+        xacc_des, xacc_rot = self._compute_task_acceleration(
+            data.site_xpos[self.ee_id].copy(),
+            ee_pos_target,
+            J_p,
+            J_r,
+            qd,
+            g,
+            ee_quat_target,
+            data,
+        )
+
+        tau_arm = self._compute_osc_torque(
+            data,
+            J_p,
+            J_r,
+            xacc_des,
+            xacc_rot,
+            g,
+        )
+
+        tau_arm = self._apply_torque_limits(tau_arm, g)
+        self._arm_torques[:] = tau_arm
+
+        self._update_hand(
+            data,
+            None,
+            g.kp_hand,
+            g.kd_hand,
+        )
+
+        self.base.apply_control(
+            data,
+            self._arm_torques,
+            self._hand_torques,
+        )
+
+        return (
+            self._arm_torques.copy(),
+            self._hand_torques.copy(),
+        )
 
     def _update_velocity_feedforward(
         self,
         ee_pos_target: np.ndarray,
         ee_quat_target: Optional[np.ndarray],
-        dt: float,
         g: OSCGains,
     ) -> None:
-        """
-        估算并滤波目标速度，用于 PD 控制中的速度前馈补偿.
+        """速度前馈估计（使用自动测量的真实 policy_dt）."""
 
-        在纯 PD 控制中，微分项通常基于当前速度反馈（-Kd * q_dot），这会导致跟踪滞后。
-        本方法通过差分目标轨迹计算期望速度 (v_ff)，并在控制律中引入前馈项：
-            tau += Kd * v_ff
-        这能显著减少轨迹跟踪的相位滞后，特别是在高频运动时。
-
-        使用一阶低通滤波 (alpha) 抑制数值微分带来的高频噪声。
-
-        Args:
-            ee_pos_target: 当前帧目标位置。
-            ee_quat_target: 当前帧目标姿态，可选。
-            dt: 仿真时间步长。
-            g: 增益配置（包含 ff_scale 和 vel_filter_alpha）。
-        """
         alpha = g.vel_filter_alpha
+        dt = self.policy_dt
 
-        # 位置速度前馈：目标位移 / dt
+        # 平移速度
         if self._prev_pos_target is not None:
             raw_vel = (ee_pos_target - self._prev_pos_target) / dt
-            self._vel_ff_pos = alpha * raw_vel + (1 - alpha) * self._vel_ff_pos
+            self._vel_ff_pos = (
+                alpha * raw_vel
+                + (1.0 - alpha) * self._vel_ff_pos
+            )
         else:
-            self._vel_ff_pos[:] = 0.0
+            self._vel_ff_pos.fill(0.0)
 
-        # 姿态角速度前馈
-        if ee_quat_target is not None and self._prev_quat_target is not None:
-            # 计算相对旋转的四元数：dq = target * conj(prev)
-            neg_prev = np.zeros(4)
-            mujoco.mju_negQuat(neg_prev, self._prev_quat_target)
+        # 角速度
+        if (
+            ee_quat_target is not None
+            and self._prev_quat_target is not None
+        ):
+            q_prev_inv = np.zeros(4)
+            mujoco.mju_negQuat(
+                q_prev_inv,
+                self._prev_quat_target,
+            )
+
             dq = np.zeros(4)
-            mujoco.mju_mulQuat(dq, ee_quat_target, neg_prev)
-            # 转换为角速度（旋转向量/时间）
-            raw_angvel = np.zeros(3)
-            mujoco.mju_quat2Vel(raw_angvel, dq, 1.0)
-            raw_angvel /= dt
-            self._vel_ff_rot = alpha * raw_angvel + (1 - alpha) * self._vel_ff_rot
-        else:
-            self._vel_ff_rot[:] = 0.0
+            mujoco.mju_mulQuat(
+                dq,
+                ee_quat_target,
+                q_prev_inv,
+            )
 
-        # 更新历史
+            raw_w = np.zeros(3)
+            mujoco.mju_quat2Vel(raw_w, dq, 1.0)
+            raw_w /= dt
+
+            self._vel_ff_rot = (
+                alpha * raw_w
+                + (1.0 - alpha) * self._vel_ff_rot
+            )
+        else:
+            self._vel_ff_rot.fill(0.0)
+
         self._prev_pos_target = ee_pos_target.copy()
-        self._prev_quat_target = ee_quat_target.copy() if ee_quat_target is not None else None
+        self._prev_quat_target = (
+            None if ee_quat_target is None
+            else ee_quat_target.copy()
+        )
 
     def _compute_task_acceleration(
         self,
@@ -430,57 +807,55 @@ class OSC_PositionController:
         ee_quat_target: Optional[np.ndarray],
         data: mujoco.MjData,
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        计算任务空间的 PD 控制输出 (期望加速度/力项).
+        """计算任务空间期望加速度."""
 
-        注意：此处并非单纯的运动学加速度规划，而是包含反馈控制律的力项计算。
-        公式：F = Kp * Error + Kd * (Velocity_FF - Velocity_Current)
-
-        Args:
-            ee_pos: 当前末端位置。
-            ee_pos_target: 目标位置。
-            J_p: 位置雅可比。
-            J_r: 旋转雅可比。
-            qd: 关节速度。
-            g: 增益配置。
-            ee_quat_target: 目标姿态，可选。
-            data: MuJoCo 数据。
-
-        Returns:
-            Tuple[np.ndarray, np.ndarray]: (xacc_des, xacc_rot) 期望线加速度和角加速度项。
-        """
-        # 位置误差
+        # 位置
         e_pos = ee_pos_target - ee_pos
-        # 速度误差 = 期望速度(前馈) - 当前速度(反馈)
-        e_vel = g.ff_scale * self._vel_ff_pos - (J_p @ qd)
-        # PD 控制律
-        xacc_des = g.kp_pos * e_pos + g.kd_pos * e_vel
+        ee_vel = J_p @ qd
 
-        # 姿态误差（可选）
+        e_vel = g.ff_scale * self._vel_ff_pos - ee_vel
+
+        xacc_des = (
+            g.kp_pos * e_pos
+            + g.kd_pos * e_vel
+        )
+
+        # 姿态
         xacc_rot = np.zeros(3)
+
         if ee_quat_target is not None:
-            # 获取当前姿态四元数
             quat_cur = np.zeros(4)
-            mujoco.mju_mat2Quat(quat_cur, data.site_xmat[self.ee_id])
+            mujoco.mju_mat2Quat(
+                quat_cur,
+                data.site_xmat[self.ee_id],
+            )
 
-            # 处理四元数符号二义性：对齐目标四元数和当前四元数
-            # 确保 dot(quat_target, quat_cur) > 0，避免绕反方向旋转
-            quat_target_aligned = ee_quat_target.copy()
-            if np.dot(quat_target_aligned, quat_cur) < 0:
-                quat_target_aligned = -quat_target_aligned
+            quat_des = ee_quat_target.copy()
 
-            # 计算姿态误差（旋转矢量）
-            neg_cur = np.zeros(4)
-            mujoco.mju_negQuat(neg_cur, quat_cur)
+            # 同半球
+            if np.dot(quat_des, quat_cur) < 0.0:
+                quat_des *= -1.0
+
+            quat_cur_inv = np.zeros(4)
+            mujoco.mju_negQuat(quat_cur_inv, quat_cur)
+
             dq = np.zeros(4)
-            mujoco.mju_mulQuat(dq, quat_target_aligned, neg_cur)
+            mujoco.mju_mulQuat(
+                dq,
+                quat_des,
+                quat_cur_inv,
+            )
+
             e_rot = np.zeros(3)
             mujoco.mju_quat2Vel(e_rot, dq, 1.0)
 
-            # 姿态速度误差
-            ee_angvel = J_r @ qd
-            e_vel_rot = g.ff_scale * self._vel_ff_rot - ee_angvel
-            xacc_rot = g.kp_rot * e_rot + g.kd_rot * e_vel_rot
+            ee_w = J_r @ qd
+            e_w = g.ff_scale * self._vel_ff_rot - ee_w
+
+            xacc_rot = (
+                g.kp_rot * e_rot
+                + g.kd_rot * e_w
+            )
 
         return xacc_des, xacc_rot
 
@@ -493,73 +868,55 @@ class OSC_PositionController:
         xacc_rot: np.ndarray,
         g: OSCGains,
     ) -> np.ndarray:
-        """
-        计算 OSC 关节力矩（核心算法）.
+        """OSC 力矩."""
 
-        标准 OSC 公式：
-        M = 关节空间惯量矩阵 (7, 7)
-        J = [J_p; J_r] 完整雅可比 (6, 7) 或仅 J_p (3, 7)
-        X = M⁻¹ @ Jᵀ
-        Λ = (J @ X)⁻¹ 操作空间惯量矩阵
-        F_task = Λ @ (ẍ_des + J @ M⁻¹ @ bias)
-        tau_task = Jᵀ @ F_task
-
-        零空间补偿：
-        J̄ = M⁻¹ @ Jᵀ @ Λ （动力学一致性伪逆）
-        N = I - J̄ @ J （零空间投影矩阵）
-        tau_null = Nᵀ @ (kp_null * (q_ref - q) - kd_null * qd)
-        tau_bias_null = Nᵀ @ bias （仅补偿零空间方向的 bias，防止重力塌缩）
-
-        总力矩：
-        tau = tau_task + tau_bias_null + tau_null
-
-        Args:
-            data: MuJoCo 数据。
-            J_p: 位置雅可比。
-            J_r: 旋转雅可比。
-            xacc_des: 期望线加速度（PD 输出）。
-            xacc_rot: 期望角加速度（PD 输出）。
-            g: 增益配置。
-
-        Returns:
-            np.ndarray: 机械臂关节力矩 (7,)。
-        """
         arm_idx = self.arm_qvel_ids
 
-        # 获取关节空间惯量矩阵
-        mujoco.mj_fullM(self.model, self._M_full, data.qM)
-        M = self._M_full[np.ix_(arm_idx, arm_idx)]  # (7, 7)
+        mujoco.mj_fullM(
+            self.model,
+            self._M_full,
+            data.qM,
+        )
 
-        # 组合完整雅可比
-        if np.any(xacc_rot != 0):
-            J = np.vstack([J_p, J_r])  # (6, 7)
-            xacc = np.concatenate([xacc_des, xacc_rot])  # (6,)
+        M = self._M_full[np.ix_(arm_idx, arm_idx)]
+
+        if np.any(np.abs(xacc_rot) > 1e-12):
+            J = np.vstack((J_p, J_r))
+            xacc = np.concatenate((xacc_des, xacc_rot))
         else:
-            J = J_p  # (3, 7)
-            xacc = xacc_des  # (3,)
+            J = J_p
+            xacc = xacc_des
 
-        # 计算操作空间惯量矩阵 Λ = (J M⁻¹ Jᵀ)⁻¹
-        X = np.linalg.solve(M, J.T)  # M⁻¹ Jᵀ
-        JMinvJT = J @ X
-        Lambda = self._svd_pinv(JMinvJT, g.singular_thresh)  # 截断 SVD 伪逆
-        Lambda = 0.5 * (Lambda + Lambda.T)  # 对称化（数值稳定性）
+        Minv_JT = np.linalg.solve(M, J.T)
 
-        # 获取偏置力（重力+科氏力）
+        Lambda = self._svd_pinv(
+            J @ Minv_JT,
+            g.singular_thresh,
+        )
+
+        Lambda = 0.5 * (Lambda + Lambda.T)
+
         bias = data.qfrc_bias[arm_idx]
 
-        # 标准 OSC：F = Λ(ẍ_des + J M⁻¹ bias)
-        # 使得 tau = Jᵀ F 自然包含动力学补偿
-        F_task = Lambda @ (xacc + J @ np.linalg.solve(M, bias))
+        F_task = Lambda @ (
+            xacc + J @ np.linalg.solve(M, bias)
+        )
+
         tau_task = J.T @ F_task
 
-        # 零空间恢复力矩
-        tau_null = self._compute_null_space_torque(data, J, M, Lambda, arm_idx, g)
+        tau_null = self._compute_null_space_torque(
+            data,
+            J,
+            M,
+            Lambda,
+            arm_idx,
+            g,
+        )
 
-        # 残余补偿：bias 中未被任务空间投影覆盖的部分
-        # 这一步非常重要，确保在零空间方向上也能抵抗重力
-        J_bar = np.linalg.solve(M, J.T) @ Lambda  # (n, 6) 动力学一致性伪逆
-        N = np.eye(len(arm_idx)) - J_bar @ J      # 零空间投影矩阵
-        tau_bias_null = N.T @ bias                # 仅补偿零空间方向的 bias
+        J_bar = Minv_JT @ Lambda
+        N = np.eye(len(arm_idx)) - J_bar @ J
+
+        tau_bias_null = N.T @ bias
 
         return tau_task + tau_bias_null + tau_null
 
@@ -572,366 +929,111 @@ class OSC_PositionController:
         arm_idx: np.ndarray,
         g: OSCGains,
     ) -> np.ndarray:
-        """
-        计算零空间恢复力矩.
+        """零空间恢复."""
 
-        将冗余自由度（7-DOF 臂的 1 维零空间）拉向参考构型。
-        公式：
-        J̄ = M⁻¹ Jᵀ Λ
-        N = I - J̄ J
-        τ_null = Nᵀ (kp_null * (q_ref - q) - kd_null * qd)
-
-        Args:
-            data: MuJoCo 数据。
-            J: 任务空间雅可比。
-            M: 关节空间惯量矩阵。
-            Lambda: 操作空间惯量矩阵。
-            arm_idx: 机械臂自由度索引。
-            g: 增益配置。
-
-        Returns:
-            np.ndarray: 零空间力矩 (7,)，若禁用零空间控制则返回零向量。
-        """
-        if g.null_kp <= 0 or self._null_qpos_ref is None:
+        if (
+            g.null_kp <= 0.0
+            or self._null_qpos_ref is None
+        ):
             return np.zeros(len(arm_idx))
 
-        # 零空间投影矩阵 N = I - J^T * J_bar
-        # 其中 J_bar = M^-1 J^T Λ 是动力学一致性伪逆
         J_bar = np.linalg.solve(M, J.T) @ Lambda
         N = np.eye(len(arm_idx)) - J_bar @ J
 
-        # 零空间 PD 控制
         q = data.qpos[self.arm_qpos_ids]
         qd = data.qvel[arm_idx]
-        q_err = self._null_qpos_ref - q
-        tau_null_raw = g.null_kp * q_err - g.null_kd * qd
+
+        tau_null_raw = (
+            g.null_kp * (self._null_qpos_ref - q)
+            - g.null_kd * qd
+        )
 
         return N.T @ tau_null_raw
 
-    def _apply_torque_limits(self, tau_raw: np.ndarray, g: OSCGains) -> np.ndarray:
-        """
-        应用力矩变化率限制和绝对限制.
-
-        双重限幅：
-        1. 变化率限制（平滑）：|tau - tau_prev| <= max_delta
-           防止高频抖动和硬件冲击。
-        2. 绝对限制（硬件保护）：torque_min <= tau <= torque_max
-           防止超过电机额定扭矩。
-
-        Args:
-            tau_raw: 原始计算力矩。
-            g: 增益配置（包含 torque_rate_limit）。
-
-        Returns:
-            np.ndarray: 限幅后的力矩。
-        """
-        # 变化率限制（平滑）
-        if self._prev_tau is not None:
-            max_delta = g.torque_rate_limit
-            delta = tau_raw - self._prev_tau
-            delta = np.clip(delta, -max_delta, max_delta)
-            tau_smooth = self._prev_tau + delta
-        else:
-            tau_smooth = tau_raw
-
-        self._prev_tau = tau_smooth.copy()
-
-        # 绝对限制（硬件保护）
-        return np.clip(
-            tau_smooth,
-            self._torque_min[:self.base.ARM_DOF],
-            self._torque_max[:self.base.ARM_DOF],
-        )
-
-    # ====================== 公共接口 2：关节 PD 模式（兼容） ======================
-    def set_target(
+    def _apply_torque_limits(
         self,
-        data: mujoco.MjData,
-        arm_target: np.ndarray,
-        hand_target: Optional[np.ndarray] = None,
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        关节空间 PD 控制（兼容旧版接口）.
+        tau_raw: np.ndarray,
+        g: OSCGains,
+    ) -> np.ndarray:
+        """变化率限制 + 饱和限制."""
 
-        注意：此方法绕过 OSC，直接在关节空间做 PD。
-        适合初始化阶段将机械臂移动到起始位置，或纯关节空间任务。
-        正常跟踪任务请使用 set_ee_target。
-
-        Args:
-            data: MuJoCo 数据对象。
-            arm_target: 机械臂目标关节角度 [ARM_DOF,]。
-            hand_target: 手部目标关节角 [HAND_DOF,]，可选。
-
-        Returns:
-            Tuple[np.ndarray, np.ndarray]: (arm_torques, hand_torques) 实际应用的力矩。
-        """
-        # 检测模式切换
-        if self._ctrl_mode != _CtrlMode.JOINT_PD:
-            self._prev_tau = None
-            self._ctrl_mode = _CtrlMode.JOINT_PD
-
-        g = self.gains
-
-        # 缓存目标（保持行为一致性）
-        if self._arm_target is None:
-            self._arm_target = data.qpos[self.arm_qpos_ids].copy()
-
-        # 限幅到关节范围
-        self._arm_target = np.clip(
-            arm_target,
-            self.arm_range[:, 0],
-            self.arm_range[:, 1]
-        )
-
-        # 关节空间 PD（使用独立配置的增益）
-        e_q = self._arm_target - data.qpos[self.arm_qpos_ids]
-        e_qd = -data.qvel[self.arm_qvel_ids]
-        tau_arm = g.kp_joint * e_q + g.kd_joint * e_qd + data.qfrc_bias[self.arm_qvel_ids]
-
-        # 应用限制
-        tau_arm = self._apply_torque_limits(tau_arm, g)
-        self._arm_torques[:] = tau_arm
-
-        # 手部控制
-        self._update_hand(data, hand_target)
-
-        # 应用控制
-        self.base.apply_control(data, self._arm_torques, self._hand_torques)
-        return self._arm_torques.copy(), self._hand_torques.copy()
-
-    # ====================== 公共接口 3：状态重置 ======================
-    def reset_targets(self, data: mujoco.MjData) -> None:
-        """
-        重置所有控制器状态.
-
-        在轨迹切换、急停或重新初始化时调用：
-        - 清空速度前馈历史（防止切换时速度跳变）
-        - 将零空间参考构型更新为当前实际构型
-        - 重置力矩历史（避免变化率限制误触发）
-
-        Args:
-            data: MuJoCo 数据对象。
-        """
-        self._prev_pos_target = None
-        self._prev_quat_target = None
-        self._vel_ff_pos[:] = 0.0
-        self._vel_ff_rot[:] = 0.0
-        self._hand_target = data.qpos[self.hand_qpos_ids].copy()
-        self._arm_target = data.qpos[self.arm_qpos_ids].copy()
-        self._null_qpos_ref = data.qpos[self.arm_qpos_ids].copy()
-        self._prev_tau = None  # 重置力矩历史，避免首步限制
-
-    # ====================== 私有方法 ======================
-    def _update_hand(self, data: mujoco.MjData, hand_target: Optional[np.ndarray]) -> None:
-        """
-        手部关节 PD 控制（内部调用）.
-
-        手部自由度不纳入 OSC 任务空间，使用独立的关节 PD 控制。
-        原因：手指为多体链，难以用单一刚体位姿描述，且手指控制以抓取力为主，
-        不需要精确的位置控制。
-
-        Args:
-            data: MuJoCo 数据。
-            hand_target: 手部目标，None 时保持上次缓存目标。
-        """
-        g = self.gains
-        if self._hand_target is None:
-            self._hand_target = data.qpos[self.hand_qpos_ids].copy()
-
-        if hand_target is not None:
-            self._hand_target = np.clip(
-                hand_target,
-                self.hand_range[:, 0],
-                self.hand_range[:, 1]
+        if self._prev_tau is not None:
+            delta = np.clip(
+                tau_raw - self._prev_tau,
+                -g.torque_rate_limit,
+                g.torque_rate_limit,
             )
+            tau = self._prev_tau + delta
+        else:
+            tau = tau_raw.copy()
 
-        e_q = self._hand_target - data.qpos[self.hand_qpos_ids]
-        e_qd = data.qvel[self.hand_qvel_ids]
-        tau = g.kp_hand * e_q - g.kd_hand * e_qd
-
-        self._hand_torques[:] = np.clip(
+        tau = np.clip(
             tau,
-            self._torque_min[self.base.ARM_DOF:],
-            self._torque_max[self.base.ARM_DOF:],
+            self._torque_min[: self.base.ARM_DOF],
+            self._torque_max[: self.base.ARM_DOF],
         )
+
+        self._prev_tau = tau.copy()
+        return tau
 
     @staticmethod
-    def _svd_pinv(A: np.ndarray, thresh: float) -> np.ndarray:
-        """
-        SVD 截断伪逆（Truncated SVD Pseudo-inverse）.
+    def _svd_pinv(
+        A: np.ndarray,
+        thresh: float,
+    ) -> np.ndarray:
+        """TSVD 伪逆."""
 
-        相较于 DLS（阻尼最小二乘），TSVD 的优势：
-        - 奇异方向直接清零（物理意义明确：不在不可控方向施力）
-        - 非奇异方向不受阻尼影响（不牺牲正常方向的精度）
-        - 阈值 thresh 含义直观：低于此奇异值的方向被视为奇异
+        U, s, Vt = np.linalg.svd(A, full_matrices=False)
 
-        Args:
-            A: 待求伪逆的方阵（通常为 J M⁻¹ Jᵀ）。
-            thresh: 奇异值截断阈值。
+        s_inv = np.zeros_like(s)
+        mask = s > thresh
+        s_inv[mask] = 1.0 / s[mask]
 
-        Returns:
-            np.ndarray: A 的截断伪逆。
-        """
-        U, s, Vt = np.linalg.svd(A)
-        s_inv = np.where(s > thresh, 1.0 / s, 0.0)
         return (Vt.T * s_inv) @ U.T
 
-    def _resolve_joint_ids(
-        self,
-        actuator_names
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """
-        将执行器名称解析为 MuJoCo 内部的 qpos、qvel、joint 三组索引.
 
-        Args:
-            actuator_names: 执行器名称列表。
+# ====================== IK 子类 ======================
 
-        Returns:
-            Tuple[np.ndarray, np.ndarray, np.ndarray]: (qpos_ids, qvel_ids, joint_ids)
-        """
-        qpos_ids, qvel_ids, joint_ids = [], [], []
-        for name in actuator_names:
-            act_id = self.base.actuator_map[name]
-            joint_id = self.model.actuator_trnid[act_id, 0]
-            joint_ids.append(joint_id)
-            qpos_ids.append(self.model.jnt_qposadr[joint_id])
-            qvel_ids.append(self.model.jnt_dofadr[joint_id])
-        return (
-            np.array(qpos_ids, dtype=np.int32),
-            np.array(qvel_ids, dtype=np.int32),
-            np.array(joint_ids, dtype=np.int32),
-        )
-
-    # ====================== 工具方法 ======================
-    def get_ee_pose(self, data: mujoco.MjData) -> Tuple[np.ndarray, np.ndarray]:
-        """获取当前末端位姿（位置和四元数）."""
-        pos = data.site_xpos[self.ee_id].copy()
-        quat = np.zeros(4)
-        mujoco.mju_mat2Quat(quat, data.site_xmat[self.ee_id])
-        return pos, quat
-
-    def check_singularity(self, data: mujoco.MjData, threshold: Optional[float] = None) -> bool:
-        """
-        检查当前是否接近奇异构型.
-
-        Args:
-            data: MuJoCo 数据。
-            threshold: 奇异值阈值，None 时使用 gains.singular_thresh。
-
-        Returns:
-            bool: 如果最小奇异值低于阈值则返回 True。
-        """
-        if threshold is None:
-            threshold = self.gains.singular_thresh
-        mujoco.mj_jacSite(self.model, data, self.jac_p, self.jac_r, self.ee_id)
-        J = np.vstack([
-            self.jac_p[:, self.arm_qvel_ids],
-            self.jac_r[:, self.arm_qvel_ids]
-        ])
-        _, s, _ = np.linalg.svd(J)
-        return np.min(s) < threshold
-
-# ====================== 旧版 IK/PD 混合控制器 ======================
-@dataclass
-class PDGains:
+class IKController(BasePositionController):
     """
-    PD 控制器增益配置容器.
+    IK + 关节 PD 混合控制器.
 
-    采用 dataclass 实现不可变配置对象。增益值直接影响系统的刚度和阻尼特性。
-    默认值设定依据：
-    - 机械臂 (Arm): 通常需要较高的刚度以抵抗重力和外部扰动
-    - 机械手 (Hand): 需要相对灵活，避免过大的刚度导致碰撞冲击
+    两层架构：
+    1. IK 层（DLS 数值求解）：将末端目标转换为关节目标增量，原位更新 _arm_target。
+    2. PD 层（关节控制）：执行关节 PD + 重力补偿，跟踪 IK 输出的关节目标。
+
+    适用于对动力学要求不高的点到点运动、初始化或作为 OSC 的降级备份。
+
+    注意：IKController 无速度前馈，hold 直接复用缓存的关节目标重算 PD 力矩。
+    在 20Hz/500Hz 的 RL 场景下，hold 期间 _arm_target 不变，
+    PD 控制自然收敛到目标关节角。
 
     Attributes:
-        kp_arm: 机械臂比例增益 (刚度) [N·m/rad]。值越大定位越硬。
-        kd_arm: 机械臂微分增益 (阻尼) [N·m·s/rad]。用于抑制振荡。
-        kp_hand: 机械手比例增益。通常设置为与臂同量级或略低。
-        kd_hand: 机械手微分增益。
-    """
-    kp_arm: np.ndarray = field(default_factory=lambda: np.full(7, 40000.))
-    kd_arm: np.ndarray = field(default_factory=lambda: np.full(7, 400.))
-    kp_hand: np.ndarray = field(default_factory=lambda: np.full(6, 40000.))
-    kd_hand: np.ndarray = field(default_factory=lambda: np.full(6, 400.))
-
-class IK_PositionController:
-    """
-    混合位置控制器 (IK + PD).
-
-    该控制器采用两层架构（兼容旧版）：
-    1. 上层 (IK Solver): 将末端执行器的空间目标转换为关节空间的目标增量。
-       使用基于雅可比的数值 inverse运动学求解器。
-    2. 下层 (Joint PD): 接收 IK 计算出的关节目标，执行标准的关节空间 PD 控制。
-
-    适用场景：
-    - 系统的初始化与复位。
-    - 对动力学性能要求不高的点到点运动。
-    - 作为 OSC 控制器的降级备份方案。
-
-    Attributes:
-        base: 硬件抽象接口。
-        model: MuJoCo 模型对象。
         gains: PD 增益配置。
-        ee_id: 末端 Site ID。
-        arm_qpos_ids/qvel_ids/joint_ids: 机械臂索引。
-        hand_qpos_ids/qvel_ids/joint_ids: 机械手索引。
-        arm_range/hand_range: 关节限位。
-        _arm_target/_hand_target: 目标缓存。
-        _torque_min/_torque_max: 力矩限幅。
-        _arm_torques/_hand_torques: 力矩缓冲区。
-        jac_p/jac_r: 雅可比缓冲区。
-        damping: DLS 阻尼系数（自适应）。
+        damping: DLS 阻尼系数（控制奇异附近的 dq 幅度）。
     """
+
     def __init__(
         self,
         base,
         model: mujoco.MjModel,
         gains: Optional[PDGains] = None,
         ee_site_name: str = "right_hand_site",
+        damping: float = 0.05,
     ):
         """
-        初始化混合控制器.
-
         Args:
             base: 硬件抽象接口。
-            model: MuJoCo 模型对象。
-            gains: PD 增益配置。
+            model: MuJoCo 模型。
+            gains: PD 增益配置，None 时使用默认值。
             ee_site_name: 末端 Site 名称。
+            damping: DLS 阻尼系数。值越大奇异附近越保守，但精度略低。
         """
-        self.base = base
-        self.model = model
+        super().__init__(base, model, ee_site_name)
         self.gains = gains if gains is not None else PDGains()
+        self.damping = damping
 
-        # 索引解析
-        self.arm_qpos_ids, self.arm_qvel_ids, self.arm_joint_ids = \
-            self._resolve_joint_ids(base.arm_names)
-        self.hand_qpos_ids, self.hand_qvel_ids, self.hand_joint_ids = \
-            self._resolve_joint_ids(
-                [base.hand_names[k] for k in base.hand_key_order if k in base.hand_names]
-            )
-
-        # 范围与限制
-        self.arm_range = model.jnt_range[self.arm_joint_ids]
-        self.hand_range = model.jnt_range[self.hand_joint_ids]
-        self._torque_min = base.torque_min
-        self._torque_max = base.torque_max
-
-        # 缓冲区
-        self._arm_torques = np.zeros(base.ARM_DOF)
-        self._hand_torques = np.zeros(base.HAND_DOF)
-        self.jac_p = np.zeros((3, model.nv))
-        self.jac_r = np.zeros((3, model.nv))
-
-        # 目标缓存
-        self._arm_target: Optional[np.ndarray] = None
-        self._hand_target: Optional[np.ndarray] = None
-
-        # 末端 ID
-        self.ee_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, ee_site_name)
-        if self.ee_id == -1:
-            raise ValueError(f"Site '{ee_site_name}' not found.")
-
-        # DLS 阻尼
-        self.damping = 0.05
+    # ====================== 公共接口 ======================
 
     def set_ee_target(
         self,
@@ -943,106 +1045,97 @@ class IK_PositionController:
         tol: float = 1e-4,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        设置末端目标并执行一步 IK+PD 控制.
+        末端目标控制（IK + 关节 PD，RL 步调用）.
 
-        流程：
-        1. 使用 DLS 算法求解逆运动学，更新关节目标。
-        2. 计算关节 PD 力矩。
-        3. 执行手部 PD 控制。
-        4. 应用力矩。
+        IK 求解更新 _arm_target，然后执行关节 PD + 重力补偿。
+        后续 hold 调用将直接使用更新后的 _arm_target，不再重新求解 IK。
 
         Args:
             data: MuJoCo 数据。
             ee_pos_target: 目标位置 [3,]。
-            ee_quat_target: 目标姿态 [4,]，可选。
-            hand_target: 手部目标，可选。
+            ee_quat_target: 目标姿态 [w,x,y,z] [4,]，可选。
+            hand_target: 手部目标 [HAND_DOF,]，可选。
             max_steps: IK 最大迭代次数。
-            tol: IK 收敛阈值。
+            tol: IK 收敛阈值（位置+姿态误差 L2 范数）。
 
         Returns:
-            Tuple[np.ndarray, np.ndarray]: (arm_torques, hand_torques)。
+            (arm_torques, hand_torques)
         """
-        # 初始化目标
         if self._arm_target is None:
             self._arm_target = data.qpos[self.arm_qpos_ids].copy()
 
-        # 1. 求解 IK (更新关节目标)
-        self._solve_ik(
-            data, ee_pos_target, ee_quat_target,
-            self._arm_target, max_steps, tol
-        )
+        # IK 求解，原位更新 _arm_target
+        self._solve_ik(data, ee_pos_target, ee_quat_target, self._arm_target, max_steps, tol)
 
-        # 2. 关节 PD 控制
-        e_q = self._arm_target - data.qpos[self.arm_qpos_ids]
-        e_qd = -data.qvel[self.arm_qvel_ids]
-        tau_arm = self.gains.kp_arm * e_q + self.gains.kd_arm * e_qd
+        return self._joint_pd_and_apply(data, hand_target)
 
-        # 限幅
-        self._arm_torques[:] = np.clip(
-            tau_arm,
-            self._torque_min[:self.base.ARM_DOF],
-            self._torque_max[:self.base.ARM_DOF],
-        )
-
-        # 3. 手部控制
-        self._update_hand(data, hand_target)
-
-        # 4. 应用
-        self.base.apply_control(data, self._arm_torques, self._hand_torques)
-        return self._arm_torques.copy(), self._hand_torques.copy()
-    
-    def set_target(
+    def set_joint_target(
         self,
         data: mujoco.MjData,
         arm_target: np.ndarray,
         hand_target: Optional[np.ndarray] = None,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        直接关节空间控制接口.
-        
-        绕过 IK 求解器，直接将机械臂关节移动到指定构型。
-        适用于已知关节角度目标的任务或机器人归位（Home）操作。
+        直接关节目标控制（绕过 IK）.
+
+        适用于已知关节角目标的任务（如归位、预设姿态）。包含重力补偿（qfrc_bias）。
 
         Args:
-            data: MuJoCo 数据对象。
-            arm_target: 机械臂目标关节角度 [ARM_DOF,]。
-            hand_target: 手部目标关节角 [HAND_DOF,]，可选。
+            data: MuJoCo 数据。
+            arm_target: 目标关节角 [ARM_DOF,]。
+            hand_target: 手部目标 [HAND_DOF,]，可选。
 
         Returns:
-            Tuple[np.ndarray, np.ndarray]: (arm_torques, hand_torques) 实际应用的力矩。
+            (arm_torques, hand_torques)
         """
-        # 1. 更新并限幅机械臂目标
+        self._arm_target = np.clip(arm_target, self.arm_range[:, 0], self.arm_range[:, 1])
+        return self._joint_pd_and_apply(data, hand_target)
+
+    def hold(self, data: mujoco.MjData) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        保持当前缓存的关节目标，重新计算并应用力矩（仿真步调用）.
+
+        IKController 无前馈历史，hold 与 set_joint_target 的唯一区别是
+        不更新 _arm_target。在高频仿真步中持续施力，PD 控制自然收敛。
+        若尚未设置目标，以当前关节角为目标（原地保持）。
+        """
         if self._arm_target is None:
             self._arm_target = data.qpos[self.arm_qpos_ids].copy()
-        
-        self._arm_target = np.clip(
-            arm_target,
-            self.arm_range[:, 0],
-            self.arm_range[:, 1]
-        )
+        return self._joint_pd_and_apply(data, hand_target=None)
 
-        # 2. 计算机械臂关节空间 PD 力矩
-        # tau = Kp * (q_des - q) + Kd * (v_des - v)
-        # 注意：这里 v_des 默认为 0
+    def reset(self, data: mujoco.MjData) -> None:
+        """重置目标缓存（以当前关节角为初始目标）."""
+        self._arm_target = data.qpos[self.arm_qpos_ids].copy()
+        self._hand_target = data.qpos[self.hand_qpos_ids].copy()
+
+    # ====================== 私有方法 ======================
+
+    def _joint_pd_and_apply(
+        self,
+        data: mujoco.MjData,
+        hand_target: Optional[np.ndarray],
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        关节 PD + 重力补偿 + 手部更新 + 应用（set_* 和 hold 共用）.
+
+        包含 qfrc_bias 重力补偿，与 OSCController 的关节 PD 模式行为一致，
+        确保低增益下也能抵抗重力，没有稳态误差。
+        """
+        g = self.gains
         e_q = self._arm_target - data.qpos[self.arm_qpos_ids]
         e_qd = -data.qvel[self.arm_qvel_ids]
-        tau_arm = self.gains.kp_arm * e_q + self.gains.kd_arm * e_qd
+        tau_arm = g.kp_arm * e_q + g.kd_arm * e_qd + data.qfrc_bias[self.arm_qvel_ids]
 
-        # 3. 机械臂力矩安全限幅
         self._arm_torques[:] = np.clip(
             tau_arm,
             self._torque_min[:self.base.ARM_DOF],
             self._torque_max[:self.base.ARM_DOF],
         )
 
-        # 4. 更新手部控制 (复用类内私有方法)
-        self._update_hand(data, hand_target)
-
-        # 5. 应用控制信号
+        self._update_hand(data, hand_target, g.kp_hand, g.kd_hand)
         self.base.apply_control(data, self._arm_torques, self._hand_torques)
-        
         return self._arm_torques.copy(), self._hand_torques.copy()
-    
+
     def _solve_ik(
         self,
         data: mujoco.MjData,
@@ -1053,51 +1146,33 @@ class IK_PositionController:
         tol: float,
     ) -> None:
         """
-        使用 DLS (Damped Least Squares) 求解逆运动学.
+        DLS（阻尼最小二乘）逆运动学求解器（原位更新 q_target）.
 
-        算法：
-        dq = J^T (J J^T + λ^2 I)^-1 * error
-        其中 λ 为阻尼系数，用于处理奇异点。
-
-        Args:
-            data: MuJoCo 数据。
-            pos_target: 目标位置。
-            quat_target: 目标姿态。
-            q_target: 当前关节目标（在此处更新）。
-            max_steps: 最大迭代。
-            tol: 收敛阈值。
+        dq = Jᵀ (J Jᵀ + λ² I)⁻¹ err
+        λ 为阻尼系数，在奇异附近限制 dq 幅度，防止发散。
+        收敛后（err_norm < tol）提前退出迭代。
         """
         for _ in range(max_steps):
-            # 获取当前状态
-            pos_curr = data.site_xpos[self.ee_id]
-            mat_curr = data.site_xmat[self.ee_id]
-
-            # 计算误差
-            err_pos = pos_target - pos_curr
+            err_pos = pos_target - data.site_xpos[self.ee_id]
             err_norm = np.linalg.norm(err_pos)
 
             err_rot = np.zeros(3)
             if quat_target is not None:
-                quat_curr = np.zeros(4)
-                mujoco.mju_mat2Quat(quat_curr, mat_curr)
-                # 符号对齐
+                quat_cur = np.zeros(4)
+                mujoco.mju_mat2Quat(quat_cur, data.site_xmat[self.ee_id])
                 qt_align = quat_target.copy()
-                if np.dot(qt_align, quat_curr) < 0:
+                if np.dot(qt_align, quat_cur) < 0:
                     qt_align = -qt_align
+                neg_cur = np.zeros(4)
+                mujoco.mju_negQuat(neg_cur, quat_cur)
                 dq = np.zeros(4)
-                mujoco.mju_mulQuat(dq, qt_align, np.concatenate([[-quat_curr[0]], -quat_curr[1:]])) # 近似逆
-                # 更稳健的逆计算
-                neg_curr = np.zeros(4)
-                mujoco.mju_negQuat(neg_curr, quat_curr)
-                mujoco.mju_mulQuat(dq, qt_align, neg_curr)
+                mujoco.mju_mulQuat(dq, qt_align, neg_cur)
                 mujoco.mju_quat2Vel(err_rot, dq, 1.0)
                 err_norm += np.linalg.norm(err_rot)
 
-            # 检查收敛
             if err_norm < tol:
                 break
 
-            # 计算雅可比
             mujoco.mj_jacSite(self.model, data, self.jac_p, self.jac_r, self.ee_id)
             J_p = self.jac_p[:, self.arm_qvel_ids]
             J_r = self.jac_r[:, self.arm_qvel_ids]
@@ -1109,62 +1184,14 @@ class IK_PositionController:
                 J = J_p
                 err = err_pos
 
-            # DLS 求解：dq = J^T (J J^T + λ^2 I)^-1 err
-            # 使用 Cholesky 分解或 SVD 求解线性系统通常比直接求逆更稳定
             A = J @ J.T + self.damping**2 * np.eye(J.shape[0])
             try:
-                # 求解 A * x = err -> x = A^-1 err
-                x = np.linalg.solve(A, err)
-                dq = J.T @ x
+                dq_joint = J.T @ np.linalg.solve(A, err)
             except np.linalg.LinAlgError:
-                # 奇异矩阵回退
-                dq = J.T @ np.linalg.pinv(A) @ err
+                dq_joint = J.T @ np.linalg.pinv(A) @ err
 
-            # 更新目标
-            q_target[:] += dq
-            # 简单限幅（可选）
-            q_target[:] = np.clip(q_target, self.arm_range[:, 0], self.arm_range[:, 1])
-
-    def _update_hand(self, data: mujoco.MjData, hand_target: Optional[np.ndarray]) -> None:
-        """手部 PD 控制."""
-        if self._hand_target is None:
-            self._hand_target = data.qpos[self.hand_qpos_ids].copy()
-
-        if hand_target is not None:
-            self._hand_target = np.clip(
-                hand_target,
-                self.hand_range[:, 0],
-                self.hand_range[:, 1]
+            q_target[:] = np.clip(
+                q_target + dq_joint,
+                self.arm_range[:, 0],
+                self.arm_range[:, 1],
             )
-
-        e_q = self._hand_target - data.qpos[self.hand_qpos_ids]
-        e_qd = -data.qvel[self.hand_qvel_ids]
-        tau = self.gains.kp_hand * e_q + self.gains.kd_hand * e_qd
-
-        self._hand_torques[:] = np.clip(
-            tau,
-            self._torque_min[self.base.ARM_DOF:],
-            self._torque_max[self.base.ARM_DOF:],
-        )
-
-    def _resolve_joint_ids(self, actuator_names):
-        """解析关节索引（复用 OSC 逻辑）。"""
-        qpos_ids, qvel_ids, joint_ids = [], [], []
-        for name in actuator_names:
-            act_id = self.base.actuator_map[name]
-            joint_id = self.model.actuator_trnid[act_id, 0]
-            joint_ids.append(joint_id)
-            qpos_ids.append(self.model.jnt_qposadr[joint_id])
-            qvel_ids.append(self.model.jnt_dofadr[joint_id])
-        return (
-            np.array(qpos_ids, dtype=np.int32),
-            np.array(qvel_ids, dtype=np.int32),
-            np.array(joint_ids, dtype=np.int32),
-        )
-        
-    def get_ee_pose(self, data: mujoco.MjData) -> Tuple[np.ndarray, np.ndarray]:
-        """获取当前末端位姿（位置和四元数）."""
-        pos = data.site_xpos[self.ee_id].copy()
-        quat = np.zeros(4)
-        mujoco.mju_mat2Quat(quat, data.site_xmat[self.ee_id])
-        return pos, quat

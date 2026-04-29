@@ -1,5 +1,5 @@
 """
-通用任务环境演示脚本（视觉-触觉-本体感觉版本）
+通用任务环境演示脚本
 支持所有继承自 RobotArmEnvBase 的任务环境，通过 --task 参数切换任务。
 
 运行方式：
@@ -15,7 +15,7 @@ python -m src.env.demo \\
   --task stack \\
   --mode random \\
   --episodes 5 \\
-  --action-mode osc_pose \\
+  --action-mode joint_pd \\
   --controller osc \\
   --no-render
 
@@ -31,14 +31,11 @@ import time
 from pathlib import Path
 from typing import Optional, Type, Tuple
 from dataclasses import dataclass, field
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-
 import mujoco
 import numpy as np
 import cv2
 from src.env.base_env import RobotArmEnvBase, RobotConfig
+from src.sensors.tactile_sensor import FINGER_PHALANX_ORDER
 
 
 # ====================== 任务注册表 ======================
@@ -269,7 +266,6 @@ def render_tactile_heatmap(obs: dict, sub_h: int = 160, sub_w: int = 200) -> np.
     布局：行=指节层（top/middle/bottom），列=手指（5根）
     返回 shape: (3*sub_h, 5*sub_w, 3)
     """
-    from src.sensors.tactile_sensor import FINGER_PHALANX_ORDER
     finger_keys = ["finger_0", "finger_1", "finger_2", "finger_3", "thumb"]
     level_order = ["top", "middle", "bottom"]
     level_to_key = {
@@ -325,19 +321,14 @@ def _get_ee_position(env: RobotArmEnvBase) -> Optional[np.ndarray]:
     """
     获取末端执行器位置.
     
-    尝试从环境获取末端执行器位置，支持多种环境实现。
+    基类环境提供 get_ee_pose() 方法返回位置和四元数，这里只提取位置部分。
     
     Returns:
-        3D位置向量，如果无法获取则返回None
+        3D位置向量
     """
-    # 尝试从环境直接获取
-    if hasattr(env, 'ee_site_id') and hasattr(env, 'data'):
-        return env.data.site_xpos[env.ee_site_id].copy()
-    
-    # 尝试通过观测获取（如果环境在obs中包含末端位置）
-    # 这是一个fallback，实际取决于你的RobotArmEnvBase实现
-    return None
-
+    # 直接从环境直接获取
+    ee_pos = env.get_ee_pose()[0]  # (pos, quat)
+    return ee_pos
 
 # ====================== 演示模式1：随机策略（集成轨迹可视化） ======================
 
@@ -345,7 +336,7 @@ def demo_random_policy(
     task_name: str = "pick_place",
     n_episodes: int = 3,
     render: bool = True,
-    action_mode: str = "osc_pose",
+    action_mode: str = "joint_pd",
     controller_type: str = "osc",
     show_ee_traj: bool = True,
 ):
@@ -484,7 +475,7 @@ def demo_verify_observation_space(task_name: str = "pick_place"):
     print("=" * 65)
 
     robot_cfg = RobotConfig(
-        action_mode="osc_pose",
+        action_mode="joint_pd",
         controller_type="osc",
         max_episode_steps=100,
         tactile_backend="simple_avg",
@@ -525,7 +516,7 @@ def demo_verify_observation_space(task_name: str = "pick_place"):
 def demo_benchmark(
     task_name: str = "pick_place",
     n_episodes: int = 100,
-    action_mode: str = "osc_pose",
+    action_mode: str = "joint_pd",
     controller_type: str = "osc",
 ):
     """无渲染高速基准测试."""
@@ -547,10 +538,10 @@ def demo_benchmark(
     successes = 0
 
     for ep in range(n_episodes):
-        obs, _ = env.reset(seed=ep)
+        env.reset(seed=ep)
         done = False
         while not done:
-            obs, _, terminated, truncated, _ = env.step(env.action_space.sample())
+            _, _, terminated, truncated, _ = env.step(env.action_space.sample())
             total_steps += 1
             done = terminated or truncated
             if terminated:
@@ -563,107 +554,6 @@ def demo_benchmark(
     print(f" 步频: {total_steps/elapsed:.0f} steps/s")
     print(f" 回合频: {n_episodes/elapsed:.1f} eps/s")
     print(f" 成功率: {successes/n_episodes*100:.1f}%")
-
-
-# ====================== 演示模式5：灵巧手正弦运动（集成轨迹可视化） ======================
-
-def demo_sinusoid(
-    task_name: str = "pick_place",
-    freq: float = 0.5,
-    amplitude: float = 0.5,
-    n_episodes: int = 1,
-    render: bool = True,
-    show_ee_traj: bool = True,
-):
-    """
-    灵巧手关节正弦运动演示（集成末端轨迹可视化）.
-    
-    - 机械臂本体 (前6轴) 保持静止
-    - 灵巧手关节 (最后6/7轴) 执行正弦摆动
-    - 显示末端执行器实际位置轨迹（青色）和历史轨迹
-    """
-    reg = TASK_REGISTRY[task_name]
-    print("=" * 65)
-    print(f" [Demo] 灵巧手正弦运动 | 任务={reg['display_name']}")
-    print(f" 频率={freq}Hz, 幅度={amplitude}rad")
-    print(f" 末端轨迹可视化: {'开启' if show_ee_traj else '关闭'}")
-    print("=" * 65)
-
-    robot_cfg = RobotConfig(
-        action_mode="joint_pd",
-        controller_type="osc",
-        max_episode_steps=1000,
-        control_freq=20.0,
-        tactile_backend="simple_avg",
-    )
-    
-    env = _load_task(task_name, robot_cfg)
-    action_dim = env.action_space.shape[0]
-    
-    ARM_DOF = 6
-    HAND_DOF = action_dim - ARM_DOF
-
-    # 初始化轨迹可视化
-    traj_vis = None
-    if show_ee_traj:
-        style = TrajectoryVisualStyle(
-            actual_rgba=np.array([0.0, 1.0, 1.0, 0.9]),  # 更亮的青色
-            target_rgba=np.array([1.0, 0.0, 0.0, 0.4]),
-            actual_size=0.008,
-            target_size=0.012
-        )
-        traj_vis = EETrajectoryVisualizer(style, max_history=50)
-
-    if render:
-        obs, info = env.reset(seed=42)
-        
-        with mujoco.viewer.launch_passive(env.model, env.data) as viewer:
-            start_time = time.time()
-            
-            while viewer.is_running():
-                current_elapsed = time.time() - start_time
-                
-                # 1. 动作生成
-                arm_action = np.zeros(ARM_DOF)
-                phase_offset = np.linspace(0, np.pi, HAND_DOF)
-                hand_action = amplitude * np.sin(2 * np.pi * freq * current_elapsed + phase_offset)
-                action = np.concatenate([arm_action, hand_action])
-                
-                # 2. 环境步进
-                obs, reward, terminated, truncated, info = env.step(action)
-                
-                # 3. 轨迹可视化
-                if show_ee_traj and traj_vis is not None:
-                    viewer.user_scn.ngeom = 0
-                    
-                    actual_pos = _get_ee_position(env)
-                    if actual_pos is not None:
-                        traj_vis.update(actual_pos, target_pos=None)
-                        traj_vis.draw(viewer)
-                
-                # 4. 渲染同步
-                viewer.sync()
-
-                # 5. OpenCV 辅助可视化
-                heatmap = render_tactile_heatmap(obs)
-                cv2.imshow("Tactile (Top/Mid/Bot)", heatmap)
-                
-                if 'camera_rgb' in obs:
-                    cam_bgr = cv2.cvtColor(obs["camera_rgb"], cv2.COLOR_RGB2BGR)
-                    cv2.imshow("Camera", cam_bgr)
-                
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
-                
-                if terminated or truncated:
-                    obs, info = env.reset()
-                    if traj_vis is not None:
-                        traj_vis.reset()
-                    start_time = time.time()
-
-    cv2.destroyAllWindows()
-    env.close()
-
 
 # ====================== 入口 ======================
 
@@ -682,22 +572,20 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--mode",
-        choices=["random", "verify", "benchmark", "sinusoid"],
+        choices=["random", "verify", "benchmark"],
         default="random",
         help="演示模式",
     )
     parser.add_argument("--no-render", action="store_true", help="禁用可视化（加速运行）")
     parser.add_argument("--episodes", type=int, default=3, help="演示回合数")
-    parser.add_argument("--freq", type=float, default=0.5, help="正弦波频率 (仅 sinusoid 模式有效)")
-    parser.add_argument("--amp", type=float, default=0.5, help="正弦波幅度 (仅 sinusoid 模式有效)")
     parser.add_argument(
         "--no-traj", action="store_true",
         help="禁用末端执行器轨迹可视化小球"
     )
     parser.add_argument(
         "--action-mode",
-        choices=["osc_pose", "osc_pos", "joint_pd"],
-        default="osc_pose",
+        choices=["joint_pd"],
+        default="joint_pd"
     )
     parser.add_argument(
         "--controller",
@@ -733,12 +621,4 @@ if __name__ == "__main__":
             n_episodes=args.episodes if args.episodes != 3 else 100,
             action_mode=args.action_mode,
             controller_type=args.controller,
-        )
-    elif args.mode == "sinusoid":
-        demo_sinusoid(
-            task_name=args.task,
-            freq=args.freq,
-            amplitude=args.amp,
-            render=render,
-            show_ee_traj=show_traj,
         )

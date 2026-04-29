@@ -24,7 +24,7 @@ import time
 from typing import Tuple, Optional
 from dataclasses import dataclass, field
 from src.robot.robot_arm_system import get_combined_spec
-from src.controllers.position_controller import OSC_PositionController
+from src.controllers.position_controller import OSCController, stable_osc_gains
 from src.controllers.hand_arm_controller import HandArmController
 
 
@@ -195,7 +195,11 @@ def main():
         
         # 控制器栈初始化
         hardware_interface = HandArmController(model)
-        pos_controller = OSC_PositionController(hardware_interface, model)
+        pos_controller = OSCController(
+            base=hardware_interface, 
+            model=model, 
+            gains=stable_osc_gains(), # 使用新接口推荐的稳定增益
+        )
 
         # 可视化工具初始化
         traj_vis = TrajectoryVisualizer(cfg_style)
@@ -217,8 +221,6 @@ def main():
                 viewer.user_scn.ngeom = 0
 
                 # --- B. 轨迹规划 (圆周运动) ---
-                # 【关键修正】必须使用 data.time 获取绝对仿真时间
-                # 原逻辑 sim_step * dt 会导致 angle 随时间二次方增长，速度越来越快
                 current_time = data.time
                 angle = current_time * cfg_traj.speed
                 
@@ -250,6 +252,7 @@ def main():
                 )
 
                 # --- E. 物理步进 ---
+                pos_controller.hold(data)  # 保持当前目标，重算动力学补偿
                 mujoco.mj_step(model, data)
 
                 # --- F. 调试可视化绘制 ---

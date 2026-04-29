@@ -13,7 +13,7 @@ from typing import Tuple, List, Optional
 from dataclasses import dataclass, field
 
 from src.robot.robot_arm_system import get_combined_spec
-from src.controllers.position_controller import OSC_PositionController
+from src.controllers.position_controller import OSCController, stable_osc_gains
 from src.controllers.hand_arm_controller import HandArmController
 from src.sensors.tactile_sensor import TactileReader, DISPLAY_ORDER, FINGER_PHALANX_ORDER
 
@@ -159,7 +159,11 @@ def main():
         model, data, reader = build_custom_grasp_environment(tactile_backend="simple_avg")
 
         hardware_interface = HandArmController(model)
-        pos_controller = OSC_PositionController(base=hardware_interface, model=model)
+        pos_controller = OSCController(
+            base=hardware_interface,
+            model=model,
+            gains=stable_osc_gains(),
+        )
 
         # ===== 2. 轨迹数据准备 =====
         HAND_RANGE_RAW = [1600, 1600, 1400, 1800, 1200, 2000]
@@ -170,25 +174,18 @@ def main():
 
         SUB_H, SUB_W = 160, 120  # 单个触觉热力图的显示尺寸
 
-        # ===== 3. 主仿真循环 =====
         with mujoco.viewer.launch_passive(model, data) as viewer:
-            print("=== [Simulation] 运行中，按 Q 关闭触觉窗口 ===")
-
             while viewer.is_running():
-                sim_time = data.time
-
-                # ----- 运动控制 -----
-                # 根据仿真时间计算当前应执行的轨迹索引
-                seq_idx = int(sim_time / 0.01) % len(hand_target_sequence)
-                pos_controller.set_target(
+                # 更新目标并计算前馈
+                seq_idx = int(data.time / 0.01) % len(hand_target_sequence)
+                pos_controller.set_joint_target(
                     data=data,
                     arm_target=arm_target,
-                    hand_target=hand_target_sequence[seq_idx],
+                    hand_target=hand_target_sequence[seq_idx]
                 )
 
-                # ----- 物理步进 -----
+                pos_controller.hold(data) # 保持目标
                 mujoco.mj_step(model, data)
-
                 # ----- 触觉图像读取与可视化 -----
                 tactile_images = reader.read_image(data) 
 

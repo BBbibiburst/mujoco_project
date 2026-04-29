@@ -1,5 +1,5 @@
 """
-重定向任务环境（视觉-触觉-本体感觉版本）.
+重定向任务环境
 
 任务描述：
     机械臂+灵巧手抓取桌面上的长方体物块，将其旋转到指定目标姿态后放回桌面原位。
@@ -25,17 +25,10 @@
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Any, Dict, Optional, Tuple
-
 import mujoco
 import numpy as np
-
 from .base_env import RobotArmEnvBase, RobotConfig
-
-try:
-    from gymnasium import spaces
-except ImportError:
-    from .base_env import spaces
-
+from gymnasium import spaces
 from src.sensors.tactile_sensor import TactileReader, FINGER_PHALANX_ORDER
 
 

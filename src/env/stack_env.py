@@ -1,5 +1,5 @@
 """
-堆叠任务环境（视觉-触觉-本体感觉版本）.
+堆叠任务环境
 
 任务描述：
     机械臂+灵巧手抓取红色方块（block_A），将其堆叠放置到绿色方块（block_B）正上方。
@@ -23,7 +23,6 @@
     - tactile_top:     (5, 6, 5)
     - proprioception:  (13,)
 
-动作空间（12维 OSC 6D 位姿控制）
 """
 
 from dataclasses import dataclass, field
@@ -32,17 +31,8 @@ from typing import Any, Dict, Optional, Tuple
 
 import mujoco
 import numpy as np
-
 from .base_env import RobotArmEnvBase, RobotConfig
-
-try:
-    import gymnasium as gym
-    from gymnasium import spaces
-    HAS_GYM = True
-except ImportError:
-    HAS_GYM = False
-    from .base_env import spaces
-
+from gymnasium import spaces
 from src.sensors.tactile_sensor import TactileReader, FINGER_PHALANX_ORDER
 
 
@@ -209,11 +199,7 @@ class StackEnv(RobotArmEnvBase):
         if self._renderer is None:
             self._renderer = mujoco.Renderer(self.model, height=240, width=320)
 
-        # 随机化 block_B 位置（更新 body xpos 通过重置 qpos，block_B 无自由关节，
-        # 直接用 mocap 或修改 body pos 不可行；退而以固定初始范围随机选取，
-        # 再通过将仿真运行到稳定状态体现）
-        # 方案：block_B 初始在 _build_scene 写死；每回合随机化在合法范围内的位置
-        # 通过修改 model.body_pos 并重新 mj_forward 实现
+        # 随机化 block_B 位置
         b_lo, b_hi = tc.block_b_pos_range[0], tc.block_b_pos_range[1]
         self._block_b_pos = b_lo + np.random.random(3) * (b_hi - b_lo)
         self._block_b_pos[2] = tc.obj_size  # 固定高度

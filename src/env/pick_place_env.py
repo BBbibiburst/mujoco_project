@@ -1,5 +1,5 @@
 """
-抓取放置任务环境（视觉-触觉-本体感觉版本，触觉已扁平化）.
+抓取放置任务环境.
 
 任务描述：
     机械臂+灵巧手从桌面上抓取一个立方体，将其搬运到目标位置并放置。
@@ -11,28 +11,20 @@
     - tactile_top:     (5, 6, 5)      5手指 × 6行 × 5列   顶部指节
     - proprioception:  (13,)          机械臂7DOF + 手6DOF 关节角度
 
-动作空间（12维，OSC 6D位姿控制）：
-    - 末端xyz位移(3) + 末端rpy旋转(3) + 手部6指增量(6)
+动作空间（13维连续）：
+    - 机械臂7维：每个关节的目标位置增量，归一化到 [-1, 1]，实际控制范围由 robot_config 定义
+    - 手部6维：每个手指的开合目标增量，归一化到 [-1, 1]，实际控制范围由 task_config 定义
 """
 
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Any, Dict, Optional, Tuple
-
 import mujoco
 import numpy as np
-
 from .base_env import RobotArmEnvBase, RobotConfig
-
-try:
-    import gymnasium as gym
-    from gymnasium import spaces
-    HAS_GYM = True
-except ImportError:
-    HAS_GYM = False
-    from .base_env import spaces
-
-# 导入触觉传感器常量（与 grasp_task_env.py 保持一致）
+import gymnasium as gym
+from gymnasium import spaces
+# 导入触觉传感器常量和工具函数
 from src.sensors.tactile_sensor import TactileReader, DISPLAY_ORDER, FINGER_PHALANX_ORDER
 
 
@@ -75,7 +67,7 @@ class PickPlaceConfig:
 
     # 手部开合配置（关节角）
     hand_open:  np.ndarray = field(default_factory=lambda: np.zeros(6))
-    hand_close: np.ndarray = field(default_factory=lambda: np.full(6, 0.008))
+    hand_close: np.ndarray = field(default_factory=lambda: np.full(6, 0.01))
 
     # 阶段切换阈值
     reach_threshold: float = 0.04
@@ -102,7 +94,7 @@ class PickPlaceConfig:
 # 显式指定手指顺序，不依赖字典插入顺序
 _FINGER_NAMES = ["finger_0", "finger_1", "finger_2", "finger_3", "thumb"]
 
-# 统一为 (rows, cols) 即 (H, W) 格式，与 tactile_sensor.py 一致
+# 每个指节类型的传感器分辨率（行数、列数），用于正确解析触觉图像并构建观测空间
 _TACTILE_LEVELS = {
     "bottom": (10, 7),   # 10 rows, 7 cols
     "middle": (8, 5),    # 8 rows, 5 cols
@@ -179,8 +171,6 @@ class PickPlaceEnv(RobotArmEnvBase):
                 low=-np.inf, high=np.inf, shape=(13,), dtype=np.float32
             ),
         })
-
-    # action_space 继承自基类（12维 osc_pose）
 
     # ====================== 必须实现的抽象方法 ======================
 

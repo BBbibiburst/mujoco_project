@@ -22,40 +22,12 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Tuple, List, Union
-
 import mujoco
 import numpy as np
-
-try:
-    import gymnasium as gym
-    from gymnasium import spaces
-    HAS_GYM = True
-except ImportError:
-    HAS_GYM = False
-    # 提供最小化占位符，允许在无 gymnasium 时也能运行
-    class spaces:
-        class Box:
-            def __init__(self, low, high, shape=None, dtype=np.float32):
-                self.low = np.full(shape, low, dtype=dtype) if shape else np.array(low, dtype=dtype)
-                self.high = np.full(shape, high, dtype=dtype) if shape else np.array(high, dtype=dtype)
-                self.shape = shape or self.low.shape
-                self.dtype = dtype
-            def sample(self):
-                return np.random.uniform(self.low, self.high).astype(self.dtype)
-        
-        # ✅ FIX: 补充 Dict 占位类
-        class Dict:
-            def __init__(self, spaces_dict: Dict[str, Any]):
-                self.spaces = spaces_dict
-            
-            def sample(self):
-                return {k: v.sample() for k, v in self.spaces.items()}
-
+import gymnasium as gym
+from gymnasium import spaces
 from src.robot.robot_arm_system import get_combined_spec, PhysicsConfig
-from src.controllers.position_controller import (
-    OSC_PositionController, OSCGains,
-    IK_PositionController, PDGains,
-)
+from src.controllers.position_controller import OSCController, IKController, OSCGains, PDGains
 from src.controllers.hand_arm_controller import HandArmController
 from src.sensors.tactile_sensor import TactileReader
 
@@ -68,7 +40,7 @@ class RobotConfig:
     # 机器人参数
     rot_xyz_deg: Tuple[float, float, float] = (-90, 0, 0)
     attach_point_name: str = "right_hand"
-    tactile_backend: str = "simple_avg"   # "physics" | "simple_avg" | "none"
+    tactile_backend: str = "simple_avg"   # "simple" "simple_avg" "physics" "physics_avg"
     physics: Optional[PhysicsConfig] = None
 
     # 仿真参数
@@ -77,14 +49,12 @@ class RobotConfig:
     max_episode_steps: int = 500          # 单回合最大步数
 
     # 动作空间模式：决定动作如何解析
-    #   "osc_pose" : 6D 位姿增量 (3位移 + 3旋转) + 手部 = 12维
-    #   "osc_pos"  : 3D 位置增量 + 手部 = 9维（姿态自由）
-    #   "joint_pd" : 关节空间增量 = 13维
-    action_mode: str = "osc_pose"
+    #   "joint_pd" : 7Dof 机械臂 + 手部 6Dof = 13维
+    action_mode: str = "joint_pd"
 
     # 底层控制器类型：决定用哪种控制器执行
-    #   "osc" : OSC_PositionController（支持 set_ee_target / set_target）
-    #   "ik"  : IK_PositionController（支持 set_ee_target / set_target）
+    #   "osc" : 基于操作空间控制的 OSCController（推荐，适合连续平滑控制）
+    #   "ik"  : 基于逆运动学的 IKController（适合离散目标点，可能不够平滑）
     controller_type: str = "osc"
 
     # 动作缩放因子
@@ -96,8 +66,7 @@ class RobotConfig:
     action_scale_rot: Optional[float] = None
     # 手部推杆增量单独缩放（单位 米，满量程 0.01 m）
     # 推杆每步合理步长约 0.001 m（满量程的 10%），远小于臂的 action_scale。
-    # None 时 fallback 到 action_scale，但 action_scale=0.05 对推杆而言过大（5×满量程），
-    # 强烈建议显式设置为 0.001~0.002。
+    # None 时 fallback 到 action_scale，但 action_scale=0.05 对推杆而言过大（5×满量程），建议单独设置 action_scale_hand=0.001。
     action_scale_hand: Optional[float] = 0.001
 
     # 控制器增益
@@ -167,7 +136,7 @@ class RobotArmEnvBase(gym.Env, ABC):
         self.data: Optional[mujoco.MjData] = None
         self.reader: Optional[TactileReader] = None
         self.hw: Optional[HandArmController] = None
-        self.controller: Optional[Union[OSC_PositionController, IK_PositionController]] = None
+        self.controller: Optional[Union[OSCController, IKController]] = None
 
         self._initialized = False
 
@@ -185,7 +154,7 @@ class RobotArmEnvBase(gym.Env, ABC):
             - 额外传感器
 
         Args:
-            spec: 未编译的合并规格对象（已包含机械臂+手爪）。
+            spec: 未编译的合并规格对象（已包含机械臂+灵巧手）。
 
         Example:
             >>> def _build_scene(self, spec):
@@ -214,7 +183,7 @@ class RobotArmEnvBase(gym.Env, ABC):
         计算当前步奖励.
 
         Returns:
-            float: 奖励值（正奖励为好，负奖励为惩罚）。
+            float: 奖励值（正奖励为奖励，负奖励为惩罚）。
         """
         ...
 
@@ -264,21 +233,15 @@ class RobotArmEnvBase(gym.Env, ABC):
         动作空间.
 
         根据 action_mode 返回对应维度：
-            - "osc_pose" : 末端位移(3) + 末端旋转(3) + 手部(6) = 12维
-            - "osc_pos"  : 末端位移(3) + 手部(6) = 9维
-            - "joint_pd" : 臂关节增量(7) + 手部增量(6) = 13维
+            - "joint_pd" : 7Dof 机械臂 + 手部 6Dof = 13维
         """
         mode = self.cfg.action_mode
-        if mode == "osc_pose":
-            action_dim = 3 + 3 + self.HAND_DOF   # 12
-        elif mode == "osc_pos":
-            action_dim = 3 + self.HAND_DOF       # 9
-        elif mode == "joint_pd":
+        if mode == "joint_pd":
             action_dim = self.ARM_DOF + self.HAND_DOF  # 13
         else:
             raise ValueError(
                 f"Unknown action_mode: '{mode}'. "
-                f"Expected 'osc_pose', 'osc_pos', or 'joint_pd'."
+                f"Expected 'joint_pd'."
             )
         return spaces.Box(low=-1.0, high=1.0, shape=(action_dim,), dtype=np.float32)
 
@@ -340,14 +303,14 @@ class RobotArmEnvBase(gym.Env, ABC):
 
         if ctrl_type == "osc":
             gains = self.cfg.osc_gains if self.cfg.osc_gains is not None else OSCGains()
-            self.controller = OSC_PositionController(
+            self.controller = OSCController(
                 base=self.hw,
                 model=self.model,
                 gains=gains,
             )
         elif ctrl_type == "ik":
             gains = self.cfg.ik_gains if self.cfg.ik_gains is not None else PDGains()
-            self.controller = IK_PositionController(
+            self.controller = IKController(
                 base=self.hw,
                 model=self.model,
                 gains=gains,
@@ -371,11 +334,14 @@ class RobotArmEnvBase(gym.Env, ABC):
         if not self._initialized:
             raise RuntimeError("请先调用 reset() 初始化环境。")
 
-        # 应用动作（控制机器人）
+        # 应用动作并推进仿真
         self._apply_action(action)
-
-        # 推进仿真（多个物理步对应一个控制步）
-        for _ in range(self.cfg.n_sim_steps_per_control):
+        mujoco.mj_step(self.model, self.data)
+        # 在控制频率与仿真频率不匹配时，保持目标并推进额外的仿真步，确保动作持续生效，仿真状态更新充分。
+        for _ in range(self.cfg.n_sim_steps_per_control - 1):
+            # 重要！保持当前目标不变，持续推进仿真，否则动作只在第一步生效，后续仿真漂移。
+            self._keep_target()
+            # 继续推进仿真，更新状态（如触觉传感器）但不重新应用动作，避免污染前馈历史。
             mujoco.mj_step(self.model, self.data)
 
         # 收集结果
@@ -410,11 +376,6 @@ class RobotArmEnvBase(gym.Env, ABC):
         self.data = None
 
     # ====================== 便捷查询接口 ======================
-
-    def get_ee_pose(self) -> Tuple[np.ndarray, np.ndarray]:
-        """返回末端 (pos[3], quat[4])."""
-        return self.controller.get_ee_pose(self.data)
-
     def get_arm_qpos(self) -> np.ndarray:
         """返回机械臂关节角度 (7,)."""
         return self.data.qpos[self.controller.arm_qpos_ids].copy()
@@ -460,7 +421,7 @@ class RobotArmEnvBase(gym.Env, ABC):
         reader.bind(self.model)
         self.reader = reader
 
-        # 5. 初始化 HandArmController（底层运动学/动力学接口，不存状态，无需重建）
+        # 5. 初始化 HandArmController
         self.hw = HandArmController(self.model)
 
         # 6. 初始化控制器
@@ -494,85 +455,19 @@ class RobotArmEnvBase(gym.Env, ABC):
         """
         将归一化动作映射到控制器指令.
 
-        根据 action_mode 解析动作，统一调用控制器的 set_ee_target 或 set_target。
+        根据 action_mode 解析动作，统一调用控制器的set_joint_target或其他接口，控制器类型（osc/ik）与动作解析方式解耦。
         控制器类型（osc/ik）与动作解析方式解耦。
         """
         action = np.clip(action, -1.0, 1.0)
         mode = self.cfg.action_mode
 
-        if mode == "osc_pose":
-            self._apply_osc_pose_action(action)
-        elif mode == "osc_pos":
-            self._apply_osc_pos_action(action)
-        elif mode == "joint_pd":
+        if mode == "joint_pd":
             self._apply_joint_pd_action(action)
         else:
             raise ValueError(
                 f"Unknown action_mode: '{mode}'. "
-                f"Expected 'osc_pose', 'osc_pos', or 'joint_pd'."
+                f"Expected 'joint_pd'."
             )
-
-    def _apply_osc_pose_action(self, action: np.ndarray) -> None:
-        """
-        6D 位姿增量动作解析（基于持久目标累积增量）.
-
-        action[0:3]  → 末端位置增量（×action_scale）
-        action[3:6]  → 末端姿态增量（×action_scale_rot 或 action_scale）
-        action[6:]   → 手部目标增量（×action_scale_hand）
-
-        持久目标设计：
-            目标从上一步 _target_pos/_target_quat/_target_hand 出发累积，
-            而非每步从实际末端位置重算。这样零动作时目标不变，机械臂不漂移。
-        """
-        # ---- 位置：在上一步目标基础上叠加增量 ----
-        delta_pos = action[:3] * self.cfg.action_scale
-        self._target_pos = self._target_pos + delta_pos
-
-        # ---- 姿态：轴角增量叠加到上一步目标四元数 ----
-        scale_rot = self.cfg.action_scale_rot if self.cfg.action_scale_rot is not None else self.cfg.action_scale
-        delta_rpy = action[3:6] * scale_rot
-        angle = np.linalg.norm(delta_rpy)
-        if angle > 1e-6:
-            delta_quat = np.zeros(4)
-            mujoco.mju_axisAngle2Quat(delta_quat, delta_rpy / angle, angle)
-            new_quat = np.zeros(4)
-            mujoco.mju_mulQuat(new_quat, delta_quat, self._target_quat)
-            mujoco.mju_normalize4(new_quat)
-            self._target_quat = new_quat
-        # angle ≈ 0 时目标四元数保持不变
-
-        # ---- 手部：在上一步目标基础上叠加增量 ----
-        scale_hand = self.cfg.action_scale_hand if self.cfg.action_scale_hand is not None else self.cfg.action_scale
-        self._target_hand = self._target_hand + action[6:] * scale_hand
-
-        # 统一调用 set_ee_target（OSC 或 IK 控制器都支持）
-        self.controller.set_ee_target(
-            self.data,
-            ee_pos_target=self._target_pos,
-            ee_quat_target=self._target_quat,
-            hand_target=self._target_hand,
-        )
-
-    def _apply_osc_pos_action(self, action: np.ndarray) -> None:
-        """
-        3D 位置增量动作解析（姿态自由，基于持久目标累积增量）.
-
-        action[0:3]  → 末端位置增量（×action_scale）
-        action[3:]   → 手部目标增量（×action_scale_hand）
-        """
-        delta_pos = action[:3] * self.cfg.action_scale
-        self._target_pos = self._target_pos + delta_pos
-
-        scale_hand = self.cfg.action_scale_hand if self.cfg.action_scale_hand is not None else self.cfg.action_scale
-        self._target_hand = self._target_hand + action[3:] * scale_hand
-
-        # 姿态自由：不传 ee_quat_target
-        self.controller.set_ee_target(
-            self.data,
-            ee_pos_target=self._target_pos,
-            ee_quat_target=None,
-            hand_target=self._target_hand,
-        )
 
     def _apply_joint_pd_action(self, action: np.ndarray) -> None:
         """
@@ -589,9 +484,19 @@ class RobotArmEnvBase(gym.Env, ABC):
         scale_hand = self.cfg.action_scale_hand if self.cfg.action_scale_hand is not None else self.cfg.action_scale
         hand_delta = action[self.ARM_DOF:] * scale_hand
 
-        # 统一调用 set_target（OSC 或 IK 控制器都支持）
-        self.controller.set_target(
+        # 统一调用 
+        self.controller.set_joint_target(
             self.data,
             arm_target=current_arm + arm_delta,
             hand_target=current_hand + hand_delta,
         )
+        
+    def _keep_target(self) -> None:
+        """保持当前目标不变，持续推进仿真.
+        重要！否则动作只在第一步生效，后续仿真漂移。
+        """
+        self.controller.hold(self.data)
+    
+    def get_ee_pose(self) -> Tuple[np.ndarray, np.ndarray]:
+        """返回末端执行器当前位姿（位置 + 四元数）."""
+        return self.controller.get_ee_pose(self.data)

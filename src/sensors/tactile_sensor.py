@@ -1,5 +1,5 @@
 """
-触觉传感器统一适配层 (Tactile Adapter) — 完整版
+触觉传感器统一适配层 (Tactile Adapter)
 
 对外只暴露 TactileReader 接口，内部封装四种后端：
 - simple:      轻量 site 方案，单点采样
@@ -25,7 +25,6 @@ import numpy as np
 # 常量与配置
 # ===========================================================================
 
-# 15 块皮肤的标准映射
 _SKIN_TO_PHALANX = {
     "skin_0_0_p": "finger_0_bottom", "skin_0_1_p": "finger_0_middle", "skin_0_2_p": "finger_0_top",
     "skin_1_0_p": "finger_1_bottom", "skin_1_1_p": "finger_1_middle", "skin_1_2_p": "finger_1_top",
@@ -34,7 +33,6 @@ _SKIN_TO_PHALANX = {
     "skin_4_0_p": "thumb_bottom",    "skin_4_1_p": "thumb_middle",    "skin_4_2_p": "thumb_top",
 }
 
-# 展示顺序（固定，神经网络输入用）
 DISPLAY_ORDER: List[str] = [
     "finger_0_bottom", "finger_0_middle", "finger_0_top",
     "finger_1_bottom", "finger_1_middle", "finger_1_top",
@@ -43,7 +41,6 @@ DISPLAY_ORDER: List[str] = [
     "thumb_bottom",    "thumb_middle",    "thumb_top",
 ]
 
-# 各指节形状
 _PHALANX_SHAPE: Dict[str, Tuple[int, int]] = {
     "finger_0_bottom": (10, 7), "finger_0_middle": (8, 5), "finger_0_top": (6, 5),
     "finger_1_bottom": (10, 7), "finger_1_middle": (8, 5), "finger_1_top": (6, 5),
@@ -52,7 +49,6 @@ _PHALANX_SHAPE: Dict[str, Tuple[int, int]] = {
     "thumb_bottom":    (10, 7), "thumb_middle":    (8, 5), "thumb_top":    (6, 5),
 }
 
-# 各手指的指节顺序（index 0=bottom, 1=middle, 2=top）
 FINGER_PHALANX_ORDER: Dict[str, List[str]] = {
     "finger_0": ["finger_0_bottom", "finger_0_middle", "finger_0_top"],
     "finger_1": ["finger_1_bottom", "finger_1_middle", "finger_1_top"],
@@ -61,7 +57,6 @@ FINGER_PHALANX_ORDER: Dict[str, List[str]] = {
     "thumb":    ["thumb_bottom",    "thumb_middle",    "thumb_top"],
 }
 
-# 指节配置（phalanx_name, body_name, stl_file, rows, cols）
 _PHALANX_CONFIGS: List[Tuple[str, str, str, int, int]] = [
     ("finger_0_bottom", "finger_first_0_p",  "skin_0_0_p.STL", 10, 7),
     ("finger_0_middle", "finger_second_0_p", "skin_0_1_p.STL",  8, 5),
@@ -105,19 +100,18 @@ class TactileReader(ABC):
     统一读取接口。所有方法以 phalanx_name 为键（如 "finger_0_bottom"）。
     
     使用流程：
-        reader = TactileReader.create("physics_avg")  # 或 "simple", "physics", "simple_avg"
+        reader = TactileReader.create("physics_avg")
         reader.build(spec, hand_path, prefix)
         model = spec.compile()
         reader.bind(model)
         
-        # 仿真循环
         raw = reader.read_raw(data)      # Dict[str, ndarray(rows,cols)]
         img = reader.read_image(data)    # Dict[str, ndarray(rows,cols, uint8)]
         vec = reader.read_concat(data)   # ndarray(total_taxels,) 直接送网络
     """
 
     FORCE_MAX_NEWTON: float = 5.0
-    SUBGRID: int = 1  # 子采样网格大小，子类可覆盖
+    SUBGRID: int = 1
 
     def __init__(self):
         self._bound = False
@@ -231,7 +225,7 @@ class MultiPointAvgMixin:
     行优先规则网格输出点，其中 u,v ∈ [0,1] 是参数坐标。
     """
     
-    SUBGRID: int = 3  # 3x3 子采样
+    SUBGRID: int = 3
 
     def _get_expanded_points(self, stl_path: Path, rows: int, cols: int) -> np.ndarray:
         """
@@ -245,7 +239,6 @@ class MultiPointAvgMixin:
         fine_rows, fine_cols = rows * self.SUBGRID, cols * self.SUBGRID
         pts_fine = generate_surface_mesh_points_from_stl(stl_path, fine_rows, fine_cols)
         
-        # 验证点数
         expected = fine_rows * fine_cols
         if len(pts_fine) != expected:
             raise ValueError(
@@ -253,10 +246,8 @@ class MultiPointAvgMixin:
                 f"可能使用了非规则网格采样策略"
             )
         
-        # reshape 为 (rows, SUBGRID, cols, SUBGRID, 3)
-        # 然后转置为 (rows, cols, SUBGRID, SUBGRID, 3) 以便按 taxel 组织
         pts = pts_fine.reshape(rows, self.SUBGRID, cols, self.SUBGRID, 3)
-        pts = pts.transpose(0, 2, 1, 3, 4)  # -> (rows, cols, 3, 3, 3)
+        pts = pts.transpose(0, 2, 1, 3, 4)
         return pts
 
 
@@ -272,7 +263,6 @@ class SimpleReader(TactileReader):
         from src.sensors.stl_mesh_sampler import generate_surface_mesh_points_from_stl
 
         configs = [
-            # (skin_name, body_name, stl_file, rows, cols)
             ("skin_0_0_p", "finger_first_0_p",  "skin_0_0_p.STL", 10, 7),
             ("skin_0_1_p", "finger_second_0_p", "skin_0_1_p.STL",  8, 5),
             ("skin_0_2_p", "finger_second_0_p", "skin_0_2_p.STL",  6, 5),
@@ -298,14 +288,12 @@ class SimpleReader(TactileReader):
             stl_path = meshes_dir / stl_file
             pts_mesh = generate_surface_mesh_points_from_stl(stl_path, rows, cols)
             
-            # 获取 geom 在 body 中的位姿
             geom_name = skin_name
             try:
                 geom = spec.geom(prefix + geom_name)
             except KeyError:
                 geom = spec.geom(geom_name)
             
-            # 变换到 body 坐标系
             pos, quat = np.array(geom.pos), np.array(geom.quat)
             R = _quat_to_rot(quat)
             pts_body = pts_mesh @ R.T + pos
@@ -396,7 +384,6 @@ class PhysicsReader(TactileReader):
             stl_path = meshes_dir / stl_file
             pts_mesh = generate_surface_mesh_points_from_stl(stl_path, rows, cols)
 
-            # 获取 geom 位姿
             mesh_name = Path(stl_file).stem
             try:
                 geom = spec.geom(prefix + mesh_name)
@@ -406,8 +393,6 @@ class PhysicsReader(TactileReader):
             R = _quat_to_rot(quat)
             pts_local = pts_mesh @ R.T + pos
 
-            # 【关键修正】使用 body 原点作为 interior_ref 校正法向量
-            # body 原点在手指内部，确保法向量真正朝外
             interior_ref = np.zeros(3)
             normals = _outward_normals(pts_local, interior_ref)
 
@@ -421,7 +406,6 @@ class PhysicsReader(TactileReader):
                     pt, nvec = pts_local[idx], normals[idx]
                     tag = f"{phalanx_name}_r{r:02d}_c{c:02d}"
 
-                    # 子 body + 弹性关节
                     tb = target_body.add_body()
                     tb.name = f"{prefix}taxel_body_{tag}"
                     tb.pos = pt.tolist()
@@ -429,17 +413,15 @@ class PhysicsReader(TactileReader):
                     jt = tb.add_joint()
                     jt.name = f"{prefix}taxel_j_{tag}"
                     jt.type = mujoco.mjtJoint.mjJNT_SLIDE
-                    jt.axis = nvec.tolist()  # 朝外为正
+                    jt.axis = nvec.tolist()
                     jt.stiffness, jt.damping = self.stiffness, self.damping
                     jt.range, jt.limited = [-self.elastic_range, 0.0], True
 
-                    # 接触球
                     gm = tb.add_geom()
                     gm.name = f"{prefix}taxel_geom_{tag}"
                     gm.type, gm.size = mujoco.mjtGeom.mjGEOM_SPHERE, [self.taxel_radius, 0, 0]
                     gm.condim, gm.group, gm.rgba = 1, self.site_group, list(self.site_rgba)
 
-                    # Site + Sensor
                     st = tb.add_site()
                     st.name = f"{prefix}site_{tag}"
                     st.type, st.size = mujoco.mjtGeom.mjGEOM_SPHERE, [self.taxel_radius*1.5]*3
@@ -479,7 +461,7 @@ class SimpleAvgReader(TactileReader, MultiPointAvgMixin):
 
     def __init__(self):
         super().__init__()
-        self._sensor_names: Dict[str, List[List[List[str]]]] = {}  # [phalanx][r][c][sub_idx]
+        self._sensor_names: Dict[str, List[List[List[str]]]] = {}
 
     def build(self, spec, hand_path, prefix="inspirehand_", site_group=4,
               site_rgba=(1.0, 0.2, 0.2, 0.6), **kwargs):
@@ -505,15 +487,13 @@ class SimpleAvgReader(TactileReader, MultiPointAvgMixin):
 
         meshes_dir = Path(hand_path).parent / "meshes"
         self._sensor_names = {}
-        sensor_radius = 0.0015  # 子采样点更小，避免 site 互相穿透
+        sensor_radius = 0.0015
 
         for skin_name, body_name, stl_file, rows, cols in configs:
             stl_path = meshes_dir / stl_file
             
-            # 【关键】获取 3x3 子采样点，shape (rows, cols, 3, 3, 3)
             pts_grid = self._get_expanded_points(stl_path, rows, cols)
             
-            # 获取 geom 位姿
             geom_name = skin_name
             try:
                 geom = spec.geom(prefix + geom_name)
@@ -522,14 +502,13 @@ class SimpleAvgReader(TactileReader, MultiPointAvgMixin):
             pos, quat = np.array(geom.pos), np.array(geom.quat)
             R = _quat_to_rot(quat)
             
-            # 将所有子采样点变换到 body 坐标系
             pts_flat = pts_grid.reshape(-1, 3)
             pts_body_flat = pts_flat @ R.T + pos
             pts_body = pts_body_flat.reshape(rows, cols, 3, 3, 3)
             
             target_body = spec.body(prefix + body_name)
             phalanx_name = _SKIN_TO_PHALANX[skin_name]
-            taxel_sensors: List[List[List[str]]] = []  # [r][c][sub_idx]
+            taxel_sensors: List[List[List[str]]] = []
 
             for r in range(rows):
                 row_sensors = []
@@ -569,7 +548,6 @@ class SimpleAvgReader(TactileReader, MultiPointAvgMixin):
         self._sensor_ids = {}
         for phalanx_name, taxel_grid in self._sensor_names.items():
             meta = self._meta[phalanx_name]
-            # ids shape: (rows, cols, 9)
             ids = np.zeros((meta.rows, meta.cols, 9), dtype=np.int32)
             for r in range(meta.rows):
                 for c in range(meta.cols):
@@ -638,7 +616,6 @@ class PhysicsAvgReader(PhysicsReader, MultiPointAvgMixin):
             stl_path = meshes_dir / stl_file
             pts_grid = self._get_expanded_points(stl_path, rows, cols)
 
-            # 获取 geom 位姿
             mesh_name = Path(stl_file).stem
             try:
                 geom = spec.geom(prefix + mesh_name)
@@ -647,13 +624,11 @@ class PhysicsAvgReader(PhysicsReader, MultiPointAvgMixin):
             pos, quat = np.array(geom.pos), np.array(geom.quat)
             R = _quat_to_rot(quat)
             
-            # 变换到 body 坐标系
             pts_flat = pts_grid.reshape(-1, 3)
             pts_local = pts_flat @ R.T + pos
             pts_local = pts_local.reshape(rows, cols, 3, 3, 3)
 
-            # 计算法向量（基于中心点）
-            centers = pts_local.mean(axis=(2, 3))  # (rows, cols, 3)
+            centers = pts_local.mean(axis=(2, 3))
             interior_ref = np.zeros(3)
             normals = _outward_normals(
                 centers.reshape(-1, 3), interior_ref
@@ -669,7 +644,6 @@ class PhysicsAvgReader(PhysicsReader, MultiPointAvgMixin):
                     nvec = normals[r, c]
                     tag = f"{phalanx_name}_r{r:02d}_c{c:02d}"
 
-                    # 【核心差异】仍然只创建 1 个 taxel_body 和 1 个 joint
                     tb = target_body.add_body()
                     tb.name = f"{prefix}taxel_body_{tag}"
                     tb.pos = pt_center.tolist()
@@ -683,7 +657,6 @@ class PhysicsAvgReader(PhysicsReader, MultiPointAvgMixin):
                     jt.range = [-self.elastic_range, 0.0]
                     jt.limited = True
 
-                    # 接触球（代表整个 taxel 的碰撞体，放在中心）
                     gm = tb.add_geom()
                     gm.name = f"{prefix}taxel_geom_{tag}"
                     gm.type = mujoco.mjtGeom.mjGEOM_SPHERE
@@ -692,20 +665,18 @@ class PhysicsAvgReader(PhysicsReader, MultiPointAvgMixin):
                     gm.group = self.site_group
                     gm.rgba = list(self.site_rgba)
 
-                    # 【关键】在这个 taxel_body 下创建 9 个 site（相对坐标）
                     sub_sensors = []
                     for sr in range(3):
                         for sc in range(3):
                             idx = sr * 3 + sc
                             pt_local = pts_local[r, c, sr, sc]
-                            # 计算相对于 taxel_body 原点的偏移
                             offset = pt_local - pt_center
                             
-                            st = tb.add_site()  # 注意：添加到 tb，不是 target_body
+                            st = tb.add_site()
                             st.name = f"{prefix}site_{tag}_s{idx}"
                             st.type = mujoco.mjtGeom.mjGEOM_SPHERE
                             st.size = [self.taxel_radius * 0.8] * 3
-                            st.pos = offset.tolist()  # 相对坐标
+                            st.pos = offset.tolist()
                             st.group = self.site_group
                             st.rgba = list(self.site_rgba)
 
@@ -764,10 +735,10 @@ class _MultiPhalanxArray:
     """支持 3x3 子采样的传感器阵列描述符"""
 
     def __init__(self, name: str, rows: int, cols: int, 
-                 names: List[List[List[str]]]):  # [r][c][9]
+                 names: List[List[List[str]]]):
         self.name, self.rows, self.cols = name, rows, cols
         self.names = names
-        self.ids: Optional[np.ndarray] = None  # (rows, cols, 9)
+        self.ids: Optional[np.ndarray] = None
 
     def bind(self, model: mujoco.MjModel):
         self.ids = np.zeros((self.rows, self.cols, 9), dtype=np.int32)
@@ -782,7 +753,6 @@ class _MultiPhalanxArray:
     def read(self, data: mujoco.MjData) -> np.ndarray:
         if self.ids is None:
             raise RuntimeError("Not bound")
-        # sensordata -> (rows, cols, 9) -> mean -> (rows, cols)
         raw = data.sensordata[self.ids.reshape(-1)].reshape(
             self.rows, self.cols, 9
         )
@@ -801,7 +771,7 @@ def _quat_to_rot(q: np.ndarray) -> np.ndarray:
 
 def _outward_normals(pts_local: np.ndarray, interior_ref: np.ndarray) -> np.ndarray:
     """
-    计算点云朝外法向量（关键修正：使用 interior_ref 确保方向正确）。
+    计算点云朝外法向量。
     
     Args:
         pts_local: 变换到 body 坐标系后的点云，shape (N, 3)。
@@ -810,17 +780,12 @@ def _outward_normals(pts_local: np.ndarray, interior_ref: np.ndarray) -> np.ndar
     """
     centered = pts_local - pts_local.mean(0)
     _, _, vh = np.linalg.svd(centered, full_matrices=False)
-    # 最小奇异值对应的向量 ≈ 点云薄壁方向
     thin_axis = vh[-1]
-    # 去除薄壁分量，得到径向方向
     radial = centered - (centered @ thin_axis)[:, None] * thin_axis
     norms = np.linalg.norm(radial, axis=1, keepdims=True) + 1e-12
     normals = radial / norms
 
-    # 【关键修正】用 interior_ref 校正方向
-    # interior_ref 在手指内部，pt → interior_ref 是朝内的
-    # 法向量应与其方向相反（dot < 0），若同向则翻转
-    inward_vecs = interior_ref[None, :] - pts_local  # (N,3)，朝内
+    inward_vecs = interior_ref[None, :] - pts_local
     dots = np.einsum('ij,ij->i', normals, inward_vecs)
     flip_mask = dots > 0
     normals[flip_mask] *= -1
@@ -837,7 +802,7 @@ def build_tactile_reader(backend: str, spec: mujoco.MjSpec, hand_path: Path,
     """
     创建并 build 的便捷函数（注意：bind 需在 compile 后手动调用）。
     
-    正确用法：
+    用法：
         reader = build_tactile_reader("physics_avg", spec, hand_path)
         model = spec.compile()
         reader.bind(model)
