@@ -49,8 +49,9 @@ class RobotConfig:
     max_episode_steps: int = 500          # 单回合最大步数
 
     # 动作空间模式：决定动作如何解析
-    #   "joint_pd" : 7Dof 机械臂 + 手部 6Dof = 13维
-    action_mode: str = "joint_pd"
+    #   "joint" : 7Dof 机械臂 + 手部 6Dof = 13维
+    #   "ee" : 末端位姿增量（位置 + 姿态）+ 手部 6Dof = 12维
+    action_mode: str = "joint"
 
     # 底层控制器类型：决定用哪种控制器执行
     #   "osc" : 基于操作空间控制的 OSCController（推荐，适合连续平滑控制）
@@ -67,7 +68,7 @@ class RobotConfig:
     # 手部推杆增量单独缩放（单位 米，满量程 0.01 m）
     # 推杆每步合理步长约 0.001 m（满量程的 10%），远小于臂的 action_scale。
     # None 时 fallback 到 action_scale，但 action_scale=0.05 对推杆而言过大（5×满量程），建议单独设置 action_scale_hand=0.001。
-    action_scale_hand: Optional[float] = 0.001
+    action_scale_hand: Optional[float] = 0.005
 
     # 控制器增益
     osc_gains: Optional[OSCGains] = None  # OSC 控制器增益，None 时使用默认
@@ -233,15 +234,22 @@ class RobotArmEnvBase(gym.Env, ABC):
         动作空间.
 
         根据 action_mode 返回对应维度：
-            - "joint_pd" : 7Dof 机械臂 + 手部 6Dof = 13维
+            - "joint" : 7Dof 机械臂 + 手部 6Dof = 13维
+            - "ee" : 末端位姿增量（位置 + 姿态）+ 手部 6Dof = 12维
+         维度顺序统一为 [arm, hand]，其中 arm 根据 mode式解析为关节增量或末端位姿增量，hand 始终为关节增量。动作值归一化到 [-1, 1]，由 _apply_action 解析为实际控制指令。
+            "joint" 模式下 action[:7] 是臂关节增量，action[7:] 是手部关节增量；
+            "ee" 模式下 action[:6] 是末端位姿增量（位置 + 姿态），action[6:] 是手部关节增量。
+         这种设计使得控制器类型（osc/ik）与动作解析方式解耦，便于在不同任务中灵活选择控制方式和动作表示。
         """
         mode = self.cfg.action_mode
-        if mode == "joint_pd":
-            action_dim = self.ARM_DOF + self.HAND_DOF  # 13
+        if mode == "joint":
+            action_dim = self.ARM_DOF + self.HAND_DOF  # 机械臂 7Dof + 手部 6Dof = 13维
+        elif mode == "ee":
+            action_dim = 6 + self.HAND_DOF  # 末端位姿增量（位置+姿态）+ 手部 6Dof = 12维
         else:
             raise ValueError(
                 f"Unknown action_mode: '{mode}'. "
-                f"Expected 'joint_pd'."
+                f"Expected 'joint' or 'ee'."
             )
         return spaces.Box(low=-1.0, high=1.0, shape=(action_dim,), dtype=np.float32)
 
@@ -461,15 +469,17 @@ class RobotArmEnvBase(gym.Env, ABC):
         action = np.clip(action, -1.0, 1.0)
         mode = self.cfg.action_mode
 
-        if mode == "joint_pd":
-            self._apply_joint_pd_action(action)
+        if mode == "joint":
+            self._apply_joint_action(action)
+        elif mode == "ee":
+            self._apply_ee_action(action)
         else:
             raise ValueError(
                 f"Unknown action_mode: '{mode}'. "
-                f"Expected 'joint_pd'."
+                f"Expected 'joint' or 'ee'."
             )
 
-    def _apply_joint_pd_action(self, action: np.ndarray) -> None:
+    def _apply_joint_action(self, action: np.ndarray) -> None:
         """
         关节空间增量动作解析.
 
@@ -488,6 +498,66 @@ class RobotArmEnvBase(gym.Env, ABC):
         self.controller.set_joint_target(
             self.data,
             arm_target=current_arm + arm_delta,
+            hand_target=current_hand + hand_delta,
+        )
+    
+    def _apply_ee_action(self, action: np.ndarray) -> None:
+        """
+        末端空间增量动作解析
+
+        action[:6]   -> 位置 + 姿态增量
+        action[6:]   -> 手部关节增量
+        """
+        current_pos, current_quat = self.get_ee_pose()
+        current_hand = self.get_hand_qpos()
+
+        # ----------------------------
+        # 位置增量
+        # ----------------------------
+        pos_delta = action[:3] * self.cfg.action_scale
+        self._target_pos = current_pos + pos_delta
+
+        # ----------------------------
+        # 姿态增量
+        # ----------------------------
+        rot_scale = (
+            self.cfg.action_scale_rot
+            if self.cfg.action_scale_rot is not None
+            else self.cfg.action_scale
+        )
+
+        rot_delta = action[3:6] * rot_scale
+
+        angle = np.linalg.norm(rot_delta)
+
+        if angle < 1e-8:
+            delta_quat = np.array([1.0, 0.0, 0.0, 0.0])
+        else:
+            axis = rot_delta / angle
+            delta_quat = np.zeros(4)
+            mujoco.mju_axisAngle2Quat(delta_quat, axis, angle)
+
+        # 注意：局部坐标系增量
+        target_quat = np.zeros(4)
+        mujoco.mju_mulQuat(target_quat, current_quat, delta_quat)
+
+        self._target_quat = target_quat
+
+        # ----------------------------
+        # 手部增量
+        # ----------------------------
+        scale_hand = (
+            self.cfg.action_scale_hand
+            if self.cfg.action_scale_hand is not None
+            else self.cfg.action_scale
+        )
+
+        hand_delta = action[6:] * scale_hand
+
+        self.controller.set_ee_target(
+            self.data,
+            ee_pos_target=self._target_pos,
+            ee_quat_target=self._target_quat,
             hand_target=current_hand + hand_delta,
         )
         

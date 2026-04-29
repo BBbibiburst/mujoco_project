@@ -15,7 +15,7 @@ python -m src.env.demo \\
   --task stack \\
   --mode random \\
   --episodes 5 \\
-  --action-mode joint_pd \\
+  --action-mode joint \\
   --controller osc \\
   --no-render
 
@@ -23,7 +23,6 @@ python -m src.env.demo \\
 1. random    : 随机策略回合演示（仿真窗口 + 触觉热力图 + 相机画面 + 末端轨迹可视化）
 2. verify    : 观测空间形状与数值范围验证
 3. benchmark : 无渲染高速基准测试（N 回合）
-4. sinusoid  : 灵巧手正弦运动演示（+ 末端轨迹可视化）
 """
 
 import sys
@@ -142,77 +141,43 @@ class TrajectoryVisualStyle:
 class EETrajectoryVisualizer:
     """
     末端执行器轨迹调试几何体绘制工具.
-    
+
     利用 MuJoCo 的 user_scn 接口在仿真 Viewer 中绘制自定义几何体，
     同时显示实际位置（青色小球）和目标位置（红色大球）。
-    
-    设计策略：
-        - 缓冲区安全：检查 ngeom 防止溢出
-        - 双轨迹显示：同时绘制实际位置和历史轨迹点
-        - 自动衰减：历史轨迹点透明度随时间衰减（可选）
     """
-    
+
     def __init__(self, style: TrajectoryVisualStyle, max_history: int = 50):
-        """
-        初始化可视化工具.
-        
-        Args:
-            style: 可视化样式配置
-            max_history: 历史轨迹点最大保留数量（0=不保留历史）
-        """
         self.style = style
         self.max_history = max_history
         self.actual_pos: Optional[np.ndarray] = None
         self.target_pos: Optional[np.ndarray] = None
-        self.history: list = []  # 历史实际位置列表
-    
+        self.history: list = []
+
     def update(self, actual_pos: np.ndarray, target_pos: Optional[np.ndarray] = None):
-        """
-        更新当前末端位置.
-        
-        Args:
-            actual_pos: 实际末端位置 (3,)
-            target_pos: 目标末端位置 (3,)，可选
-        """
         self.actual_pos = actual_pos.copy()
         if target_pos is not None:
             self.target_pos = target_pos.copy()
-        
-        # 记录历史轨迹
         if self.max_history > 0:
             self.history.append(actual_pos.copy())
             if len(self.history) > self.max_history:
                 self.history.pop(0)
-    
-    def draw(self, viewer: mujoco.viewer) -> None:
-        """
-        将轨迹渲染到 Viewer 场景中.
-        
-        注意：必须在每帧循环开始时重置 viewer.user_scn.ngeom，
-              否则几何体会累积导致画面混乱。
-        
-        Args:
-            viewer: MuJoCo Viewer 实例
-        """
+
+    def draw(self, viewer) -> None:
         if self.actual_pos is None:
             return
-        
-        # 安全检查：防止超出几何体缓冲区上限
+
         max_geoms = 1000
         safety_margin = 50
-        
-        # 1. 绘制历史轨迹（衰减的小点）
+
+        # 1. 历史轨迹（衰减小点）
         if self.max_history > 0 and len(self.history) > 1:
-            for i, hist_pos in enumerate(self.history[:-1]):  # 排除当前点
+            for i, hist_pos in enumerate(self.history[:-1]):
                 if viewer.user_scn.ngeom >= max_geoms - safety_margin:
                     break
-                    
-                # 透明度随历史衰减
                 alpha = 0.1 + 0.3 * (i / len(self.history))
                 size = self.style.actual_size * (0.5 + 0.5 * (i / len(self.history)))
                 rgba = self.style.actual_rgba.copy()
                 rgba[3] = alpha
-                
                 geom_id = viewer.user_scn.ngeom
                 mujoco.mjv_initGeom(
                     viewer.user_scn.geoms[geom_id],
@@ -220,11 +185,11 @@ class EETrajectoryVisualizer:
                     size=[size, 0, 0],
                     pos=hist_pos,
                     mat=np.eye(3).flatten(),
-                    rgba=rgba
+                    rgba=rgba,
                 )
                 viewer.user_scn.ngeom += 1
-        
-        # 2. 绘制当前实际位置（青色实心球）
+
+        # 2. 当前实际位置（青色实心球）
         if viewer.user_scn.ngeom < max_geoms - safety_margin:
             geom_id = viewer.user_scn.ngeom
             mujoco.mjv_initGeom(
@@ -233,11 +198,11 @@ class EETrajectoryVisualizer:
                 size=[self.style.actual_size, 0, 0],
                 pos=self.actual_pos,
                 mat=np.eye(3).flatten(),
-                rgba=self.style.actual_rgba
+                rgba=self.style.actual_rgba,
             )
             viewer.user_scn.ngeom += 1
-        
-        # 3. 绘制目标位置（红色大球）
+
+        # 3. 目标位置（红色大球）
         if self.target_pos is not None and viewer.user_scn.ngeom < max_geoms - safety_margin:
             geom_id = viewer.user_scn.ngeom
             mujoco.mjv_initGeom(
@@ -246,12 +211,11 @@ class EETrajectoryVisualizer:
                 size=[self.style.target_size, 0, 0],
                 pos=self.target_pos,
                 mat=np.eye(3).flatten(),
-                rgba=self.style.target_rgba
+                rgba=self.style.target_rgba,
             )
             viewer.user_scn.ngeom += 1
-    
+
     def reset(self):
-        """重置历史轨迹."""
         self.history.clear()
         self.actual_pos = None
         self.target_pos = None
@@ -262,14 +226,13 @@ class EETrajectoryVisualizer:
 def render_tactile_heatmap(obs: dict, sub_h: int = 160, sub_w: int = 200) -> np.ndarray:
     """
     将扁平化触觉图像渲染为热力图网格。
-    支持任意包含 tactile_bottom / tactile_middle / tactile_top 键的观测字典。
     布局：行=指节层（top/middle/bottom），列=手指（5根）
     返回 shape: (3*sub_h, 5*sub_w, 3)
     """
     finger_keys = ["finger_0", "finger_1", "finger_2", "finger_3", "thumb"]
     level_order = ["top", "middle", "bottom"]
     level_to_key = {
-        "top": "tactile_top",
+        "top":    "tactile_top",
         "middle": "tactile_middle",
         "bottom": "tactile_bottom",
     }
@@ -284,10 +247,10 @@ def render_tactile_heatmap(obs: dict, sub_h: int = 160, sub_w: int = 200) -> np.
             imgs = imgs[..., 0]
         row_frames = []
         for finger_idx, finger in enumerate(finger_keys):
-            img = imgs[finger_idx]  # (H, W)
+            img = imgs[finger_idx]
             enhanced = np.clip(img.astype(np.float32) * 5.0, 0, 255).astype(np.uint8)
-            resized = cv2.resize(enhanced, (sub_w, sub_h), interpolation=cv2.INTER_NEAREST)
-            heatmap = cv2.applyColorMap(resized, cv2.COLORMAP_JET)
+            resized  = cv2.resize(enhanced, (sub_w, sub_h), interpolation=cv2.INTER_NEAREST)
+            heatmap  = cv2.applyColorMap(resized, cv2.COLORMAP_JET)
             phalanx_name = FINGER_PHALANX_ORDER[finger][level_to_phalanx_idx[level]]
             parts = phalanx_name.split('_')
             if parts[0] == "thumb":
@@ -295,7 +258,8 @@ def render_tactile_heatmap(obs: dict, sub_h: int = 160, sub_w: int = 200) -> np.
             else:
                 short_name = f"F{parts[1]}_{parts[2][:3].capitalize()}"
             cv2.rectangle(heatmap, (0, 0), (sub_w, 22), (0, 0, 0), -1)
-            cv2.putText(heatmap, short_name, (4, 16), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+            cv2.putText(heatmap, short_name, (4, 16),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
             row_frames.append(heatmap)
         grid_rows.append(np.hstack(row_frames))
     if not grid_rows:
@@ -318,34 +282,21 @@ def _format_info_line(info: dict, display_keys: dict) -> str:
 
 
 def _get_ee_position(env: RobotArmEnvBase) -> Optional[np.ndarray]:
-    """
-    获取末端执行器位置.
-    
-    基类环境提供 get_ee_pose() 方法返回位置和四元数，这里只提取位置部分。
-    
-    Returns:
-        3D位置向量
-    """
-    # 直接从环境直接获取
-    ee_pos = env.get_ee_pose()[0]  # (pos, quat)
-    return ee_pos
+    """获取末端执行器位置."""
+    return env.get_ee_pose()[0]
 
-# ====================== 演示模式1：随机策略（集成轨迹可视化） ======================
+
+# ====================== 演示模式1：随机策略 ======================
 
 def demo_random_policy(
     task_name: str = "pick_place",
     n_episodes: int = 3,
     render: bool = True,
-    action_mode: str = "joint_pd",
+    action_mode: str = "joint",
     controller_type: str = "osc",
     show_ee_traj: bool = True,
 ):
-    """
-    随机策略演示：仿真窗口 + 触觉热力图 + 任务状态信息 + 末端轨迹可视化.
-    
-    Args:
-        show_ee_traj: 是否显示末端执行器轨迹小球
-    """
+    """随机策略演示：仿真窗口 + 触觉热力图 + 任务状态信息 + 末端轨迹可视化."""
     reg = TASK_REGISTRY[task_name]
     print("=" * 65)
     print(f" [Demo] 随机策略 | 任务={reg['display_name']}")
@@ -369,86 +320,83 @@ def demo_random_policy(
         obs, info = env.reset(seed=42)
         print(f"\n[初始化] obs keys: {list(obs.keys())}")
         for k, v in obs.items():
-            print(f" {k}: shape={v.shape}, dtype={v.dtype}")
-        print(f" action_dim: {env.action_space.shape[0]}")
+            print(f"  {k}: shape={v.shape}, dtype={v.dtype}")
+        print(f"  action_dim: {env.action_space.shape[0]}")
 
-        # 初始化轨迹可视化工具
         traj_vis = None
         if show_ee_traj:
-            style = TrajectoryVisualStyle()
-            traj_vis = EETrajectoryVisualizer(style, max_history=30)
+            traj_vis = EETrajectoryVisualizer(TrajectoryVisualStyle(), max_history=30)
 
         with mujoco.viewer.launch_passive(env.model, env.data) as viewer:
-            episode = 0
-            step = 0
+            episode   = 0
+            step      = 0
             ep_reward = 0.0
-            
+
             while viewer.is_running() and episode < n_episodes:
                 action = env.action_space.sample()
                 obs, reward, terminated, truncated, info = env.step(action)
                 ep_reward += reward
-                step += 1
+                step      += 1
 
-                # --- 轨迹可视化 ---
+                # 轨迹可视化
                 if show_ee_traj and traj_vis is not None:
-                    # 重置几何体计数（必须在每帧开始时）
                     viewer.user_scn.ngeom = 0
-                    
-                    # 获取实际末端位置
                     actual_pos = _get_ee_position(env)
                     if actual_pos is not None:
-                        # 对于随机策略，没有明确的目标位置，只显示实际轨迹
-                        traj_vis.update(actual_pos, target_pos=None)
+                        traj_vis.update(actual_pos)
                         traj_vis.draw(viewer)
 
-                # --- OpenCV 可视化 ---
+                # 触觉热力图
                 heatmap = render_tactile_heatmap(obs)
                 cv2.namedWindow("Tactile (Top/Mid/Bot)", cv2.WINDOW_NORMAL)
                 cv2.imshow("Tactile (Top/Mid/Bot)", heatmap)
                 cv2.resizeWindow("Tactile (Top/Mid/Bot)", 1000, 480)
 
-                cv2.namedWindow("Camera", cv2.WINDOW_NORMAL)
-                cam_bgr = cv2.cvtColor(obs["camera_rgb"], cv2.COLOR_RGB2BGR)
+                # 相机画面
+                cam_bgr  = cv2.cvtColor(obs["camera_rgb"], cv2.COLOR_RGB2BGR)
                 info_str = _format_info_line(info, info_display)
-                cv2.putText(cam_bgr, info_str, (5, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1, cv2.LINE_AA)
+                cv2.putText(cam_bgr, info_str, (5, 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1, cv2.LINE_AA)
+                cv2.namedWindow("Camera", cv2.WINDOW_NORMAL)
                 cv2.imshow("Camera", cam_bgr)
                 cv2.resizeWindow("Camera", 640, 480)
-                
+
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
 
                 viewer.sync()
 
                 if terminated or truncated:
-                    status = "✓ 成功" if terminated else "✗ 超时"
+                    status    = "✓ 成功" if terminated else "✗ 超时"
                     info_line = _format_info_line(info, info_display)
                     print(
                         f"[Episode {episode+1}] {status} | "
                         f"steps={step}, reward={ep_reward:.2f} | {info_line}"
                     )
-                    episode += 1
-                    step = 0
+                    episode  += 1
+                    step      = 0
                     ep_reward = 0.0
-                    
-                    # 重置轨迹历史
                     if traj_vis is not None:
                         traj_vis.reset()
-                    
                     if episode < n_episodes:
                         obs, info = env.reset()
+
+        cv2.destroyAllWindows()
+        env.close()
+
     else:
         # 无渲染模式
         total_rewards, total_steps, successes = [], [], 0
         for ep in range(n_episodes):
             obs, info = env.reset(seed=ep)
             ep_reward = 0.0
-            ep_steps = 0
-            done = False
+            ep_steps  = 0
+            done      = False
             while not done:
                 action = env.action_space.sample()
                 obs, reward, terminated, truncated, info = env.step(action)
                 ep_reward += reward
-                ep_steps += 1
+                ep_steps  += 1
                 done = terminated or truncated
             total_rewards.append(ep_reward)
             total_steps.append(ep_steps)
@@ -456,17 +404,17 @@ def demo_random_policy(
                 successes += 1
             info_line = _format_info_line(info, info_display)
             print(
-                f" Ep {ep+1:3d}: reward={ep_reward:7.2f}, "
+                f"  Ep {ep+1:3d}: reward={ep_reward:7.2f}, "
                 f"steps={ep_steps:4d}, {'SUCCESS' if terminated else 'timeout'} | {info_line}"
             )
-        print(f"\n 平均奖励: {np.mean(total_rewards):.2f} ± {np.std(total_rewards):.2f}")
-        print(f" 平均步数: {np.mean(total_steps):.1f}")
-        print(f" 成功率: {successes/n_episodes*100:.1f}%")
-        cv2.destroyAllWindows()
+        print(f"\n  平均奖励: {np.mean(total_rewards):.2f} ± {np.std(total_rewards):.2f}")
+        print(f"  平均步数: {np.mean(total_steps):.1f}")
+        print(f"  成功率:   {successes / n_episodes * 100:.1f}%")
         env.close()
 
 
-# ====================== 演示模式3：观测空间验证 ======================
+# ====================== 演示模式2：观测空间验证 ======================
+
 def demo_verify_observation_space(task_name: str = "pick_place"):
     """验证所有观测分量的形状与数值范围."""
     reg = TASK_REGISTRY[task_name]
@@ -475,7 +423,7 @@ def demo_verify_observation_space(task_name: str = "pick_place"):
     print("=" * 65)
 
     robot_cfg = RobotConfig(
-        action_mode="joint_pd",
+        action_mode="joint",
         controller_type="osc",
         max_episode_steps=100,
         tactile_backend="simple_avg",
@@ -485,16 +433,16 @@ def demo_verify_observation_space(task_name: str = "pick_place"):
 
     print("\n--- 观测空间结构 ---")
     for key, val in obs.items():
-        print(f" {key}: shape={val.shape}, dtype={val.dtype}, "
+        print(f"  {key}: shape={val.shape}, dtype={val.dtype}, "
               f"min={val.min():.2f}, max={val.max():.2f}")
 
     print("\n--- 动作空间 ---")
-    print(f" shape={env.action_space.shape}, "
+    print(f"  shape={env.action_space.shape}, "
           f"low={env.action_space.low[0]:.1f}, high={env.action_space.high[0]:.1f}")
 
     print("\n--- 初始任务状态 ---")
     for k, label in reg["info_display"].items():
-        print(f" {label}: {info.get(k, 'N/A')}")
+        print(f"  {label}: {info.get(k, 'N/A')}")
 
     cam_bgr = cv2.cvtColor(obs["camera_rgb"], cv2.COLOR_RGB2BGR)
     cv2.namedWindow("Camera RGB", cv2.WINDOW_NORMAL)
@@ -512,11 +460,12 @@ def demo_verify_observation_space(task_name: str = "pick_place"):
     env.close()
 
 
-# ====================== 演示模式4：基准测试 ======================
+# ====================== 演示模式3：基准测试 ======================
+
 def demo_benchmark(
     task_name: str = "pick_place",
     n_episodes: int = 100,
-    action_mode: str = "joint_pd",
+    action_mode: str = "joint",
     controller_type: str = "osc",
 ):
     """无渲染高速基准测试."""
@@ -533,9 +482,9 @@ def demo_benchmark(
     )
     env = _load_task(task_name, robot_cfg)
 
-    t0 = time.time()
+    t0          = time.time()
     total_steps = 0
-    successes = 0
+    successes   = 0
 
     for ep in range(n_episodes):
         env.reset(seed=ep)
@@ -550,15 +499,16 @@ def demo_benchmark(
     elapsed = time.time() - t0
     env.close()
 
-    print(f" 总步数: {total_steps} | 总时间: {elapsed:.1f}s")
-    print(f" 步频: {total_steps/elapsed:.0f} steps/s")
-    print(f" 回合频: {n_episodes/elapsed:.1f} eps/s")
-    print(f" 成功率: {successes/n_episodes*100:.1f}%")
+    print(f"  总步数:  {total_steps} | 总时间: {elapsed:.1f}s")
+    print(f"  步频:    {total_steps / elapsed:.0f} steps/s")
+    print(f"  回合频:  {n_episodes / elapsed:.1f} eps/s")
+    print(f"  成功率:  {successes / n_episodes * 100:.1f}%")
 
 # ====================== 入口 ======================
 
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser(
         description="通用任务环境演示（支持5个灵巧手任务）",
         formatter_class=argparse.RawTextHelpFormatter,
@@ -567,25 +517,29 @@ if __name__ == "__main__":
         "--task",
         choices=list(TASK_REGISTRY.keys()),
         default="pick_place",
-        help="要演示的任务名称：" + "\n" +
-             "\n".join(f" {k}: {v['display_name']}" for k, v in TASK_REGISTRY.items()),
+        help=(
+            "要演示的任务名称：\n"
+            + "\n".join(f"  {k}: {v['display_name']}" for k, v in TASK_REGISTRY.items())
+        ),
     )
     parser.add_argument(
         "--mode",
         choices=["random", "verify", "benchmark"],
         default="random",
-        help="演示模式",
+        help=(
+            "演示模式：\n"
+            "  random    随机策略 + 可视化\n"
+            "  verify    观测空间验证\n"
+            "  benchmark 无渲染高速基准测试\n"
+        ),
     )
-    parser.add_argument("--no-render", action="store_true", help="禁用可视化（加速运行）")
-    parser.add_argument("--episodes", type=int, default=3, help="演示回合数")
+    parser.add_argument("--no-render",  action="store_true", help="禁用可视化（random 模式）")
+    parser.add_argument("--no-traj",    action="store_true", help="禁用末端执行器轨迹可视化")
+    parser.add_argument("--episodes",   type=int, default=3, help="演示回合数")
     parser.add_argument(
-        "--no-traj", action="store_true",
-        help="禁用末端执行器轨迹可视化小球"
-    )
-    parser.add_argument(
-        "--action-mode",
-        choices=["joint_pd"],
-        default="joint_pd"
+        "--action-mode", 
+        choices=["joint", "ee"],
+        default="joint",
     )
     parser.add_argument(
         "--controller",
@@ -594,14 +548,14 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    render = not args.no_render
+    render    = not args.no_render
     show_traj = not args.no_traj
-    
+
     print(f"\n{'='*65}")
-    print(f" 任务: {TASK_REGISTRY[args.task]['display_name']}")
-    print(f" 模式: {args.mode}")
-    print(f" 渲染: {'是' if render else '否'}")
-    print(f" 轨迹可视化: {'是' if show_traj else '否'}")
+    print(f"  任务:       {TASK_REGISTRY[args.task]['display_name']}")
+    print(f"  模式:       {args.mode}")
+    print(f"  渲染:       {'是' if render else '否'}")
+    print(f"  轨迹可视化: {'是' if show_traj else '否'}")
     print(f"{'='*65}\n")
 
     if args.mode == "random":

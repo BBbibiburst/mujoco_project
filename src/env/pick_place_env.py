@@ -11,9 +11,9 @@
     - tactile_top:     (5, 6, 5)      5手指 × 6行 × 5列   顶部指节
     - proprioception:  (13,)          机械臂7DOF + 手6DOF 关节角度
 
-动作空间（13维连续）：
-    - 机械臂7维：每个关节的目标位置增量，归一化到 [-1, 1]，实际控制范围由 robot_config 定义
-    - 手部6维：每个手指的开合目标增量，归一化到 [-1, 1]，实际控制范围由 task_config 定义
+动作空间（根据 base_env.py 的 action_mode 定义）：
+    - "joint" : 13维 机械臂7Dof + 手部6Dof 关节增量
+    - "ee" : 12维 末端位姿增量（位置3D + 姿态3D）+ 手部6Dof 关节增量
 """
 
 from dataclasses import dataclass, field
