@@ -33,8 +33,8 @@ from src.sensors.tactile_sensor import TactileReader
 # ====================== 路径配置 ======================
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
-DEFAULT_ARM_PATH = PROJECT_ROOT / "models" / "rm75b" / "rm75b.xml"
-DEFAULT_HAND_PATH = PROJECT_ROOT / "models" / "inspirehand" / "inspirehand.xml"
+DEFAULT_ARM_PATH = PROJECT_ROOT / "mjcfs" / "rm75b" / "rm75b.xml"
+DEFAULT_HAND_PATH = PROJECT_ROOT / "mjcfs" / "inspirehand" / "inspirehand.xml"
 
 PathLike = Union[str, Path]
 
@@ -365,7 +365,7 @@ if __name__ == "__main__":
 
     except FileNotFoundError as e:
         print(f"\n[错误] 文件未找到: {e}")
-        print("请检查 'models/' 目录结构是否正确，确保包含 rm75b/ 和 inspirehand/ 子目录")
+        print("请检查 'mjcfs/' 目录结构是否正确，确保包含 rm75b/ 和 inspirehand/ 子目录")
     except Exception as e:
         print(f"\n[错误] 发生未知异常: {e}")
         traceback.print_exc()
