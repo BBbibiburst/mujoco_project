@@ -1,11 +1,14 @@
 """
-train.py —— Robosuite 1.5 Kinova3FlippedGripper（InspireRightHand）PickPlace 训练
+train.py —— Robosuite 1.5 Kinova3FlippedGripper（InspireRightHand）PickPlace 并行训练
 """
 
 import os
+import warnings
 import argparse
 import numpy as np
 from scipy.spatial.transform import Rotation as R
+
+warnings.filterwarnings("ignore", category=UserWarning, module="gymnasium")
 
 import robosuite as suite
 from robosuite.robots import register_robot_class
@@ -14,14 +17,14 @@ from robosuite.controllers import load_composite_controller_config
 from robosuite.wrappers import GymWrapper
 
 from stable_baselines3 import SAC, TD3, PPO
-from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecNormalize
 from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback, CallbackList
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.noise import NormalActionNoise
 
 
 # ─────────────────────────────────────────────
-# 自定义机器人注册（与你的示例完全一致）
+# 自定义机器人注册
 # ─────────────────────────────────────────────
 
 @register_robot_class("FixedBaseRobot")
@@ -45,40 +48,44 @@ class Kinova3FlippedGripper(Kinova3):
 ROBOT_NAME = "Kinova3FlippedGripper"
 
 def make_env(args, seed: int = 0, render: bool = False, reward_shaping: bool = True):
-    """返回一个 callable，供 DummyVecEnv 使用。"""
     def _init():
-        # Kinova3 复合控制器配置
+        # SubprocVecEnv 在子进程中运行，需要在 _init 内部重新注册机器人
+        # 因为子进程不继承主进程的注册状态
+        from scipy.spatial.transform import Rotation as _R
+        from robosuite.robots import register_robot_class as _reg
+        from robosuite.models.robots import Kinova3 as _Kinova3
+
+        @_reg("FixedBaseRobot")
+        class Kinova3FlippedGripper(_Kinova3):
+            @property
+            def default_gripper(self):
+                return {"right": "InspireRightHand"}
+            @property
+            def gripper_mount_quat_offset(self):
+                r = _R.from_euler('xyz', [180, 0, -90], degrees=True)
+                w, x, y, z = r.as_quat()
+                return {"right": [w, x, y, z]}
+
         controller_cfg = load_composite_controller_config(
-            controller=None,      # None = 使用机器人默认复合配置
-            robot="Kinova3",      # 基于 Kinova3 加载控制器
+            controller=None,
+            robot="Kinova3",
         )
 
         env = suite.make(
             env_name="PickPlace",
             robots=ROBOT_NAME,
-            # gripper_types 不再传入，已由 default_gripper 属性内置
             controller_configs=controller_cfg,
-
-            # ── 观测 ──────────────────────────────
             use_camera_obs=False,
             use_object_obs=True,
-
-            # ── 渲染 ──────────────────────────────
             has_renderer=render,
             has_offscreen_renderer=False,
             render_camera="frontview",
-
-            # ── 奖励 ──────────────────────────────
             reward_shaping=reward_shaping,
             reward_scale=1.0,
-
-            # ── 任务 ──────────────────────────────
             horizon=args.horizon,
             ignore_done=False,
             single_object_mode=2,
             object_type="milk",
-
-            # ── 控制 ──────────────────────────────
             control_freq=20,
         )
 
@@ -88,6 +95,22 @@ def make_env(args, seed: int = 0, render: bool = False, reward_shaping: bool = T
         return env
 
     return _init
+
+
+def make_vec_env(args, n_envs: int, seed: int = 0,
+                 render: bool = False, reward_shaping: bool = True,
+                 use_subproc: bool = True):
+    """
+    use_subproc=True  → SubprocVecEnv（真并行，推荐 n_envs >= 4）
+    use_subproc=False → DummyVecEnv（单进程，调试用）
+    """
+    fns = [make_env(args, seed=seed + i, render=render, reward_shaping=reward_shaping)
+           for i in range(n_envs)]
+
+    if use_subproc and n_envs > 1:
+        return SubprocVecEnv(fns, start_method="fork")   # Linux 用 fork 最快
+    else:
+        return DummyVecEnv(fns)
 
 
 # ─────────────────────────────────────────────
@@ -102,8 +125,8 @@ def build_model(args, env):
             "MlpPolicy", env,
             learning_rate=3e-4,
             buffer_size=1_000_000,
-            learning_starts=10_000,
-            batch_size=256,
+            learning_starts=max(10_000, args.n_envs * 1000),  # 并行时适当扩大预热
+            batch_size=256 * max(1, args.n_envs // 4),        # 并行时适当扩大 batch
             tau=0.005,
             gamma=0.99,
             ent_coef="auto",
@@ -120,8 +143,8 @@ def build_model(args, env):
             "MlpPolicy", env,
             learning_rate=3e-4,
             buffer_size=1_000_000,
-            learning_starts=10_000,
-            batch_size=256,
+            learning_starts=max(10_000, args.n_envs * 1000),
+            batch_size=256 * max(1, args.n_envs // 4),
             action_noise=noise,
             policy_kwargs=policy_kwargs,
             verbose=1,
@@ -130,11 +153,13 @@ def build_model(args, env):
         )
 
     elif args.algo == "PPO":
+        # PPO on-policy：n_steps 是每个环境采集的步数
+        # 有效 batch = n_steps * n_envs，并行收益最直接
         return PPO(
             "MlpPolicy", env,
             learning_rate=3e-4,
             n_steps=2048,
-            batch_size=64,
+            batch_size=64 * max(1, args.n_envs),   # minibatch 随并行数扩大
             n_epochs=10,
             gamma=0.99,
             policy_kwargs=policy_kwargs,
@@ -154,14 +179,20 @@ def train(args):
     os.makedirs(args.log_dir, exist_ok=True)
     os.makedirs(args.save_dir, exist_ok=True)
 
-    train_env = DummyVecEnv([
-        make_env(args, seed=args.seed + i, reward_shaping=True)
-        for i in range(args.n_envs)
-    ])
-    train_env = VecNormalize(train_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
+    use_subproc = args.n_envs > 1  # 单环境没必要开子进程
 
-    eval_env = DummyVecEnv([make_env(args, seed=args.seed + 999, reward_shaping=True)])
-    eval_env = VecNormalize(eval_env, norm_obs=True, norm_reward=False, training=False)
+    # 训练环境
+    train_vec = make_vec_env(args, n_envs=args.n_envs, seed=args.seed,
+                             reward_shaping=True, use_subproc=use_subproc)
+    train_env = VecNormalize(train_vec, norm_obs=True, norm_reward=True, clip_obs=10.0)
+
+    # 评估环境（固定单进程，避免渲染冲突）
+    eval_vec = make_vec_env(args, n_envs=1, seed=args.seed + 999,
+                            reward_shaping=True, use_subproc=False)
+    eval_env = VecNormalize(eval_vec, norm_obs=True, norm_reward=False, training=False)
+
+    # 让 eval_env 的归一化统计与 train_env 同步
+    eval_env.obs_rms = train_env.obs_rms
 
     callbacks = CallbackList([
         EvalCallback(
@@ -190,6 +221,7 @@ def train(args):
     print(f"  机器人  : {ROBOT_NAME}")
     print(f"  手爪    : InspireRightHand (内置)")
     print(f"  算法    : {args.algo}")
+    print(f"  并行环境: {args.n_envs} ({'SubprocVecEnv' if use_subproc else 'DummyVecEnv'})")
     print(f"  总步数  : {args.total_steps:,}")
     print(f"  动作维度: {train_env.action_space.shape[0]}")
     print(f"  观测维度: {train_env.observation_space.shape[0]}")
@@ -206,6 +238,7 @@ def train(args):
     model.save(final)
     train_env.save(final + "_vecnorm.pkl")
     print(f"[INFO] 已保存: {final}")
+    train_env.close()
 
 
 # ─────────────────────────────────────────────
@@ -215,7 +248,8 @@ def train(args):
 def evaluate(args):
     cls = {"SAC": SAC, "TD3": TD3, "PPO": PPO}[args.algo]
 
-    env = DummyVecEnv([make_env(args, seed=0, render=True, reward_shaping=False)])
+    env = make_vec_env(args, n_envs=1, seed=0, render=True,
+                       reward_shaping=False, use_subproc=False)
 
     vecnorm_path = args.load_model + "_vecnorm.pkl"
     if os.path.exists(vecnorm_path):
@@ -248,8 +282,9 @@ def parse_args():
     p.add_argument("--mode",          default="train", choices=["train", "eval"])
     p.add_argument("--algo",          default="SAC",   choices=["SAC", "TD3", "PPO"])
     p.add_argument("--horizon",       type=int, default=500)
-    p.add_argument("--n_envs",        type=int, default=1)
-    p.add_argument("--total_steps",   type=int, default=2_000_000)
+    p.add_argument("--n_envs",        type=int, default=8,   # ← 默认8并行
+                   help="并行环境数，建议设为 CPU 核心数的一半")
+    p.add_argument("--total_steps",   type=int, default=2)
     p.add_argument("--eval_freq",     type=int, default=20_000)
     p.add_argument("--save_freq",     type=int, default=50_000)
     p.add_argument("--eval_episodes", type=int, default=10)
@@ -262,6 +297,10 @@ def parse_args():
 
 
 if __name__ == "__main__":
+    # SubprocVecEnv 在 Windows/macOS 上需要此保护
+    import multiprocessing
+    multiprocessing.set_start_method("fork", force=True)  # Linux 默认，可省略
+
     args = parse_args()
     if args.mode == "train":
         train(args)
