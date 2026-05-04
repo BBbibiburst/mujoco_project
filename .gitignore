@@ -22,3 +22,7 @@ next_step.md
 rl_models/
 
 test.ipynb
+
+# 模型
+models/
+logs/

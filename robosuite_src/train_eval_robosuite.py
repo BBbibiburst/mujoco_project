@@ -1,13 +1,15 @@
 """
-train.py —— Robosuite 1.5 灵巧手 PickPlace 训练
-完全使用 robosuite 内置奖励与功能，不添加额外包装
+train.py —— Robosuite 1.5 Kinova3FlippedGripper（InspireRightHand）PickPlace 训练
 """
 
 import os
 import argparse
 import numpy as np
+from scipy.spatial.transform import Rotation as R
 
 import robosuite as suite
+from robosuite.robots import register_robot_class
+from robosuite.models.robots import Kinova3
 from robosuite.controllers import load_composite_controller_config
 from robosuite.wrappers import GymWrapper
 
@@ -19,59 +21,67 @@ from stable_baselines3.common.noise import NormalActionNoise
 
 
 # ─────────────────────────────────────────────
+# 自定义机器人注册（与你的示例完全一致）
+# ─────────────────────────────────────────────
+
+@register_robot_class("FixedBaseRobot")
+class Kinova3FlippedGripper(Kinova3):
+    @property
+    def default_gripper(self):
+        return {"right": "InspireRightHand"}
+
+    @property
+    def gripper_mount_quat_offset(self):
+        euler_deg = [180, 0, -90]
+        r = R.from_euler('xyz', euler_deg, degrees=True)
+        w, x, y, z = r.as_quat()
+        return {"right": [w, x, y, z]}
+
+
+# ─────────────────────────────────────────────
 # 环境工厂
 # ─────────────────────────────────────────────
 
-HAND_MAP = {
-    "inspire": "InspireHands",
-    "shadow":  "ShadowHands",
-    "allegro": "AllegroHands",
-    "default": "default",
-}
+ROBOT_NAME = "Kinova3FlippedGripper"
 
 def make_env(args, seed: int = 0, render: bool = False, reward_shaping: bool = True):
-    """
-    返回一个 callable，供 DummyVecEnv 使用。
-    完全使用 robosuite 原生配置，不套任何自定义 wrapper。
-    """
+    """返回一个 callable，供 DummyVecEnv 使用。"""
     def _init():
-        # robosuite 1.5 灵巧手需要复合控制器
-        # 手臂默认 OSC_POSE，灵巧手部分默认 JOINT_POSITION
+        # Kinova3 复合控制器配置
         controller_cfg = load_composite_controller_config(
             controller=None,      # None = 使用机器人默认复合配置
-            robot=args.robot,
+            robot="Kinova3",      # 基于 Kinova3 加载控制器
         )
 
         env = suite.make(
             env_name="PickPlace",
-            robots=args.robot,
-            gripper_types=HAND_MAP.get(args.hand, "InspireHands"),
+            robots=ROBOT_NAME,
+            # gripper_types 不再传入，已由 default_gripper 属性内置
             controller_configs=controller_cfg,
 
             # ── 观测 ──────────────────────────────
             use_camera_obs=False,
-            use_object_obs=True,      # 包含物体位姿状态
+            use_object_obs=True,
 
             # ── 渲染 ──────────────────────────────
             has_renderer=render,
             has_offscreen_renderer=False,
             render_camera="frontview",
 
-            # ── 奖励（直接用内置分阶段密集奖励）──
+            # ── 奖励 ──────────────────────────────
             reward_shaping=reward_shaping,
             reward_scale=1.0,
 
             # ── 任务 ──────────────────────────────
             horizon=args.horizon,
             ignore_done=False,
-            single_object_mode=2,     # 2 = 固定单物体，最易入门
+            single_object_mode=2,
             object_type="milk",
 
             # ── 控制 ──────────────────────────────
             control_freq=20,
         )
 
-        # GymWrapper：robosuite → gymnasium 接口，自动拼接所有 obs key
         env = GymWrapper(env)
         env = Monitor(env)
         env.reset(seed=seed)
@@ -144,18 +154,15 @@ def train(args):
     os.makedirs(args.log_dir, exist_ok=True)
     os.makedirs(args.save_dir, exist_ok=True)
 
-    # 训练环境
     train_env = DummyVecEnv([
         make_env(args, seed=args.seed + i, reward_shaping=True)
         for i in range(args.n_envs)
     ])
     train_env = VecNormalize(train_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
 
-    # 评估环境（关闭奖励归一化，保持原始奖励尺度）
     eval_env = DummyVecEnv([make_env(args, seed=args.seed + 999, reward_shaping=True)])
     eval_env = VecNormalize(eval_env, norm_obs=True, norm_reward=False, training=False)
 
-    # 回调
     callbacks = CallbackList([
         EvalCallback(
             eval_env,
@@ -168,11 +175,10 @@ def train(args):
         CheckpointCallback(
             save_freq=max(args.save_freq // args.n_envs, 1),
             save_path=os.path.join(args.save_dir, "ckpt"),
-            name_prefix=f"{args.algo}_{args.robot}",
+            name_prefix=f"{args.algo}_{ROBOT_NAME}",
         ),
     ])
 
-    # 模型
     if args.load_model:
         cls = {"SAC": SAC, "TD3": TD3, "PPO": PPO}[args.algo]
         model = cls.load(args.load_model, env=train_env, device=args.device)
@@ -181,8 +187,8 @@ def train(args):
         model = build_model(args, train_env)
 
     print(f"\n{'='*50}")
-    print(f"  机器人  : {args.robot}")
-    print(f"  灵巧手  : {HAND_MAP.get(args.hand)}")
+    print(f"  机器人  : {ROBOT_NAME}")
+    print(f"  手爪    : InspireRightHand (内置)")
     print(f"  算法    : {args.algo}")
     print(f"  总步数  : {args.total_steps:,}")
     print(f"  动作维度: {train_env.action_space.shape[0]}")
@@ -196,7 +202,7 @@ def train(args):
         progress_bar=True,
     )
 
-    final = os.path.join(args.save_dir, f"final_{args.algo}_{args.robot}")
+    final = os.path.join(args.save_dir, f"final_{args.algo}_{ROBOT_NAME}")
     model.save(final)
     train_env.save(final + "_vecnorm.pkl")
     print(f"[INFO] 已保存: {final}")
@@ -211,7 +217,6 @@ def evaluate(args):
 
     env = DummyVecEnv([make_env(args, seed=0, render=True, reward_shaping=False)])
 
-    # 如果训练时保存了 VecNormalize 统计，加载以保持一致
     vecnorm_path = args.load_model + "_vecnorm.pkl"
     if os.path.exists(vecnorm_path):
         env = VecNormalize.load(vecnorm_path, env)
@@ -240,22 +245,19 @@ def evaluate(args):
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--mode",         default="train", choices=["train", "eval"])
-    p.add_argument("--robot",        default="GR1ArmsOnly")
-    p.add_argument("--hand",         default="inspire",
-                   choices=["inspire", "shadow", "allegro", "default"])
-    p.add_argument("--algo",         default="SAC", choices=["SAC", "TD3", "PPO"])
-    p.add_argument("--horizon",      type=int, default=500)
-    p.add_argument("--n_envs",       type=int, default=1)
-    p.add_argument("--total_steps",  type=int, default=2_000_000)
-    p.add_argument("--eval_freq",    type=int, default=20_000)
-    p.add_argument("--save_freq",    type=int, default=50_000)
-    p.add_argument("--eval_episodes",type=int, default=10)
-    p.add_argument("--log_dir",      default="logs/")
-    p.add_argument("--save_dir",     default="models/")
-    p.add_argument("--load_model",   default="")
-    p.add_argument("--device",       default="auto")
-    p.add_argument("--seed",         type=int, default=42)
+    p.add_argument("--mode",          default="train", choices=["train", "eval"])
+    p.add_argument("--algo",          default="SAC",   choices=["SAC", "TD3", "PPO"])
+    p.add_argument("--horizon",       type=int, default=500)
+    p.add_argument("--n_envs",        type=int, default=1)
+    p.add_argument("--total_steps",   type=int, default=2_000_000)
+    p.add_argument("--eval_freq",     type=int, default=20_000)
+    p.add_argument("--save_freq",     type=int, default=50_000)
+    p.add_argument("--eval_episodes", type=int, default=10)
+    p.add_argument("--log_dir",       default="logs/")
+    p.add_argument("--save_dir",      default="models/kinova3_inspire/")
+    p.add_argument("--load_model",    default="")
+    p.add_argument("--device",        default="auto")
+    p.add_argument("--seed",          type=int, default=42)
     return p.parse_args()
 
 
