@@ -1,0 +1,386 @@
+<mujoco model="water_simple">
+  <default>
+    <default class="visual">
+      <geom group="2" type="mesh" contype="0" conaffinity="0"/>
+    </default>
+    <default class="collision">
+      <geom group="3" type="mesh"/>
+    </default>
+  </default>
+  <asset>
+    <mesh file="water_simple.obj"/>
+    <mesh file="water_simple_collision_0.obj"/>
+    <mesh file="water_simple_collision_1.obj"/>
+    <mesh file="water_simple_collision_2.obj"/>
+    <mesh file="water_simple_collision_3.obj"/>
+    <mesh file="water_simple_collision_4.obj"/>
+    <mesh file="water_simple_collision_5.obj"/>
+    <mesh file="water_simple_collision_6.obj"/>
+    <mesh file="water_simple_collision_7.obj"/>
+    <mesh file="water_simple_collision_8.obj"/>
+    <mesh file="water_simple_collision_9.obj"/>
+    <mesh file="water_simple_collision_10.obj"/>
+    <mesh file="water_simple_collision_11.obj"/>
+    <mesh file="water_simple_collision_12.obj"/>
+    <mesh file="water_simple_collision_13.obj"/>
+    <mesh file="water_simple_collision_14.obj"/>
+    <mesh file="water_simple_collision_15.obj"/>
+    <mesh file="water_simple_collision_16.obj"/>
+    <mesh file="water_simple_collision_17.obj"/>
+    <mesh file="water_simple_collision_18.obj"/>
+    <mesh file="water_simple_collision_19.obj"/>
+    <mesh file="water_simple_collision_20.obj"/>
+    <mesh file="water_simple_collision_21.obj"/>
+    <mesh file="water_simple_collision_22.obj"/>
+    <mesh file="water_simple_collision_23.obj"/>
+    <mesh file="water_simple_collision_24.obj"/>
+    <mesh file="water_simple_collision_25.obj"/>
+    <mesh file="water_simple_collision_26.obj"/>
+    <mesh file="water_simple_collision_27.obj"/>
+    <mesh file="water_simple_collision_28.obj"/>
+    <mesh file="water_simple_collision_29.obj"/>
+    <mesh file="water_simple_collision_30.obj"/>
+    <mesh file="water_simple_collision_31.obj"/>
+    <mesh file="water_simple_collision_32.obj"/>
+    <mesh file="water_simple_collision_33.obj"/>
+    <mesh file="water_simple_collision_34.obj"/>
+    <mesh file="water_simple_collision_35.obj"/>
+    <mesh file="water_simple_collision_36.obj"/>
+    <mesh file="water_simple_collision_37.obj"/>
+    <mesh file="water_simple_collision_38.obj"/>
+    <mesh file="water_simple_collision_39.obj"/>
+    <mesh file="water_simple_collision_40.obj"/>
+    <mesh file="water_simple_collision_41.obj"/>
+    <mesh file="water_simple_collision_42.obj"/>
+    <mesh file="water_simple_collision_43.obj"/>
+    <mesh file="water_simple_collision_44.obj"/>
+    <mesh file="water_simple_collision_45.obj"/>
+    <mesh file="water_simple_collision_46.obj"/>
+    <mesh file="water_simple_collision_47.obj"/>
+    <mesh file="water_simple_collision_48.obj"/>
+    <mesh file="water_simple_collision_49.obj"/>
+    <mesh file="water_simple_collision_50.obj"/>
+    <mesh file="water_simple_collision_51.obj"/>
+    <mesh file="water_simple_collision_52.obj"/>
+    <mesh file="water_simple_collision_53.obj"/>
+    <mesh file="water_simple_collision_54.obj"/>
+    <mesh file="water_simple_collision_55.obj"/>
+    <mesh file="water_simple_collision_56.obj"/>
+    <mesh file="water_simple_collision_57.obj"/>
+    <mesh file="water_simple_collision_58.obj"/>
+    <mesh file="water_simple_collision_59.obj"/>
+    <mesh file="water_simple_collision_60.obj"/>
+    <mesh file="water_simple_collision_61.obj"/>
+    <mesh file="water_simple_collision_62.obj"/>
+    <mesh file="water_simple_collision_63.obj"/>
+    <mesh file="water_simple_collision_64.obj"/>
+    <mesh file="water_simple_collision_65.obj"/>
+    <mesh file="water_simple_collision_66.obj"/>
+    <mesh file="water_simple_collision_67.obj"/>
+    <mesh file="water_simple_collision_68.obj"/>
+    <mesh file="water_simple_collision_69.obj"/>
+    <mesh file="water_simple_collision_70.obj"/>
+    <mesh file="water_simple_collision_71.obj"/>
+    <mesh file="water_simple_collision_72.obj"/>
+    <mesh file="water_simple_collision_73.obj"/>
+    <mesh file="water_simple_collision_74.obj"/>
+    <mesh file="water_simple_collision_75.obj"/>
+    <mesh file="water_simple_collision_76.obj"/>
+    <mesh file="water_simple_collision_77.obj"/>
+    <mesh file="water_simple_collision_78.obj"/>
+    <mesh file="water_simple_collision_79.obj"/>
+    <mesh file="water_simple_collision_80.obj"/>
+    <mesh file="water_simple_collision_81.obj"/>
+    <mesh file="water_simple_collision_82.obj"/>
+    <mesh file="water_simple_collision_83.obj"/>
+    <mesh file="water_simple_collision_84.obj"/>
+    <mesh file="water_simple_collision_85.obj"/>
+    <mesh file="water_simple_collision_86.obj"/>
+    <mesh file="water_simple_collision_87.obj"/>
+    <mesh file="water_simple_collision_88.obj"/>
+    <mesh file="water_simple_collision_89.obj"/>
+    <mesh file="water_simple_collision_90.obj"/>
+    <mesh file="water_simple_collision_91.obj"/>
+    <mesh file="water_simple_collision_92.obj"/>
+    <mesh file="water_simple_collision_93.obj"/>
+    <mesh file="water_simple_collision_94.obj"/>
+    <mesh file="water_simple_collision_95.obj"/>
+    <mesh file="water_simple_collision_96.obj"/>
+    <mesh file="water_simple_collision_97.obj"/>
+    <mesh file="water_simple_collision_98.obj"/>
+    <mesh file="water_simple_collision_99.obj"/>
+    <mesh file="water_simple_collision_100.obj"/>
+    <mesh file="water_simple_collision_101.obj"/>
+    <mesh file="water_simple_collision_102.obj"/>
+    <mesh file="water_simple_collision_103.obj"/>
+    <mesh file="water_simple_collision_104.obj"/>
+    <mesh file="water_simple_collision_105.obj"/>
+    <mesh file="water_simple_collision_106.obj"/>
+    <mesh file="water_simple_collision_107.obj"/>
+    <mesh file="water_simple_collision_108.obj"/>
+    <mesh file="water_simple_collision_109.obj"/>
+    <mesh file="water_simple_collision_110.obj"/>
+    <mesh file="water_simple_collision_111.obj"/>
+    <mesh file="water_simple_collision_112.obj"/>
+    <mesh file="water_simple_collision_113.obj"/>
+    <mesh file="water_simple_collision_114.obj"/>
+    <mesh file="water_simple_collision_115.obj"/>
+    <mesh file="water_simple_collision_116.obj"/>
+    <mesh file="water_simple_collision_117.obj"/>
+    <mesh file="water_simple_collision_118.obj"/>
+    <mesh file="water_simple_collision_119.obj"/>
+    <mesh file="water_simple_collision_120.obj"/>
+    <mesh file="water_simple_collision_121.obj"/>
+    <mesh file="water_simple_collision_122.obj"/>
+    <mesh file="water_simple_collision_123.obj"/>
+    <mesh file="water_simple_collision_124.obj"/>
+    <mesh file="water_simple_collision_125.obj"/>
+    <mesh file="water_simple_collision_126.obj"/>
+    <mesh file="water_simple_collision_127.obj"/>
+    <mesh file="water_simple_collision_128.obj"/>
+    <mesh file="water_simple_collision_129.obj"/>
+    <mesh file="water_simple_collision_130.obj"/>
+    <mesh file="water_simple_collision_131.obj"/>
+    <mesh file="water_simple_collision_132.obj"/>
+    <mesh file="water_simple_collision_133.obj"/>
+    <mesh file="water_simple_collision_134.obj"/>
+    <mesh file="water_simple_collision_135.obj"/>
+    <mesh file="water_simple_collision_136.obj"/>
+    <mesh file="water_simple_collision_137.obj"/>
+    <mesh file="water_simple_collision_138.obj"/>
+    <mesh file="water_simple_collision_139.obj"/>
+    <mesh file="water_simple_collision_140.obj"/>
+    <mesh file="water_simple_collision_141.obj"/>
+    <mesh file="water_simple_collision_142.obj"/>
+    <mesh file="water_simple_collision_143.obj"/>
+    <mesh file="water_simple_collision_144.obj"/>
+    <mesh file="water_simple_collision_145.obj"/>
+    <mesh file="water_simple_collision_146.obj"/>
+    <mesh file="water_simple_collision_147.obj"/>
+    <mesh file="water_simple_collision_148.obj"/>
+    <mesh file="water_simple_collision_149.obj"/>
+    <mesh file="water_simple_collision_150.obj"/>
+    <mesh file="water_simple_collision_151.obj"/>
+    <mesh file="water_simple_collision_152.obj"/>
+    <mesh file="water_simple_collision_153.obj"/>
+    <mesh file="water_simple_collision_154.obj"/>
+    <mesh file="water_simple_collision_155.obj"/>
+    <mesh file="water_simple_collision_156.obj"/>
+    <mesh file="water_simple_collision_157.obj"/>
+    <mesh file="water_simple_collision_158.obj"/>
+    <mesh file="water_simple_collision_159.obj"/>
+    <mesh file="water_simple_collision_160.obj"/>
+    <mesh file="water_simple_collision_161.obj"/>
+    <mesh file="water_simple_collision_162.obj"/>
+    <mesh file="water_simple_collision_163.obj"/>
+    <mesh file="water_simple_collision_164.obj"/>
+    <mesh file="water_simple_collision_165.obj"/>
+    <mesh file="water_simple_collision_166.obj"/>
+    <mesh file="water_simple_collision_167.obj"/>
+    <mesh file="water_simple_collision_168.obj"/>
+    <mesh file="water_simple_collision_169.obj"/>
+    <mesh file="water_simple_collision_170.obj"/>
+    <mesh file="water_simple_collision_171.obj"/>
+    <mesh file="water_simple_collision_172.obj"/>
+    <mesh file="water_simple_collision_173.obj"/>
+    <mesh file="water_simple_collision_174.obj"/>
+    <mesh file="water_simple_collision_175.obj"/>
+    <mesh file="water_simple_collision_176.obj"/>
+    <mesh file="water_simple_collision_177.obj"/>
+    <mesh file="water_simple_collision_178.obj"/>
+    <mesh file="water_simple_collision_179.obj"/>
+    <mesh file="water_simple_collision_180.obj"/>
+    <mesh file="water_simple_collision_181.obj"/>
+    <mesh file="water_simple_collision_182.obj"/>
+    <mesh file="water_simple_collision_183.obj"/>
+  </asset>
+  <worldbody>
+    <body name="water_simple">
+      <geom mesh="water_simple" class="visual"/>
+      <geom mesh="water_simple_collision_0" rgba="0.7827158812809915 0.5343812995188837 0.28925198220187953 1" class="collision"/>
+      <geom mesh="water_simple_collision_1" rgba="0.45781696141900763 0.26120908320149105 0.17404255994459283 1" class="collision"/>
+      <geom mesh="water_simple_collision_2" rgba="0.46510779369928035 0.8608744170850247 0.6024678472933132 1" class="collision"/>
+      <geom mesh="water_simple_collision_3" rgba="0.022942858531904697 0.26517052285252884 0.565808873676956 1" class="collision"/>
+      <geom mesh="water_simple_collision_4" rgba="0.9995142369746283 0.7712647044089631 0.839641099251131 1" class="collision"/>
+      <geom mesh="water_simple_collision_5" rgba="0.42839694929472427 0.26317725408878745 0.34934712803110957 1" class="collision"/>
+      <geom mesh="water_simple_collision_6" rgba="0.40965739736930873 0.9972266360354717 0.0644274418540608 1" class="collision"/>
+      <geom mesh="water_simple_collision_7" rgba="0.3408554461909771 0.8638656863846247 0.09153658559377864 1" class="collision"/>
+      <geom mesh="water_simple_collision_8" rgba="0.6622726194636009 0.7050604159208778 0.05482510612567726 1" class="collision"/>
+      <geom mesh="water_simple_collision_9" rgba="0.9754970642112121 0.40369936509016846 0.11610271451148269 1" class="collision"/>
+      <geom mesh="water_simple_collision_10" rgba="0.7300443889409811 0.6156820516389888 0.8310806337987906 1" class="collision"/>
+      <geom mesh="water_simple_collision_11" rgba="0.34297461342421587 0.34078850752817036 0.3537809048716932 1" class="collision"/>
+      <geom mesh="water_simple_collision_12" rgba="0.17252755514707274 0.6000286150452011 0.1420538206155756 1" class="collision"/>
+      <geom mesh="water_simple_collision_13" rgba="0.4775494205317147 0.42580680112582436 0.34677405391476845 1" class="collision"/>
+      <geom mesh="water_simple_collision_14" rgba="0.11799295977008062 0.9716712415738641 0.18707492807518777 1" class="collision"/>
+      <geom mesh="water_simple_collision_15" rgba="0.4360483375310571 0.8416606211014801 0.643819863258395 1" class="collision"/>
+      <geom mesh="water_simple_collision_16" rgba="0.8253011004268697 0.3698899307797334 0.5703598962187957 1" class="collision"/>
+      <geom mesh="water_simple_collision_17" rgba="0.797991557766597 0.6004575676665009 0.5816377646710988 1" class="collision"/>
+      <geom mesh="water_simple_collision_18" rgba="0.2235241980547492 0.39813030151827977 0.8493205449485581 1" class="collision"/>
+      <geom mesh="water_simple_collision_19" rgba="0.014242319424915828 0.225528591495052 0.5523160112789268 1" class="collision"/>
+      <geom mesh="water_simple_collision_20" rgba="0.7122384839180493 0.9031371859143688 0.07411069850439322 1" class="collision"/>
+      <geom mesh="water_simple_collision_21" rgba="0.24810836599162622 0.4842816164293796 0.41362197057839234 1" class="collision"/>
+      <geom mesh="water_simple_collision_22" rgba="0.9773427528606878 0.20111766861981206 0.8037552354454229 1" class="collision"/>
+      <geom mesh="water_simple_collision_23" rgba="0.06302729255749029 0.42050653786200587 0.2692584033123172 1" class="collision"/>
+      <geom mesh="water_simple_collision_24" rgba="0.22022267960063768 0.9069344438773767 0.5120712245408794 1" class="collision"/>
+      <geom mesh="water_simple_collision_25" rgba="0.43952104339059184 0.484273342769862 0.8516981169621807 1" class="collision"/>
+      <geom mesh="water_simple_collision_26" rgba="0.4564607155099254 0.8215823136626366 0.21784873197768906 1" class="collision"/>
+      <geom mesh="water_simple_collision_27" rgba="0.8234071487664565 0.30657399291279896 0.4678648384314946 1" class="collision"/>
+      <geom mesh="water_simple_collision_28" rgba="0.9606832191493666 0.46885523692725584 0.6563941479778875 1" class="collision"/>
+      <geom mesh="water_simple_collision_29" rgba="0.08920852159301429 0.9274705838178828 0.435077930646405 1" class="collision"/>
+      <geom mesh="water_simple_collision_30" rgba="0.1919866618261965 0.6636735248738673 0.8285020368228103 1" class="collision"/>
+      <geom mesh="water_simple_collision_31" rgba="0.15409860486085414 0.5415732585417453 0.7535204592446786 1" class="collision"/>
+      <geom mesh="water_simple_collision_32" rgba="0.9521628922622859 0.8074646325646506 0.05326949346386323 1" class="collision"/>
+      <geom mesh="water_simple_collision_33" rgba="0.7673623246514373 0.39883265132147727 0.9083839827923246 1" class="collision"/>
+      <geom mesh="water_simple_collision_34" rgba="0.8309616233939069 0.8855788910999549 0.8299771287893337 1" class="collision"/>
+      <geom mesh="water_simple_collision_35" rgba="0.9177841078367229 0.07240657864638012 0.7476483319336032 1" class="collision"/>
+      <geom mesh="water_simple_collision_36" rgba="0.6199466417602649 0.2684983487129491 0.38575746566161795 1" class="collision"/>
+      <geom mesh="water_simple_collision_37" rgba="0.16913014749784805 0.0008637327514915416 0.28879167436158515 1" class="collision"/>
+      <geom mesh="water_simple_collision_38" rgba="0.03878028633831854 0.7132437779044671 0.09662898999312308 1" class="collision"/>
+      <geom mesh="water_simple_collision_39" rgba="0.5893584120727038 0.3280437093091131 0.6951271180002546 1" class="collision"/>
+      <geom mesh="water_simple_collision_40" rgba="0.7938038478731408 0.15513658052640433 0.8381192878404744 1" class="collision"/>
+      <geom mesh="water_simple_collision_41" rgba="0.590940443713642 0.8377307533782249 0.7545674881172759 1" class="collision"/>
+      <geom mesh="water_simple_collision_42" rgba="0.5371878056919753 0.9062626195621606 0.3452575550441095 1" class="collision"/>
+      <geom mesh="water_simple_collision_43" rgba="0.3298838669251295 0.5367823354541628 0.6667582097245065 1" class="collision"/>
+      <geom mesh="water_simple_collision_44" rgba="0.07449839156203852 0.8602711394455241 0.37038836784929674 1" class="collision"/>
+      <geom mesh="water_simple_collision_45" rgba="0.3355296774525679 0.8933589883940584 0.91691149149393 1" class="collision"/>
+      <geom mesh="water_simple_collision_46" rgba="0.9074362851984017 0.992797174851361 0.3414986018642938 1" class="collision"/>
+      <geom mesh="water_simple_collision_47" rgba="0.3154612408195735 0.5135391893168899 0.515794316761544 1" class="collision"/>
+      <geom mesh="water_simple_collision_48" rgba="0.9552633326895785 0.9997490562910007 0.3310819432940836 1" class="collision"/>
+      <geom mesh="water_simple_collision_49" rgba="0.5615945529767306 0.7619223004182714 0.380414743647719 1" class="collision"/>
+      <geom mesh="water_simple_collision_50" rgba="0.8740131457676206 0.9155664430195838 0.4809978805962213 1" class="collision"/>
+      <geom mesh="water_simple_collision_51" rgba="0.13875713327543004 0.9905538612812692 0.8293537423897579 1" class="collision"/>
+      <geom mesh="water_simple_collision_52" rgba="0.5261426794027743 0.9819623805410264 0.8339822746050451 1" class="collision"/>
+      <geom mesh="water_simple_collision_53" rgba="0.7432846769647204 0.4284554852592011 0.46420190525454597 1" class="collision"/>
+      <geom mesh="water_simple_collision_54" rgba="0.8242344402194426 0.2824572559185268 0.7718701894540564 1" class="collision"/>
+      <geom mesh="water_simple_collision_55" rgba="0.6752220988034229 0.5205506797792067 0.725568029811134 1" class="collision"/>
+      <geom mesh="water_simple_collision_56" rgba="0.6855633078761906 0.4954538147252605 0.6109183807177411 1" class="collision"/>
+      <geom mesh="water_simple_collision_57" rgba="0.43933133959964943 0.2687776509390031 0.8233877369364915 1" class="collision"/>
+      <geom mesh="water_simple_collision_58" rgba="0.75154653234895 0.5519009544028405 0.5499559171216049 1" class="collision"/>
+      <geom mesh="water_simple_collision_59" rgba="0.6543300825785513 0.012044358091601315 0.9753255081040463 1" class="collision"/>
+      <geom mesh="water_simple_collision_60" rgba="0.2997537103929526 0.9049644135567307 0.5100488392628038 1" class="collision"/>
+      <geom mesh="water_simple_collision_61" rgba="0.20619811760013484 0.7214079756011138 0.9012619319564057 1" class="collision"/>
+      <geom mesh="water_simple_collision_62" rgba="0.9138051212972134 0.6222914339654341 0.2005916775116019 1" class="collision"/>
+      <geom mesh="water_simple_collision_63" rgba="0.7934331492576477 0.29248641950666154 0.8459357913267654 1" class="collision"/>
+      <geom mesh="water_simple_collision_64" rgba="0.6253062306104006 0.9665227636549907 0.35694591252126795 1" class="collision"/>
+      <geom mesh="water_simple_collision_65" rgba="0.3056279964672416 0.6396439910947767 0.976819997558867 1" class="collision"/>
+      <geom mesh="water_simple_collision_66" rgba="0.02326864498007264 0.17836958711169648 0.7420371984788032 1" class="collision"/>
+      <geom mesh="water_simple_collision_67" rgba="0.13231819851983984 0.5146682905852338 0.9797917998100469 1" class="collision"/>
+      <geom mesh="water_simple_collision_68" rgba="0.7608273040151126 0.08703534437542093 0.12285359372768878 1" class="collision"/>
+      <geom mesh="water_simple_collision_69" rgba="0.27864305622700714 0.23783783495498068 0.08381773574602314 1" class="collision"/>
+      <geom mesh="water_simple_collision_70" rgba="0.6959659766325283 0.5564833459723927 0.7704871796268666 1" class="collision"/>
+      <geom mesh="water_simple_collision_71" rgba="0.27271777459744495 0.663473809260519 0.3410306374332589 1" class="collision"/>
+      <geom mesh="water_simple_collision_72" rgba="0.42562725292042536 0.8459923921406641 0.19325126948504612 1" class="collision"/>
+      <geom mesh="water_simple_collision_73" rgba="0.20937659797887642 0.5473909806129822 0.4446967277848738 1" class="collision"/>
+      <geom mesh="water_simple_collision_74" rgba="0.9281782536104605 0.8702402084154652 0.2964133865281934 1" class="collision"/>
+      <geom mesh="water_simple_collision_75" rgba="0.8155796395513635 0.007368335670153048 0.5474967160922961 1" class="collision"/>
+      <geom mesh="water_simple_collision_76" rgba="0.22519338705562741 0.28797222888098606 0.6512135093628085 1" class="collision"/>
+      <geom mesh="water_simple_collision_77" rgba="0.7277742901688401 0.3007024137117025 0.6412271709810072 1" class="collision"/>
+      <geom mesh="water_simple_collision_78" rgba="0.9242990662540916 0.6199151507733466 0.5501771749432149 1" class="collision"/>
+      <geom mesh="water_simple_collision_79" rgba="0.021402419206771772 0.2251868311388061 0.541186125626862 1" class="collision"/>
+      <geom mesh="water_simple_collision_80" rgba="0.6438858749114842 0.1199271102523668 0.08951596971946374 1" class="collision"/>
+      <geom mesh="water_simple_collision_81" rgba="0.8962350266430777 0.2828550416399598 0.36446508409224476 1" class="collision"/>
+      <geom mesh="water_simple_collision_82" rgba="0.5245193504960561 0.7547220060683824 0.09573523105527704 1" class="collision"/>
+      <geom mesh="water_simple_collision_83" rgba="0.353209569051789 0.2590083085085051 0.8119523990130905 1" class="collision"/>
+      <geom mesh="water_simple_collision_84" rgba="0.8382120517061719 0.5535101940562248 0.31950604170906327 1" class="collision"/>
+      <geom mesh="water_simple_collision_85" rgba="0.9189912424517346 0.27706208226222717 0.624152400118061 1" class="collision"/>
+      <geom mesh="water_simple_collision_86" rgba="0.6633421275702571 0.79527444183828 0.2744435554124409 1" class="collision"/>
+      <geom mesh="water_simple_collision_87" rgba="0.20037959176263376 0.031961362083340994 0.14122537422298842 1" class="collision"/>
+      <geom mesh="water_simple_collision_88" rgba="0.14543597046735934 0.10980727789959277 0.6612320124406814 1" class="collision"/>
+      <geom mesh="water_simple_collision_89" rgba="0.3069695811583333 0.7266772811996586 0.4519937958933028 1" class="collision"/>
+      <geom mesh="water_simple_collision_90" rgba="0.11426726334679571 0.6370263653558773 0.18464510046982474 1" class="collision"/>
+      <geom mesh="water_simple_collision_91" rgba="0.5398581471010291 0.9496033476787824 0.1057072718634473 1" class="collision"/>
+      <geom mesh="water_simple_collision_92" rgba="0.031729884705816835 0.7301489455224796 0.28652464653873944 1" class="collision"/>
+      <geom mesh="water_simple_collision_93" rgba="0.6720935205390492 0.1344214479606617 0.4992353869047709 1" class="collision"/>
+      <geom mesh="water_simple_collision_94" rgba="0.5316827556862525 0.47961771551276255 0.4868131551486611 1" class="collision"/>
+      <geom mesh="water_simple_collision_95" rgba="0.037182536381121345 0.39163426829641623 0.5580646887183262 1" class="collision"/>
+      <geom mesh="water_simple_collision_96" rgba="0.10316150779278743 0.4548254529502924 0.09519032365731017 1" class="collision"/>
+      <geom mesh="water_simple_collision_97" rgba="0.9837203696369329 0.27478855756669107 0.7480070450229318 1" class="collision"/>
+      <geom mesh="water_simple_collision_98" rgba="0.5871766648361614 0.11703057251919358 0.3888679778658858 1" class="collision"/>
+      <geom mesh="water_simple_collision_99" rgba="0.407658649943895 0.16223465493771838 0.12879332336020988 1" class="collision"/>
+      <geom mesh="water_simple_collision_100" rgba="0.3461024644008386 0.1288051908666057 0.6413737845662919 1" class="collision"/>
+      <geom mesh="water_simple_collision_101" rgba="0.9613478140418408 0.06526624010906901 0.7348865746035745 1" class="collision"/>
+      <geom mesh="water_simple_collision_102" rgba="0.45094734495463706 0.6223379981390775 0.892399332861779 1" class="collision"/>
+      <geom mesh="water_simple_collision_103" rgba="0.277707065677548 0.8946764831229561 0.9490889119136238 1" class="collision"/>
+      <geom mesh="water_simple_collision_104" rgba="0.23772560015995303 0.27926551957207035 0.07670767481166607 1" class="collision"/>
+      <geom mesh="water_simple_collision_105" rgba="0.891090961084 0.41822951841376543 0.5714620059184148 1" class="collision"/>
+      <geom mesh="water_simple_collision_106" rgba="0.2411221905188723 0.065610390122256 0.13216343400607444 1" class="collision"/>
+      <geom mesh="water_simple_collision_107" rgba="0.8891790750688608 0.4133123113217848 0.6156439919837199 1" class="collision"/>
+      <geom mesh="water_simple_collision_108" rgba="0.3911421220766298 0.16654608804682758 0.21887873110596034 1" class="collision"/>
+      <geom mesh="water_simple_collision_109" rgba="0.7721619453741119 0.6377708002575299 0.8431006238379857 1" class="collision"/>
+      <geom mesh="water_simple_collision_110" rgba="0.22578006135649187 0.7549439269355905 0.07507382299233245 1" class="collision"/>
+      <geom mesh="water_simple_collision_111" rgba="0.359858169816767 0.6207411748380295 0.5281539087449558 1" class="collision"/>
+      <geom mesh="water_simple_collision_112" rgba="0.6192555357320012 0.9564134678412621 0.09870904516664802 1" class="collision"/>
+      <geom mesh="water_simple_collision_113" rgba="0.6117192648268542 0.1533324736772731 0.6305639619668808 1" class="collision"/>
+      <geom mesh="water_simple_collision_114" rgba="0.24731995781640814 0.17910445791310792 0.9116409967186724 1" class="collision"/>
+      <geom mesh="water_simple_collision_115" rgba="0.6753274540655481 0.9094389888486846 0.6310074462209997 1" class="collision"/>
+      <geom mesh="water_simple_collision_116" rgba="0.9982064515960238 0.6884731402231299 0.45393225320507535 1" class="collision"/>
+      <geom mesh="water_simple_collision_117" rgba="0.2916982473078227 0.06418048135364474 0.6979229607470891 1" class="collision"/>
+      <geom mesh="water_simple_collision_118" rgba="0.5562085548851607 0.33782279560411466 0.9795480378287375 1" class="collision"/>
+      <geom mesh="water_simple_collision_119" rgba="0.20371009048982291 0.3390615194681127 0.9310696398924283 1" class="collision"/>
+      <geom mesh="water_simple_collision_120" rgba="0.2287600789741253 0.7999188924643544 0.12325824168315724 1" class="collision"/>
+      <geom mesh="water_simple_collision_121" rgba="0.5531694053049347 0.5782253628848689 0.16428908230612171 1" class="collision"/>
+      <geom mesh="water_simple_collision_122" rgba="0.3278199999748801 0.4917166245109643 0.03624473780466986 1" class="collision"/>
+      <geom mesh="water_simple_collision_123" rgba="0.6581221623746238 0.5766044784193376 0.4296659205977942 1" class="collision"/>
+      <geom mesh="water_simple_collision_124" rgba="0.3079064905829251 0.18009588277797883 0.06295995685193267 1" class="collision"/>
+      <geom mesh="water_simple_collision_125" rgba="0.23583908972171874 0.7004770215375511 0.8729973996110871 1" class="collision"/>
+      <geom mesh="water_simple_collision_126" rgba="0.6017761660251947 0.731601618347547 0.45256756124113084 1" class="collision"/>
+      <geom mesh="water_simple_collision_127" rgba="0.9528678759597744 0.8454407365801816 0.4370141606003326 1" class="collision"/>
+      <geom mesh="water_simple_collision_128" rgba="0.4079523826142174 0.6131045598041317 0.7583397291738713 1" class="collision"/>
+      <geom mesh="water_simple_collision_129" rgba="0.9366402819831076 0.014614709516946212 0.6315388419837373 1" class="collision"/>
+      <geom mesh="water_simple_collision_130" rgba="0.12236807750346546 0.7100778668883767 0.9673507469010839 1" class="collision"/>
+      <geom mesh="water_simple_collision_131" rgba="0.7091387701815467 0.8558470560716125 0.98615002190693 1" class="collision"/>
+      <geom mesh="water_simple_collision_132" rgba="0.4811429971597375 0.6232373830592411 0.03348455486373214 1" class="collision"/>
+      <geom mesh="water_simple_collision_133" rgba="0.3730120259967947 0.3965963073817993 0.11137066388841177 1" class="collision"/>
+      <geom mesh="water_simple_collision_134" rgba="0.5142949582001259 0.5217197488987929 0.8499707370555987 1" class="collision"/>
+      <geom mesh="water_simple_collision_135" rgba="0.48219317261774963 0.5314155461559747 0.06122598347547703 1" class="collision"/>
+      <geom mesh="water_simple_collision_136" rgba="0.5639377211597582 0.21458088015655352 0.5694927371913203 1" class="collision"/>
+      <geom mesh="water_simple_collision_137" rgba="0.9272302857106001 0.6015751100356499 0.9218724450868856 1" class="collision"/>
+      <geom mesh="water_simple_collision_138" rgba="0.34586705138178575 0.14860875049322708 0.3543682681838639 1" class="collision"/>
+      <geom mesh="water_simple_collision_139" rgba="0.5633055262188835 0.7037797483612404 0.7007750551811901 1" class="collision"/>
+      <geom mesh="water_simple_collision_140" rgba="0.8707238522368949 0.589294855656276 0.16693099203277262 1" class="collision"/>
+      <geom mesh="water_simple_collision_141" rgba="0.068795763055571 0.0942501531479456 0.6485715860493357 1" class="collision"/>
+      <geom mesh="water_simple_collision_142" rgba="0.5303699576076293 0.993499422265722 0.27789374140006207 1" class="collision"/>
+      <geom mesh="water_simple_collision_143" rgba="0.8748842272946524 0.799226540612833 0.28271295809379626 1" class="collision"/>
+      <geom mesh="water_simple_collision_144" rgba="0.8399887158307989 0.3503179408315379 0.9782622174714072 1" class="collision"/>
+      <geom mesh="water_simple_collision_145" rgba="0.1127610808913615 0.1499081988571509 0.967201101914025 1" class="collision"/>
+      <geom mesh="water_simple_collision_146" rgba="0.5201172433642097 0.11821851339960965 0.9676880532845509 1" class="collision"/>
+      <geom mesh="water_simple_collision_147" rgba="0.8297839159729631 0.7887801193537782 0.7389518055163242 1" class="collision"/>
+      <geom mesh="water_simple_collision_148" rgba="0.37512788812582165 0.1251123955728255 0.16507617871730895 1" class="collision"/>
+      <geom mesh="water_simple_collision_149" rgba="0.7581690020992656 0.8512950771610869 0.4127858193313061 1" class="collision"/>
+      <geom mesh="water_simple_collision_150" rgba="0.09878412272893267 0.20692040389109867 0.9680036731481511 1" class="collision"/>
+      <geom mesh="water_simple_collision_151" rgba="0.025898142030318483 0.2629563483961481 0.04616645684457776 1" class="collision"/>
+      <geom mesh="water_simple_collision_152" rgba="0.46267939212964515 0.08364041480551954 0.6746834788726911 1" class="collision"/>
+      <geom mesh="water_simple_collision_153" rgba="0.386910022684694 0.46747291764246257 0.6132007977915056 1" class="collision"/>
+      <geom mesh="water_simple_collision_154" rgba="0.6418897636685746 0.8571511148595526 0.4621657799857001 1" class="collision"/>
+      <geom mesh="water_simple_collision_155" rgba="0.8600146392133117 0.5330414845328889 0.5420428945317589 1" class="collision"/>
+      <geom mesh="water_simple_collision_156" rgba="0.21582428794439001 0.6535731902671446 0.06088418747018709 1" class="collision"/>
+      <geom mesh="water_simple_collision_157" rgba="0.06122663508327597 0.5483690470884218 0.7602982509922676 1" class="collision"/>
+      <geom mesh="water_simple_collision_158" rgba="0.7608364359380274 0.075355451078159 0.28328322498722125 1" class="collision"/>
+      <geom mesh="water_simple_collision_159" rgba="0.07595512773321056 0.8616450480071812 0.16924410148823688 1" class="collision"/>
+      <geom mesh="water_simple_collision_160" rgba="0.36876062055919157 0.48692126031641225 0.4685210857394816 1" class="collision"/>
+      <geom mesh="water_simple_collision_161" rgba="0.885561592403484 0.9281144025944865 0.7662071849655946 1" class="collision"/>
+      <geom mesh="water_simple_collision_162" rgba="0.9457288201694564 0.5565769312322836 0.7659443334923577 1" class="collision"/>
+      <geom mesh="water_simple_collision_163" rgba="0.9218478865369413 0.19670445351861088 0.5526277216206259 1" class="collision"/>
+      <geom mesh="water_simple_collision_164" rgba="0.5860754687195001 0.9799569873625548 0.591854847657854 1" class="collision"/>
+      <geom mesh="water_simple_collision_165" rgba="0.17051666469847016 0.31131855501938654 0.37263694605481423 1" class="collision"/>
+      <geom mesh="water_simple_collision_166" rgba="0.04249979314133079 0.8473411876527579 0.6846968295336769 1" class="collision"/>
+      <geom mesh="water_simple_collision_167" rgba="0.7703073043595192 0.23205984656575784 0.8513413813251169 1" class="collision"/>
+      <geom mesh="water_simple_collision_168" rgba="0.9817101728121357 0.5280070254059505 0.526826586165576 1" class="collision"/>
+      <geom mesh="water_simple_collision_169" rgba="0.7507176418621041 0.11795907116061366 0.5305676665278272 1" class="collision"/>
+      <geom mesh="water_simple_collision_170" rgba="0.8476528558718852 0.4436787262791231 0.10904214123020695 1" class="collision"/>
+      <geom mesh="water_simple_collision_171" rgba="0.08615153401698983 0.6482742610978807 0.23828477281731575 1" class="collision"/>
+      <geom mesh="water_simple_collision_172" rgba="0.7803051577439923 0.6712757573335557 0.21472258930010168 1" class="collision"/>
+      <geom mesh="water_simple_collision_173" rgba="0.22719280841955258 0.41826453844357914 0.3845319863802197 1" class="collision"/>
+      <geom mesh="water_simple_collision_174" rgba="0.8307659608343493 0.4823298256409082 0.4965230652630094 1" class="collision"/>
+      <geom mesh="water_simple_collision_175" rgba="0.8235187777736217 0.8739946534751041 0.5258737098939771 1" class="collision"/>
+      <geom mesh="water_simple_collision_176" rgba="0.7921656575109466 0.5298471229655943 0.7689661707570045 1" class="collision"/>
+      <geom mesh="water_simple_collision_177" rgba="0.061689657242899654 0.32270320502418703 0.8388982943135579 1" class="collision"/>
+      <geom mesh="water_simple_collision_178" rgba="0.729145998722833 0.9732751687564193 0.361767856745715 1" class="collision"/>
+      <geom mesh="water_simple_collision_179" rgba="0.18830957892995526 0.677041140640665 0.1864324228396942 1" class="collision"/>
+      <geom mesh="water_simple_collision_180" rgba="0.47846213458939235 0.644440233548403 0.7481609479358327 1" class="collision"/>
+      <geom mesh="water_simple_collision_181" rgba="0.9059493027598967 0.38746572625384346 0.27268643656758973 1" class="collision"/>
+      <geom mesh="water_simple_collision_182" rgba="0.8091445804582624 0.4035308264821301 0.6653523522788348 1" class="collision"/>
+      <geom mesh="water_simple_collision_183" rgba="0.8553501301805033 0.8100279870426561 0.33349715597945007 1" class="collision"/>
+    </body>
+  </worldbody>
+</mujoco>

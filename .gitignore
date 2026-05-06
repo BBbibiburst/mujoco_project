@@ -5,24 +5,23 @@ __pycache__/
 *.pyd
 
 # 缓存
-cache/stl_cache/
+cache/
 
 # 生成的文本文件
-src/tools/code_summary.txt
-src/tools/path.txt
+source/tools/code_summary.txt
+source/tools/path.txt
 
 # MuJoCo
 MUJOCO_LOG.TXT
 
 # 测试文件
 test/
-
 next_step.md
-
-rl_models/
-
 test.ipynb
 
-# 模型
-models/
+# 日志文件
 logs/
+
+# 训练检查点
+rl_models/
+runs/
