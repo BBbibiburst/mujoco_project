@@ -18,6 +18,7 @@
     - action_space             : 属性，返回 gym.Space（默认 Box）
 """
 
+from pathlib import Path
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -33,6 +34,8 @@ from source.sensors.tactile_sensor import TactileReader
 
 
 # ====================== 环境配置数据类 ======================
+
+PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 @dataclass
 class RobotConfig:
@@ -77,6 +80,15 @@ class RobotConfig:
     # 初始构型（弧度）
     init_arm_qpos: Optional[np.ndarray] = None   # None 时使用模型 qpos0 默认值
     init_hand_qpos: Optional[np.ndarray] = None  # None 时使用模型 qpos0 默认值
+    
+    # 桌子配置
+    table_size: Tuple[float, float, float] = (0.8, 1.2, 0.05)
+    table_pos: Tuple[float, float, float] = (0.5, 0.0, 0.55)
+    table_surface_texture: Optional[str] = str(PROJECT_ROOT / "assets/textures/ceramic.png")  # 也可以由子类或方法设置
+    table_leg_texture: Optional[str] = str(PROJECT_ROOT / "assets/textures/metal.png")
+    table_surface_rgba: Tuple[float, float, float, float] = (0.75, 0.75, 0.75, 1.0)
+    table_leg_rgba: Tuple[float, float, float, float] = (0.3, 0.3, 0.3, 1.0)
+    has_table: bool = True  # 是否生成默认桌子
 
     @property
     def n_sim_steps_per_control(self) -> int:
@@ -406,7 +418,272 @@ class RobotArmEnvBase(gym.Env, ABC):
         return self.reader.read_image(self.data)
 
     # ====================== 私有实现 ======================
+    def _build_base_scene(self, spec: mujoco.MjSpec) -> None:
+        """
+        构建 empty_arena 风格的基础场景（地板、墙壁、灯光、相机）。
+        """
+        import os
+        
+        texture_root = PROJECT_ROOT / "assets" / "textures"
+        
+        # ====================== 1. 天空盒 ======================
+        sky_tex = spec.add_texture()
+        sky_tex.name = "skybox"
+        sky_tex.type = mujoco.mjtTexture.mjTEXTURE_SKYBOX
+        sky_tex.builtin = mujoco.mjtBuiltin.mjBUILTIN_GRADIENT
+        sky_tex.width = 256
+        sky_tex.height = 256
+        sky_tex.rgb1 = [0.9, 0.9, 1.0]
+        sky_tex.rgb2 = [0.2, 0.3, 0.4]
+        
+        # ====================== 2. 地板 ======================
+        floor_tex_path = texture_root / "light-gray-floor-tile.png"
+        if floor_tex_path.exists():
+            floor_tex = spec.add_texture()
+            floor_tex.name = "texplane"
+            floor_tex.type = mujoco.mjtTexture.mjTEXTURE_2D
+            floor_tex.file = str(floor_tex_path)
+            
+            floor_mat = spec.add_material()
+            floor_mat.name = "floorplane"
+            floor_mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = floor_tex.name
+            floor_mat.texrepeat = [2, 2]
+            floor_mat.texuniform = True
+            floor_mat.reflectance = 0.01
+            floor_mat.shininess = 0.0
+            floor_mat.specular = 0.0
+            floor_material = floor_mat.name
+        else:
+            floor_material = None
+        
+        floor_geom = spec.worldbody.add_geom(
+            name="floor",
+            type=mujoco.mjtGeom.mjGEOM_PLANE,
+            size=[3, 3, 0.125],
+            pos=[0, 0, 0],
+            condim=3,
+            group=1,
+        )
+        if floor_material:
+            floor_geom.material = floor_material
+        
+        # ====================== 3. 墙壁（仅视觉）======================
+        wall_tex_path = texture_root / "light-gray-plaster.png"
+        if wall_tex_path.exists():
+            wall_tex = spec.add_texture()
+            wall_tex.name = "tex-light-gray-plaster"
+            wall_tex.type = mujoco.mjtTexture.mjTEXTURE_2D
+            wall_tex.file = str(wall_tex_path)
+            
+            wall_mat = spec.add_material()
+            wall_mat.name = "walls_mat"
+            wall_mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = wall_tex.name
+            wall_mat.texrepeat = [3, 3]
+            wall_mat.texuniform = True
+            wall_mat.reflectance = 0.0
+            wall_mat.shininess = 0.1
+            wall_mat.specular = 0.1
+            wall_material = wall_mat.name
+        else:
+            wall_material = None
+        
+        walls = [
+            ("wall_leftcorner_visual",  [-1.25,  2.25, 1.5], [0.6532815,  0.6532815,  0.2705981,  0.2705981],  [1.06, 1.5, 0.01]),
+            ("wall_rightcorner_visual", [-1.25, -2.25, 1.5], [0.6532815,  0.6532815, -0.2705981, -0.2705981], [1.06, 1.5, 0.01]),
+            ("wall_left_visual",        [ 1.25,  3.0,  1.5], [0.7071,     0.7071,     0,          0],         [1.75, 1.5, 0.01]),
+            ("wall_right_visual",       [ 1.25, -3.0,  1.5], [0.7071,    -0.7071,     0,          0],         [1.75, 1.5, 0.01]),
+            ("wall_rear_visual",        [-2.0,   0.0,  1.5], [0.5,        0.5,        0.5,        0.5],       [1.5,  1.5, 0.01]),
+            ("wall_front_visual",       [ 3.0,   0.0,  1.5], [0.5,        0.5,       -0.5,       -0.5],       [3.0,  1.5, 0.01]),
+        ]
+        
+        for name, pos, quat, size in walls:
+            wall_geom = spec.worldbody.add_geom(
+                name=name,
+                type=mujoco.mjtGeom.mjGEOM_BOX,
+                pos=pos,
+                quat=quat,
+                size=size,
+                contype=0,
+                conaffinity=0,
+                group=1,
+            )
+            if wall_material:
+                wall_geom.material = wall_material
+        
+        # ====================== 4. 灯光 ======================
+        spec.worldbody.add_light(
+            name="main_light",
+            pos=[1.0, 1.0, 1.5],
+            dir=[-0.2, -0.2, -1.0],
+            specular=[0.3, 0.3, 0.3],
+            type=1,  # 定向光
+            castshadow=False,
+        )
+        
+        # ====================== 5. 桌子（如果启用）======================
+        if self.cfg.has_table:
+            self._add_table(
+                spec,
+                table_size=self.cfg.table_size,
+                table_pos=self.cfg.table_pos,
+                table_surface_texture=self.cfg.table_surface_texture,
+                table_surface_rgba=self.cfg.table_surface_rgba,
+                table_leg_texture=self.cfg.table_leg_texture,
+                table_leg_rgba=self.cfg.table_leg_rgba,
+            )
+            self._table_height = self.cfg.table_pos[2] + self.cfg.table_size[2] / 2.0
+    def _add_table(
+        self,
+        spec: mujoco.MjSpec,
 
+        table_size=(0.8, 0.8, 0.05),
+        table_pos=(0.0, 0.0, 0.8),
+
+        has_legs=True,
+
+        # =========================
+        # 桌面材质
+        # =========================
+        table_surface_texture=None,
+        table_surface_rgba=(0.75, 0.75, 0.75, 1.0),
+
+        # =========================
+        # 桌腿材质
+        # =========================
+        table_leg_texture=None,
+        table_leg_rgba=(0.3, 0.3, 0.3, 1.0),
+    ):
+        """
+        添加 robosuite 风格桌子（支持可配置材质）.
+        """
+
+        table_size = np.array(table_size)
+        half = table_size / 2.0
+
+        # =========================================================
+        # 桌板中心
+        # =========================================================
+        table_center = np.array([
+            table_pos[0],
+            table_pos[1],
+            table_pos[2] - half[2],
+        ])
+
+        # =========================================================
+        # 创建 body
+        # =========================================================
+        table_body = spec.worldbody.add_body(
+            name="table",
+            pos=table_center.tolist(),
+        )
+
+        # =========================================================
+        # 创建桌面材质
+        # =========================================================
+        table_material_name = None
+
+        if table_surface_texture is not None:
+
+            tex = spec.add_texture()
+            tex.name = "table_surface_tex"
+            tex.type = mujoco.mjtTexture.mjTEXTURE_CUBE
+            tex.file = str(table_surface_texture)
+
+            mat = spec.add_material()
+            mat.name = "table_surface_mat"
+            mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = tex.name
+            mat.reflectance = 0.0
+            mat.shininess = 0.1
+            mat.specular = 0.1
+
+            table_material_name = mat.name
+
+        # =========================================================
+        # collision geom
+        # =========================================================
+        table_body.add_geom(
+            name="table_collision",
+            type=mujoco.mjtGeom.mjGEOM_BOX,
+            size=half.tolist(),
+            friction=[1.0, 0.005, 0.0001],
+            rgba=[0, 0, 0, 0],
+        )
+
+        # =========================================================
+        # visual geom
+        # =========================================================
+        visual_geom = table_body.add_geom(
+            name="table_visual",
+            type=mujoco.mjtGeom.mjGEOM_BOX,
+            size=half.tolist(),
+            contype=0,
+            conaffinity=0,
+        )
+
+        if table_material_name is not None:
+            visual_geom.material = table_material_name
+        else:
+            visual_geom.rgba = list(table_surface_rgba)
+
+        # =========================================================
+        # table top site
+        # =========================================================
+        table_body.add_site(
+            name="table_top",
+            pos=[0, 0, half[2]],
+            size=[0.001],
+            rgba=[0, 0, 0, 0],
+        )
+
+        # =========================================================
+        # 桌腿
+        # =========================================================
+        if has_legs:
+
+            leg_material_name = None
+
+            if table_leg_texture is not None:
+
+                tex = spec.add_texture()
+                tex.name = "table_leg_tex"
+                tex.type = mujoco.mjtTexture.mjTEXTURE_2D
+                tex.file = str(table_leg_texture)
+
+                mat = spec.add_material()
+                mat.name = "table_leg_mat"
+                mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = tex.name
+                mat.texrepeat = [1, 1]
+                mat.reflectance = 0.3
+                mat.shininess = 0.5
+                mat.specular = 0.5
+
+                leg_material_name = mat.name
+
+            leg_radius = 0.025
+            leg_height = (table_pos[2] - table_size[2]) / 2.0
+
+            dxs = [1, -1, -1, 1]
+            dys = [1, 1, -1, -1]
+
+            for i, (sx, sy) in enumerate(zip(dxs, dys), start=1):
+
+                x = sx * (half[0] - 0.1)
+                y = sy * (half[1] - 0.1)
+
+                leg = table_body.add_geom(
+                    name=f"table_leg{i}_visual",
+                    type=mujoco.mjtGeom.mjGEOM_CYLINDER,
+                    pos=[x, y, -leg_height],
+                    size=[leg_radius, leg_height],
+                    contype=0,
+                    conaffinity=0,
+                )
+
+                if leg_material_name is not None:
+                    leg.material = leg_material_name
+                else:
+                    leg.rgba = list(table_leg_rgba)
+                
     def _init_simulation(self) -> None:
         """初始化 MuJoCo 仿真（加载模型、初始化控制器）."""
 
@@ -418,7 +695,8 @@ class RobotArmEnvBase(gym.Env, ABC):
             tactile_backend=self.cfg.tactile_backend,
         )
 
-        # 2. 子类添加任务场景元素
+        # 2. 构建场景
+        self._build_base_scene(spec)
         self._build_scene(spec)
 
         # 3. 编译模型

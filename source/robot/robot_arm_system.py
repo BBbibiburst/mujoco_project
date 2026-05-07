@@ -16,10 +16,10 @@
 - 优先级覆盖策略：per_joint_overrides > group_defaults > XML_original
 - 延迟编译：get_combined_spec 返回未编译 MjSpec 和 TactileReader，
   允许调用者继续添加物体、相机、光照等，最后手动调用 spec.compile() 生成可仿真模型。
-  
+
 使用方法：
     from source.robot.robot_arm_system import get_combined_spec
-    
+
     # 获取合并后的规格说明和触觉读取器
     spec, reader = get_combined_spec(
         arm_path="path/to/arm.xml",
@@ -28,14 +28,14 @@
         physics=custom_physics_config,
         tactile_backend="physics",
     )
-    
+
     # 进一步修改 spec（如添加物体、相机等）
     # ...
-    
+
     # 编译模型并绑定触觉读取器
     model = spec.compile()
     reader.bind(model)
-    
+
     # 创建仿真数据对象，开始仿真
     data = mujoco.MjData(model)
     # ...
@@ -58,6 +58,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 DEFAULT_ARM_PATH = PROJECT_ROOT / "assets" / "robots" / "rm75b" / "rm75b.xml"
 DEFAULT_HAND_PATH = PROJECT_ROOT / "assets" / "grippers" / "dex_hand" / "dex_hand.xml"
+DEFAULT_BASE_PATH = PROJECT_ROOT / "assets" / "bases" / "rethink_minimal_mount.xml"
 
 PathLike = Union[str, Path]
 
@@ -94,6 +95,7 @@ class JointPhysicsConfig:
         >>> config = JointPhysicsConfig(damping=100.0, frictionloss=0.1)
         >>> config = JointPhysicsConfig(stiffness=10.0, ref=0.0, range=(-1.57, 1.57))
     """
+
     stiffness: Optional[float] = None
     damping: Optional[float] = None
     frictionloss: Optional[float] = None
@@ -146,6 +148,7 @@ class PhysicsConfig:
         ...     geom_friction=(0.8, 0.005, 0.0001),
         ... )
     """
+
     arm_defaults: JointPhysicsConfig = field(default_factory=JointPhysicsConfig)
     hand_defaults: JointPhysicsConfig = field(default_factory=JointPhysicsConfig)
     per_joint_overrides: Dict[str, JointPhysicsConfig] = field(default_factory=dict)
@@ -174,7 +177,7 @@ DEFAULT_GRASP_PHYSICS = PhysicsConfig(
         "joint5": JointPhysicsConfig(damping=10.0),
         "joint6": JointPhysicsConfig(damping=5.0),
         "joint7": JointPhysicsConfig(damping=5.0),
-    }
+    },
 )
 
 
@@ -244,7 +247,7 @@ def _apply_physics_to_spec(
         base_cfg = physics.hand_defaults if is_hand else physics.arm_defaults
         _apply_joint_config(joint, base_cfg)
 
-        bare_name = name[len(hand_prefix):] if is_hand else name
+        bare_name = name[len(hand_prefix) :] if is_hand else name
         for lookup in (name, bare_name):
             if lookup in physics.per_joint_overrides:
                 _apply_joint_config(joint, physics.per_joint_overrides[lookup])
@@ -262,6 +265,7 @@ def _apply_physics_to_spec(
 def get_combined_spec(
     arm_path: Optional[PathLike] = None,
     hand_path: Optional[PathLike] = None,
+    base_path: Optional[PathLike] = None,
     rot_xyz_deg: Tuple[float, float, float] = (-90.0, 0.0, 0.0),
     attach_point_name: str = "right_hand",
     physics: Optional[PhysicsConfig] = None,
@@ -284,6 +288,7 @@ def get_combined_spec(
     """
     arm_path = Path(arm_path) if arm_path else DEFAULT_ARM_PATH
     hand_path = Path(hand_path) if hand_path else DEFAULT_HAND_PATH
+    base_path = Path(base_path) if base_path else DEFAULT_BASE_PATH
 
     if not arm_path.exists():
         raise FileNotFoundError(f"机械臂模型文件不存在: {arm_path}")
@@ -292,6 +297,26 @@ def get_combined_spec(
 
     arm_spec = mujoco.MjSpec.from_file(str(arm_path))
     hand_spec = mujoco.MjSpec.from_file(str(hand_path))
+    hand_height = 0.5  # 手模型的默认高度，确保站在底座上方
+
+    if base_path is not None:
+        base_path = Path(base_path)
+        if not base_path.exists():
+            raise FileNotFoundError(f"底座模型文件不存在: {base_path}")
+
+        base_spec = mujoco.MjSpec.from_file(str(base_path))
+        base_root = base_spec.worldbody.first_body()
+
+        if base_root is None:
+            raise ValueError("底座 XML 的 worldbody 下没有 body 节点。")
+
+        wf = arm_spec.worldbody.add_frame()
+    wf.attach_body(base_root, prefix="mount_", suffix="")
+    # 把机械臂根节点抬高，使其站在底座顶部
+    arm_root = arm_spec.worldbody.first_body()
+    if arm_root is not None:
+        current_z = arm_root.pos[2] if arm_root.pos is not None else 0.0
+        arm_root.pos = [arm_root.pos[0], arm_root.pos[1], current_z + hand_height]
 
     hand_root = hand_spec.worldbody.first_body()
     if hand_root is None:
@@ -311,17 +336,23 @@ def get_combined_spec(
         )
 
     attach_frame = attach_body.add_frame()
-    attached_body = attach_frame.attach_body(hand_root, prefix="inspirehand_", suffix="")
+    attached_body = attach_frame.attach_body(
+        hand_root, prefix="inspirehand_", suffix=""
+    )
 
     attach_frame.pos = [0.0, 0.0, 0.0]
-    rotation = R.from_quat([0, 0, 0, 1]) * R.from_euler("xyz", rot_xyz_deg, degrees=True)
+    rotation = R.from_quat([0, 0, 0, 1]) * R.from_euler(
+        "xyz", rot_xyz_deg, degrees=True
+    )
     q_xyzw = rotation.as_quat()
     attach_frame.quat = [q_xyzw[3], q_xyzw[0], q_xyzw[1], q_xyzw[2]]
 
     if physics is not None:
         _apply_physics_to_spec(arm_spec, physics, arm_root_name=attach_point_name)
     else:
-        _apply_physics_to_spec(arm_spec, DEFAULT_GRASP_PHYSICS, arm_root_name=attach_point_name)
+        _apply_physics_to_spec(
+            arm_spec, DEFAULT_GRASP_PHYSICS, arm_root_name=attach_point_name
+        )
 
     arm_spec.option.timestep = 0.001
     arm_spec.option.solver = mujoco.mjtSolver.mjSOL_NEWTON
@@ -336,6 +367,7 @@ def get_combined_spec(
 def load_combined_model(
     arm_path: Optional[PathLike] = None,
     hand_path: Optional[PathLike] = None,
+    base_path: Optional[PathLike] = None,
     rot_xyz_deg: Tuple[float, float, float] = (-90.0, 0.0, 0.0),
     physics: Optional[PhysicsConfig] = None,
     tactile_backend: str = "simple_avg",
@@ -350,10 +382,64 @@ def load_combined_model(
     spec, reader = get_combined_spec(
         arm_path,
         hand_path,
+        base_path,
         rot_xyz_deg,
         physics=physics,
         tactile_backend=tactile_backend,
     )
+    # ====================== skybox ======================
+
+    skybox_tex = spec.add_texture()
+    skybox_tex.name = "skybox_tex"
+    skybox_tex.type = mujoco.mjtTexture.mjTEXTURE_SKYBOX
+    skybox_tex.builtin = mujoco.mjtBuiltin.mjBUILTIN_GRADIENT
+    skybox_tex.rgb1 = [0.3, 0.5, 0.7]
+    skybox_tex.rgb2 = [0.0, 0.0, 0.0]
+    skybox_tex.width = 512
+    skybox_tex.height = 3072
+
+    # ====================== ground texture ======================
+
+    ground_tex = spec.add_texture()
+    ground_tex.name = "groundplane_tex"
+    ground_tex.type = mujoco.mjtTexture.mjTEXTURE_2D
+    ground_tex.builtin = mujoco.mjtBuiltin.mjBUILTIN_CHECKER
+    ground_tex.rgb1 = [0.2, 0.3, 0.4]
+    ground_tex.rgb2 = [0.1, 0.2, 0.3]
+    ground_tex.width = 512
+    ground_tex.height = 512
+
+    # ====================== ground material ======================
+
+    ground_mat = spec.add_material()
+    ground_mat.name = "groundplane"
+
+    ground_mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = ground_tex.name
+
+    ground_mat.texrepeat = [5, 5]
+    ground_mat.reflectance = 0.2
+    ground_mat.shininess = 0.1
+    ground_mat.specular = 0.1
+
+    # ====================== light ======================
+
+    # 主顶光
+    spec.worldbody.add_light(
+        name="top_light",
+        pos=[0.0, 0.0, 4.0],
+        dir=[0.0, 0.0, -1.0],
+        diffuse=[2, 2, 2],
+        ambient=[0.8, 0.8, 0.8],
+        specular=[0.3, 0.3, 0.3],
+    )
+
+    # ====================== floor ======================
+
+    floor = spec.worldbody.add_geom()
+    floor.name = "floor"
+    floor.type = mujoco.mjtGeom.mjGEOM_PLANE
+    floor.size = [0, 0, 0.05]
+    floor.material = ground_mat.name
     model = spec.compile()
     reader.bind(model)
     data = mujoco.MjData(model)
@@ -388,7 +474,9 @@ if __name__ == "__main__":
 
     except FileNotFoundError as e:
         print(f"\n[错误] 文件未找到: {e}")
-        print("请检查 'mjcfs/' 目录结构是否正确，确保包含 rm75b/ 和 inspirehand/ 子目录")
+        print(
+            "请检查 'mjcfs/' 目录结构是否正确，确保包含 rm75b/ 和 inspirehand/ 子目录"
+        )
     except Exception as e:
         print(f"\n[错误] 发生未知异常: {e}")
         traceback.print_exc()

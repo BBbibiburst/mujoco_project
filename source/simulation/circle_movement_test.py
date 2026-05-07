@@ -16,7 +16,7 @@
     - numpy: 数值计算与几何变换。
     - robot_arm_system: 机器人模型组装。
     - position_controller: 运动控制算法（OSC/IK）。
-    
+
 使用方法：
     python -m source.simulation.circle_movement_test
 """
@@ -30,19 +30,20 @@ from source.robot.robot_arm_system import get_combined_spec
 from source.controllers.position_controller import OSCController, stable_osc_gains
 from source.controllers.hand_arm_controller import HandArmController
 
-
 # ====================== 配置数据类 ======================
+
 
 @dataclass
 class CircleTrajectoryConfig:
     """圆周轨迹运动参数配置.
-    
+
     Attributes:
         center: 轨迹圆心在世界坐标系的位置 [x, y, z] (米)。
         radius: 轨迹半径 (米)。
         speed: 旋转角速度 (弧度/秒)。
         z_offset: 轨迹平面的 Z 轴高度修正 (米)。
     """
+
     center: np.ndarray = field(default_factory=lambda: np.array([0.5, 0.0, 0.4]))
     radius: float = 0.15
     speed: float = 1.5
@@ -52,15 +53,20 @@ class CircleTrajectoryConfig:
 @dataclass
 class VisualStyle:
     """调试可视化样式配置.
-    
+
     Attributes:
         actual_rgba: 实际位置球体的颜色 (青蓝色)。
         target_rgba: 目标位置球体的颜色 (红色，半透明)。
         actual_size: 实际位置球体半径 (米)。
         target_size: 目标位置球体半径 (米)。
     """
-    actual_rgba: np.ndarray = field(default_factory=lambda: np.array([0.0, 1.0, 1.0, 0.8]))  # 青色
-    target_rgba: np.ndarray = field(default_factory=lambda: np.array([1.0, 0.0, 0.0, 0.4]))  # 红色
+
+    actual_rgba: np.ndarray = field(
+        default_factory=lambda: np.array([0.0, 1.0, 1.0, 0.8])
+    )  # 青色
+    target_rgba: np.ndarray = field(
+        default_factory=lambda: np.array([1.0, 0.0, 0.0, 0.4])
+    )  # 红色
     actual_size: float = 0.005  # 5mm
     target_size: float = 0.015  # 15mm
 
@@ -68,31 +74,33 @@ class VisualStyle:
 @dataclass
 class RuntimeConfig:
     """运行时逻辑配置.
-    
+
     Attributes:
         hand_random_interval: 手部随机姿态更新的时间间隔 (秒)。
         target_pos: 场景中静态目标物体的位置 (用于环境构建)。
     """
+
     hand_random_interval: float = 1.0
     target_pos: np.ndarray = field(default_factory=lambda: np.array([0.4, 0.0, 0.025]))
 
 
 # ====================== 可视化工具类 ======================
 
+
 class TrajectoryVisualizer:
     """轨迹调试几何体绘制工具.
-    
+
     利用 MuJoCo 的 `user_scn` 接口在仿真 Viewer 中绘制自定义几何体。
     该类专门用于管理末端执行器实际位置的动态标记。
-    
+
     设计策略：
         - **缓冲区安全**：在 `draw` 方法中检查 `ngeom`，防止几何体数量超过 MuJoCo 缓冲区上限。
         - **状态保持**：持有当前要绘制的位置状态，允许在控制循环中更新，在渲染阶段绘制。
     """
-    
+
     def __init__(self, style: VisualStyle):
         """初始化可视化工具.
-        
+
         Args:
             style: 可视化样式配置对象。
         """
@@ -101,7 +109,7 @@ class TrajectoryVisualizer:
 
     def update_point(self, pos: np.ndarray) -> None:
         """更新当前要绘制的末端位置.
-        
+
         Args:
             pos: 3D 坐标位置向量。
         """
@@ -109,17 +117,17 @@ class TrajectoryVisualizer:
 
     def draw(self, viewer: mujoco.viewer) -> None:
         """将当前点渲染到 Viewer 场景中.
-        
+
         注意：
             必须在每帧循环开始时重置 `viewer.user_scn.ngeom`，
             否则几何体会累积导致画面混乱。
-        
+
         Args:
             viewer: MuJoCo Viewer 实例。
         """
         if self.current_pos is None:
             return
-            
+
         # 安全检查：防止超出几何体缓冲区上限 (通常为 1000)
         if viewer.user_scn.ngeom < 990:  # 预留一些空间
             geom_id = viewer.user_scn.ngeom
@@ -129,35 +137,78 @@ class TrajectoryVisualizer:
                 size=[self.style.actual_size, 0, 0],  # 球体仅需第一个参数
                 pos=self.current_pos,
                 mat=np.eye(3).flatten(),  # 单位旋转矩阵
-                rgba=self.style.actual_rgba
+                rgba=self.style.actual_rgba,
             )
             viewer.user_scn.ngeom += 1
 
 
 # ====================== 环境构建 ======================
 
-def build_custom_grasp_environment(cfg_runtime: RuntimeConfig) -> Tuple[mujoco.MjModel, mujoco.MjData]:
+
+def build_custom_grasp_environment(
+    cfg_runtime: RuntimeConfig,
+) -> Tuple[mujoco.MjModel, mujoco.MjData]:
     """构建包含机械臂、静态目标物体及光源的基础环境.
-    
+
     Args:
         cfg_runtime: 运行时配置，包含静态物体位置。
-    
+
     Returns:
         Tuple[mujoco.MjModel, mujoco.MjData]: 仿真模型与数据实例。
     """
-    spec, _ = get_combined_spec(
-        rot_xyz_deg=(-90, 0, 0), 
-        attach_point_name="right_hand"
-    )
+    spec, _ = get_combined_spec(rot_xyz_deg=(-90, 0, 0), attach_point_name="right_hand")
     worldbody = spec.worldbody
+    # ====================== skybox ======================
 
-    # 顶部平行光，提供均匀照明
-    worldbody.add_light(
+    skybox_tex = spec.add_texture()
+    skybox_tex.name = "skybox_tex"
+    skybox_tex.type = mujoco.mjtTexture.mjTEXTURE_SKYBOX
+    skybox_tex.builtin = mujoco.mjtBuiltin.mjBUILTIN_GRADIENT
+    skybox_tex.rgb1 = [0.3, 0.5, 0.7]
+    skybox_tex.rgb2 = [0.0, 0.0, 0.0]
+    skybox_tex.width = 512
+    skybox_tex.height = 3072
+
+    # ====================== ground texture ======================
+
+    ground_tex = spec.add_texture()
+    ground_tex.name = "groundplane_tex"
+    ground_tex.type = mujoco.mjtTexture.mjTEXTURE_2D
+    ground_tex.builtin = mujoco.mjtBuiltin.mjBUILTIN_CHECKER
+    ground_tex.rgb1 = [0.2, 0.3, 0.4]
+    ground_tex.rgb2 = [0.1, 0.2, 0.3]
+    ground_tex.width = 512
+    ground_tex.height = 512
+
+    # ====================== ground material ======================
+
+    ground_mat = spec.add_material()
+    ground_mat.name = "groundplane"
+
+    ground_mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = ground_tex.name
+
+    ground_mat.texrepeat = [5, 5]
+    ground_mat.reflectance = 0.2
+    ground_mat.shininess = 0.1
+    ground_mat.specular = 0.1
+
+    # ====================== light ======================
+    spec.worldbody.add_light(
         name="top_light",
-        pos=[0.0, 0.0, 2.0],
+        pos=[0.0, 0.0, 4.0],
         dir=[0.0, 0.0, -1.0],
-        diffuse=[1.0, 1.0, 1.0]
+        diffuse=[2, 2, 2],
+        ambient=[0.8, 0.8, 0.8],
+        specular=[0.3, 0.3, 0.3],
     )
+
+    # ====================== floor ======================
+
+    floor = spec.worldbody.add_geom()
+    floor.name = "floor"
+    floor.type = mujoco.mjtGeom.mjGEOM_PLANE
+    floor.size = [0, 0, 0.05]
+    floor.material = ground_mat.name
 
     # 静态目标物体（立方体）
     obj_body = worldbody.add_body(name="target_box", pos=cfg_runtime.target_pos)
@@ -165,7 +216,7 @@ def build_custom_grasp_environment(cfg_runtime: RuntimeConfig) -> Tuple[mujoco.M
         type=mujoco.mjtGeom.mjGEOM_BOX,
         size=[0.025, 0.025, 0.025],
         rgba=[1.0, 0.2, 0.2, 1.0],
-        mass=0.2
+        mass=0.2,
     )
     obj_body.add_joint(name="box_free", type=mujoco.mjtJoint.mjJNT_FREE)
 
@@ -176,9 +227,10 @@ def build_custom_grasp_environment(cfg_runtime: RuntimeConfig) -> Tuple[mujoco.M
 
 # ====================== 主程序 ======================
 
+
 def main():
     """圆周轨迹跟踪演示主循环.
-    
+
     流程：
         1. 初始化：加载配置，构建环境，实例化控制器与可视化工具。
         2. 主循环：
@@ -195,12 +247,12 @@ def main():
     try:
         # ===== 1. 初始化系统 =====
         model, data = build_custom_grasp_environment(cfg_runtime)
-        
+
         # 控制器栈初始化
         hardware_interface = HandArmController(model)
         pos_controller = OSCController(
-            base=hardware_interface, 
-            model=model, 
+            base=hardware_interface,
+            model=model,
             gains=stable_osc_gains(),
         )
 
@@ -210,7 +262,7 @@ def main():
         # 启动 Viewer
         with mujoco.viewer.launch_passive(model, data) as viewer:
             print("=== [Simulation] 开始运行：青色点=实际位置，红色点=目标位置 ===")
-            
+
             # 运行时状态变量
             last_hand_update = -cfg_runtime.hand_random_interval
             hand_target = np.zeros(pos_controller.base.HAND_DOF)  # 初始化手部目标
@@ -226,14 +278,16 @@ def main():
                 # --- B. 轨迹规划 (圆周运动) ---
                 current_time = data.time
                 angle = current_time * cfg_traj.speed
-                
+
                 # 计算目标位置：圆心 + 半径 * (cos(theta), sin(theta), 0)
-                ee_target_pos = cfg_traj.center + np.array([
-                    cfg_traj.radius * np.cos(angle),
-                    cfg_traj.radius * np.sin(angle),
-                    cfg_traj.z_offset
-                ])
-                
+                ee_target_pos = cfg_traj.center + np.array(
+                    [
+                        cfg_traj.radius * np.cos(angle),
+                        cfg_traj.radius * np.sin(angle),
+                        cfg_traj.z_offset,
+                    ]
+                )
+
                 # 固定的末端朝向（四元数 w, x, y, z）
                 # 注：[1, 0, 0, 0] 代表无旋转。若机械臂初始姿态需要特定朝向，请在此调整
                 ee_target_quat = np.array([1.0, 0.0, 0.0, 0.0])
@@ -241,7 +295,10 @@ def main():
                 # --- C. 随机手部动作 ---
                 if current_time - last_hand_update > cfg_runtime.hand_random_interval:
                     # 在物理限位范围内生成随机手部姿态
-                    low, high = pos_controller.hand_range[:, 0], pos_controller.hand_range[:, 1]
+                    low, high = (
+                        pos_controller.hand_range[:, 0],
+                        pos_controller.hand_range[:, 1],
+                    )
                     hand_target = np.random.uniform(low, high)
                     last_hand_update = current_time
 
@@ -251,7 +308,7 @@ def main():
                     data=data,
                     ee_pos_target=ee_target_pos,
                     ee_quat_target=ee_target_quat,
-                    hand_target=hand_target
+                    hand_target=hand_target,
                 )
 
                 # --- E. 物理步进 ---
@@ -271,7 +328,7 @@ def main():
                     size=[cfg_style.target_size, 0, 0],
                     pos=ee_target_pos,
                     mat=np.eye(3).flatten(),
-                    rgba=cfg_style.target_rgba
+                    rgba=cfg_style.target_rgba,
                 )
                 viewer.user_scn.ngeom += 1
 
@@ -286,6 +343,7 @@ def main():
     except Exception as e:
         print(f"\n[致命错误] 仿真异常终止: {e}")
         import traceback
+
         traceback.print_exc()
     finally:
         print("\n=== [Cleanup] 仿真结束，资源已释放 ===")

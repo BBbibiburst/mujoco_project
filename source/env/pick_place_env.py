@@ -18,35 +18,41 @@
 
 from dataclasses import dataclass, field
 from enum import IntEnum
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 import mujoco
 import numpy as np
 from .base_env import RobotArmEnvBase, RobotConfig
 import gymnasium as gym
 from gymnasium import spaces
-# 导入触觉传感器常量和工具函数
-from source.sensors.tactile_sensor import TactileReader, DISPLAY_ORDER, FINGER_PHALANX_ORDER
 
+# 导入触觉传感器常量和工具函数
+from source.sensors.tactile_sensor import (
+    TactileReader,
+    DISPLAY_ORDER,
+    FINGER_PHALANX_ORDER,
+)
 
 # ====================== 任务阶段枚举 ======================
 
+
 class TaskPhase(IntEnum):
-    REACH     = 0
-    GRASP     = 1
+    REACH = 0
+    GRASP = 1
     TRANSPORT = 2
-    PLACE     = 3
+    PLACE = 3
 
 
 # ====================== 任务配置 ======================
 
+
 @dataclass
 class PickPlaceConfig:
     """抓取放置任务专用配置."""
-
+    obs_camera_name: str = "frontview"   # 观测相机
     # 物体配置
     obj_pos_range: np.ndarray = field(
-        default_factory=lambda: np.array([[0.35, -0.15, 0.025],
-                                          [0.50,  0.15, 0.025]])
+        default_factory=lambda: np.array([[0.35, -0.15, 0.825], [0.50, 0.15, 0.825]])
     )
     obj_size: float = 0.025
     obj_mass: float = 0.1
@@ -54,8 +60,7 @@ class PickPlaceConfig:
 
     # 目标配置
     target_pos_range: np.ndarray = field(
-        default_factory=lambda: np.array([[0.35, -0.15, 0.025],
-                                          [0.50,  0.15, 0.025]])
+        default_factory=lambda: np.array([[0.35, -0.15, 0.801], [0.50, 0.15, 0.801]])
     )
     target_min_dist: float = 0.15
     target_color: Tuple = (0.1, 0.8, 0.1, 0.4)
@@ -66,7 +71,7 @@ class PickPlaceConfig:
     approach_height: float = 0.12
 
     # 手部开合配置（关节角）
-    hand_open:  np.ndarray = field(default_factory=lambda: np.zeros(6))
+    hand_open: np.ndarray = field(default_factory=lambda: np.zeros(6))
     hand_close: np.ndarray = field(default_factory=lambda: np.full(6, 0.01))
 
     # 阶段切换阈值
@@ -96,9 +101,9 @@ _FINGER_NAMES = ["finger_0", "finger_1", "finger_2", "finger_3", "thumb"]
 
 # 每个指节类型的传感器分辨率（行数、列数），用于正确解析触觉图像并构建观测空间
 _TACTILE_LEVELS = {
-    "bottom": (10, 7),   # 10 rows, 7 cols
-    "middle": (8, 5),    # 8 rows, 5 cols
-    "top":    (6, 5),    # 6 rows, 5 cols
+    "bottom": (10, 7),  # 10 rows, 7 cols
+    "middle": (8, 5),  # 8 rows, 5 cols
+    "top": (6, 5),  # 6 rows, 5 cols
 }
 
 # 指节名称到类型的映射（用于从 DISPLAY_ORDER 推断）
@@ -111,6 +116,7 @@ for finger, phalanges in FINGER_PHALANX_ORDER.items():
 
 # ====================== 抓取放置环境 ======================
 
+
 class PickPlaceEnv(RobotArmEnvBase):
     """
     抓取放置任务强化学习环境.
@@ -121,7 +127,20 @@ class PickPlaceEnv(RobotArmEnvBase):
         robot_config: Optional[RobotConfig] = None,
         task_config: Optional[PickPlaceConfig] = None,
     ):
+        self._cam_name = "frontview"
+        self._camera_names = ["frontview", "birdview", "agentview", "sideview"]
         self.task_cfg = task_config or PickPlaceConfig()
+        # 配置默认桌子纹理（如果不传 robot_config）
+        if robot_config is None:
+            robot_config = RobotConfig()
+        
+        # 设置 pickplace 特定的桌子纹理
+        PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+        robot_config.table_surface_texture = str(PROJECT_ROOT / "assets/textures/ceramic.png")
+        robot_config.table_leg_texture = str(PROJECT_ROOT / "assets/textures/metal.png")
+        # 可以覆盖其他桌子参数
+        # robot_config.table_size = (0.8, 1.2, 0.05)
+        # robot_config.table_pos = (0.5, 0.0, 0.55)
         super().__init__(robot_config)
 
         # 任务状态
@@ -154,61 +173,70 @@ class PickPlaceEnv(RobotArmEnvBase):
         """
         img_h, img_w = 240, 320
 
-        return spaces.Dict({
-            "camera_rgb": spaces.Box(
-                low=0, high=255, shape=(img_h, img_w, 3), dtype=np.uint8
-            ),
-            "tactile_bottom": spaces.Box(
-                low=0, high=255, shape=(5, 10, 7), dtype=np.uint8
-            ),
-            "tactile_middle": spaces.Box(
-                low=0, high=255, shape=(5, 8, 5), dtype=np.uint8
-            ),
-            "tactile_top": spaces.Box(
-                low=0, high=255, shape=(5, 6, 5), dtype=np.uint8
-            ),
-            "proprioception": spaces.Box(
-                low=-np.inf, high=np.inf, shape=(13,), dtype=np.float32
-            ),
-        })
+        return spaces.Dict(
+            {
+                "camera_rgb": spaces.Box(
+                    low=0, high=255, shape=(img_h, img_w, 3), dtype=np.uint8
+                ),
+                "tactile_bottom": spaces.Box(
+                    low=0, high=255, shape=(5, 10, 7), dtype=np.uint8
+                ),
+                "tactile_middle": spaces.Box(
+                    low=0, high=255, shape=(5, 8, 5), dtype=np.uint8
+                ),
+                "tactile_top": spaces.Box(
+                    low=0, high=255, shape=(5, 6, 5), dtype=np.uint8
+                ),
+                "proprioception": spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(13,), dtype=np.float32
+                ),
+            }
+        )
 
     # ====================== 必须实现的抽象方法 ======================
 
     def _build_scene(self, spec: mujoco.MjSpec) -> None:
-        """向 spec 添加场景元素."""
+        """向 spec 添加任务特定元素（在基类桌子基础上扩展）."""
+
         wb = spec.worldbody
         tc = self.task_cfg
 
-        # 1. 灯光
-        wb.add_light(
-            name="top_light",
-            pos=[0.2, 0.0, 1.8],
-            dir=[0.0, 0.0, -1.0],
-            diffuse=[0.9, 0.9, 0.9],
-            ambient=[0.3, 0.3, 0.3],
-        )
+        # =========================================================
+        # 基类已经添加了桌子和灯光，这里只需添加任务特定元素
+        # =========================================================
 
-        # 2. 目标物体
+        # 1. 目标物体（放在桌面上）
+        # 使用基类保存的 _table_height 计算物体高度
+        cube_z = self._table_height + tc.obj_size
+
         obj = wb.add_body(
             name="target_object",
-            pos=[0.4, 0.0, tc.obj_size],
+            pos=[0.4, 0.0, cube_z],
         )
+
         obj.add_geom(
+            name="obj_geom",
             type=mujoco.mjtGeom.mjGEOM_BOX,
             size=[tc.obj_size] * 3,
             rgba=list(tc.obj_color),
             mass=tc.obj_mass,
             friction=[1.0, 0.005, 0.0001],
             condim=4,
-            name="obj_geom",
         )
-        obj.add_joint(type=mujoco.mjtJoint.mjJNT_FREE, name="obj_free_joint")
 
-        # 3. 目标指示器
+        obj.add_joint(
+            type=mujoco.mjtJoint.mjJNT_FREE,
+            name="obj_free_joint",
+        )
+
+        # 2. 目标位置 marker（贴在桌面上）
+        marker_z = self._table_height + 0.001
+
         target_marker = wb.add_body(
             name="target_marker",
-            pos=[0.5, 0.1, 0.001],
+            pos=[0.5, 0.1, marker_z],
         )
+
         target_marker.add_geom(
             type=mujoco.mjtGeom.mjGEOM_BOX,
             size=[tc.obj_size * 1.2, tc.obj_size * 1.2, 0.001],
@@ -216,14 +244,21 @@ class PickPlaceEnv(RobotArmEnvBase):
             contype=0,
             conaffinity=0,
         )
-
-        # 4. 俯视相机
-        wb.add_camera(
-            name="top_cam",
-            pos=[0.45, 0.0, 1.2],
-            quat=[1, 0, 0, 0],
-            fovy=45,
-        )
+        # ====================== 预设相机 ======================
+        cameras = [
+            ("frontview",  [1.6, 0.0, 1.2],     [0.56, 0.43, 0.43, 0.56]),
+            ("birdview",   [-0.2, 0.0, 3.0],      [0.7071, 0, 0, 0.7071]),
+            ("agentview",  [1.0, 0.0, 1.0],      [0.7071, 0.0, 0.7071, 0.0]),
+            ("sideview",   [-0.0565, 1.276, 1.488], [0.0099, 0.0069, 0.5912, 0.8064]),
+        ]
+        
+        for name, pos, quat in cameras:
+            spec.worldbody.add_camera(
+                name=name,
+                mode=0,  # mjCAMLIGHT_FIXED = 0
+                pos=pos,
+                quat=quat,
+            )
 
     def _get_obs(self) -> Dict[str, Any]:
         """
@@ -236,8 +271,8 @@ class PickPlaceEnv(RobotArmEnvBase):
         tactile_grouped = self._get_tactile_grouped()
 
         # --- 3. 本体感觉 ---
-        arm_q = self.get_arm_qpos()      # (7,)
-        hand_q = self.get_hand_qpos()    # (6,)
+        arm_q = self.get_arm_qpos()  # (7,)
+        hand_q = self.get_hand_qpos()  # (6,)
         proprioception = np.concatenate([arm_q, hand_q]).astype(np.float32)  # (13,)
 
         return {
@@ -292,13 +327,14 @@ class PickPlaceEnv(RobotArmEnvBase):
         obj_pos = self._get_obj_pos()
         dist_2d = np.linalg.norm(obj_pos[:2] - self._target_pos[:2])
         height_ok = obj_pos[2] < tc.success_height_max
-        return bool(dist_2d < tc.success_dist and height_ok and
-                    self._phase == TaskPhase.PLACE)
+        return bool(
+            dist_2d < tc.success_dist and height_ok and self._phase == TaskPhase.PLACE
+        )
 
     def _reset_scene(self) -> None:
         """随机化物体和目标位置."""
         tc = self.task_cfg
-
+        self._cam_name = "frontview"
         if self._obj_body_id == -1:
             self._cache_ids()
 
@@ -306,7 +342,7 @@ class PickPlaceEnv(RobotArmEnvBase):
         if self._renderer is None:
             self._renderer = mujoco.Renderer(self.model, height=240, width=320)
             self._cam_id = mujoco.mj_name2id(
-                self.model, mujoco.mjtObj.mjOBJ_CAMERA, "top_cam"
+                self.model, mujoco.mjtObj.mjOBJ_CAMERA, self._cam_name
             )
 
         # 随机化物体位置
@@ -323,13 +359,13 @@ class PickPlaceEnv(RobotArmEnvBase):
         # 更新物体 qpos
         if self._obj_free_jnt_qposadr >= 0:
             adr = self._obj_free_jnt_qposadr
-            self.data.qpos[adr:adr+3] = obj_pos
-            self.data.qpos[adr+3:adr+7] = [1, 0, 0, 0]
+            self.data.qpos[adr : adr + 3] = obj_pos
+            self.data.qpos[adr + 3 : adr + 7] = [1, 0, 0, 0]
             jnt_id = mujoco.mj_name2id(
                 self.model, mujoco.mjtObj.mjOBJ_JOINT, "obj_free_joint"
             )
             dof_adr = self.model.jnt_dofadr[jnt_id]
-            self.data.qvel[dof_adr:dof_adr+6] = 0.0
+            self.data.qvel[dof_adr : dof_adr + 6] = 0.0
 
         # 重置阶段
         self._phase = TaskPhase.REACH
@@ -338,13 +374,15 @@ class PickPlaceEnv(RobotArmEnvBase):
         """扩展信息."""
         info = super()._get_info()
         obj_pos = self._get_obj_pos()
-        info.update({
-            "phase": self._phase.name,
-            "obj_pos": obj_pos.tolist(),
-            "target_pos": self._target_pos.tolist(),
-            "dist_obj_target": float(np.linalg.norm(obj_pos - self._target_pos)),
-            "is_grasped": self._is_object_grasped(),
-        })
+        info.update(
+            {
+                "phase": self._phase.name,
+                "obj_pos": obj_pos.tolist(),
+                "target_pos": self._target_pos.tolist(),
+                "dist_obj_target": float(np.linalg.norm(obj_pos - self._target_pos)),
+                "is_grasped": self._is_object_grasped(),
+            }
+        )
         return info
 
     # ====================== 视觉与触觉观测 ======================
@@ -354,14 +392,13 @@ class PickPlaceEnv(RobotArmEnvBase):
         if self._renderer is None:
             return np.zeros((240, 320, 3), dtype=np.uint8)
 
-        self._renderer.update_scene(self.data, camera="top_cam")
+        self._renderer.update_scene(self.data, camera=self._cam_name)
         rgb = self._renderer.render()
         return rgb
 
     def _get_tactile_grouped(self) -> Dict[str, np.ndarray]:
         """
         获取触觉图像，按指节类型分组.
-        与 grasp_task_env.py 的显示逻辑保持一致，使用 FINGER_PHALANX_ORDER.
         """
         if self.reader is None:
             return self._empty_tactile_grouped()
@@ -389,9 +426,11 @@ class PickPlaceEnv(RobotArmEnvBase):
                             img = img.T
                         elif img.shape != (expected_h, expected_w):
                             import cv2
+
                             img = cv2.resize(
-                                img, (expected_w, expected_h),
-                                interpolation=cv2.INTER_NEAREST
+                                img,
+                                (expected_w, expected_h),
+                                interpolation=cv2.INTER_NEAREST,
                             )
                         level_images.append(img.astype(np.uint8))
                     else:
@@ -498,8 +537,7 @@ class PickPlaceEnv(RobotArmEnvBase):
 
         elif self._phase == TaskPhase.TRANSPORT:
             horiz_dist = np.linalg.norm(obj_pos[:2] - self._target_pos[:2])
-            if (horiz_dist < tc.transport_threshold and
-                    obj_pos[2] > tc.obj_size + 0.05):
+            if horiz_dist < tc.transport_threshold and obj_pos[2] > tc.obj_size + 0.05:
                 print(f"  [Phase] TRANSPORT -> PLACE")
                 self._phase = TaskPhase.PLACE
 

@@ -18,14 +18,19 @@ from dataclasses import dataclass, field
 from source.robot.robot_arm_system import get_combined_spec
 from source.controllers.position_controller import OSCController, stable_osc_gains
 from source.controllers.hand_arm_controller import HandArmController
-from source.sensors.tactile_sensor import TactileReader, DISPLAY_ORDER, FINGER_PHALANX_ORDER
-
+from source.sensors.tactile_sensor import (
+    TactileReader,
+    DISPLAY_ORDER,
+    FINGER_PHALANX_ORDER,
+)
 
 # ====================== 配置数据类 ======================
+
 
 @dataclass
 class CameraConfig:
     """仿真环境相机配置"""
+
     width: int = 320
     height: int = 240
     cam_height: float = 3.0  # 相机高度
@@ -35,6 +40,7 @@ class CameraConfig:
 @dataclass
 class ObjectConfig:
     """仿真环境目标物体配置"""
+
     pos: np.ndarray = field(default_factory=lambda: np.array([0.4, 0.0, 0.025]))
     size: np.ndarray = field(default_factory=lambda: np.array([0.025, 0.025, 0.025]))
     mass: float = 0.1
@@ -43,15 +49,16 @@ class ObjectConfig:
 
 # ====================== 环境构建 ======================
 
+
 def build_custom_grasp_environment(
     tactile_backend: str = "simple_avg",
 ) -> Tuple[mujoco.MjModel, mujoco.MjData, TactileReader]:
     """
     构建自定义抓取环境，返回编译好的模型和已绑定的触觉读取器.
-    
+
     Args:
         tactile_backend: 触觉后端类型，"physics"（弹性taxel，推荐）或 "simple"（轻量site）
-    
+
     Returns:
         (model, data, reader): 已编译的 MuJoCo 模型、仿真数据对象、已绑定的 TactileReader
     """
@@ -67,21 +74,67 @@ def build_custom_grasp_environment(
         tactile_backend=tactile_backend,
     )
     worldbody = spec.worldbody
+    # ====================== skybox ======================
 
-    # 2. 添加环境基础元素（光照、相机、目标物体）
-    worldbody.add_light(
+    skybox_tex = spec.add_texture()
+    skybox_tex.name = "skybox_tex"
+    skybox_tex.type = mujoco.mjtTexture.mjTEXTURE_SKYBOX
+    skybox_tex.builtin = mujoco.mjtBuiltin.mjBUILTIN_GRADIENT
+    skybox_tex.rgb1 = [0.3, 0.5, 0.7]
+    skybox_tex.rgb2 = [0.0, 0.0, 0.0]
+    skybox_tex.width = 512
+    skybox_tex.height = 3072
+
+    # ====================== ground texture ======================
+
+    ground_tex = spec.add_texture()
+    ground_tex.name = "groundplane_tex"
+    ground_tex.type = mujoco.mjtTexture.mjTEXTURE_2D
+    ground_tex.builtin = mujoco.mjtBuiltin.mjBUILTIN_CHECKER
+    ground_tex.rgb1 = [0.2, 0.3, 0.4]
+    ground_tex.rgb2 = [0.1, 0.2, 0.3]
+    ground_tex.width = 512
+    ground_tex.height = 512
+
+    # ====================== ground material ======================
+
+    ground_mat = spec.add_material()
+    ground_mat.name = "groundplane"
+
+    ground_mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = ground_tex.name
+
+    ground_mat.texrepeat = [5, 5]
+    ground_mat.reflectance = 0.2
+    ground_mat.shininess = 0.1
+    ground_mat.specular = 0.1
+
+    # ====================== light ======================
+
+    # 主顶光
+    spec.worldbody.add_light(
         name="top_light",
-        pos=[0.0, 0.0, 2.0],
+        pos=[0.0, 0.0, 4.0],
         dir=[0.0, 0.0, -1.0],
-        diffuse=[0.8, 0.8, 0.8],
-        ambient=[0.3, 0.3, 0.3],
+        diffuse=[2, 2, 2],
+        ambient=[0.8, 0.8, 0.8],
+        specular=[0.3, 0.3, 0.3],
     )
 
+    # ====================== floor ======================
+
+    floor = spec.worldbody.add_geom()
+    floor.name = "floor"
+    floor.type = mujoco.mjtGeom.mjGEOM_PLANE
+    floor.size = [0, 0, 0.05]
+    floor.material = ground_mat.name
+    # 2. 添加环境基础元素（相机、目标物体）
     # 动态计算相机位置与视野角度，确保能完整俯瞰抓取区域
     base_pos = np.array([0.0, 0.0, 0.0])
     target_pos = cfg_obj.pos
     mid_point = (base_pos + target_pos) / 2.0
-    horizontal_span = np.linalg.norm(target_pos - base_pos) * cfg_cam.base_to_target_dist_scale
+    horizontal_span = (
+        np.linalg.norm(target_pos - base_pos) * cfg_cam.base_to_target_dist_scale
+    )
     fovy = 2 * np.degrees(np.arctan2(horizontal_span / 2, cfg_cam.cam_height))
 
     worldbody.add_camera(
@@ -116,6 +169,7 @@ def build_custom_grasp_environment(
 
 # ====================== 轨迹数据处理 ======================
 
+
 def load_and_process_hand_trajectory(
     csv_path: str, hand_range_raw: List[float]
 ) -> np.ndarray:
@@ -124,7 +178,7 @@ def load_and_process_hand_trajectory(
     """
     try:
         raw_data = []
-        with open(csv_path, 'r') as f:
+        with open(csv_path, "r") as f:
             reader = csv.reader(f)
             next(reader)  # 跳过表头
             for row in reader:
@@ -159,7 +213,9 @@ def main():
 
     try:
         # ===== 1. 环境与触觉系统初始化 =====
-        model, data, reader = build_custom_grasp_environment(tactile_backend="simple_avg")
+        model, data, reader = build_custom_grasp_environment(
+            tactile_backend="simple_avg"
+        )
 
         hardware_interface = HandArmController(model)
         pos_controller = OSCController(
@@ -170,7 +226,9 @@ def main():
 
         # ===== 2. 轨迹数据准备 =====
         HAND_RANGE_RAW = [1600, 1600, 1400, 1800, 1200, 2000]
-        hand_target_sequence = load_and_process_hand_trajectory(CSV_PATH, HAND_RANGE_RAW)
+        hand_target_sequence = load_and_process_hand_trajectory(
+            CSV_PATH, HAND_RANGE_RAW
+        )
         # 设定机械臂初始目标姿态（角度转弧度）
         ARM_POSE_DEG = np.array([9.25, 82.21, -18.44, 133.08, 7.34, -125.17, 113.68])
         arm_target = np.radians(ARM_POSE_DEG)
@@ -184,13 +242,13 @@ def main():
                 pos_controller.set_joint_target(
                     data=data,
                     arm_target=arm_target,
-                    hand_target=hand_target_sequence[seq_idx]
+                    hand_target=hand_target_sequence[seq_idx],
                 )
 
-                pos_controller.hold(data) # 保持目标
+                pos_controller.hold(data)  # 保持目标
                 mujoco.mj_step(model, data)
                 # ----- 触觉图像读取与可视化 -----
-                tactile_images = reader.read_image(data) 
+                tactile_images = reader.read_image(data)
 
                 # 1. 按固定顺序生成每个指节的热力图帧
                 frames: dict = {}
@@ -201,21 +259,33 @@ def main():
 
                     img = tactile_images[name]
                     # 增强对比度并调整大小
-                    enhanced = np.clip(img.astype(np.float32) * 5.0, 0, 255).astype(np.uint8)
-                    resized = cv2.resize(enhanced, (SUB_W, SUB_H), interpolation=cv2.INTER_NEAREST)
+                    enhanced = np.clip(img.astype(np.float32) * 5.0, 0, 255).astype(
+                        np.uint8
+                    )
+                    resized = cv2.resize(
+                        enhanced, (SUB_W, SUB_H), interpolation=cv2.INTER_NEAREST
+                    )
                     # 应用 JET 颜色映射生成热力图
                     heatmap = cv2.applyColorMap(resized, cv2.COLORMAP_JET)
 
                     # 添加简写标题文字
-                    parts = name.split('_')
+                    parts = name.split("_")
                     if parts[0] == "thumb":
                         short_name = f"T_{parts[1][:3].capitalize()}"
                     else:
                         short_name = f"F{parts[1]}_{parts[2][:3].capitalize()}"
 
                     cv2.rectangle(heatmap, (0, 0), (SUB_W, 25), (0, 0, 0), -1)
-                    cv2.putText(heatmap, short_name, (5, 18),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+                    cv2.putText(
+                        heatmap,
+                        short_name,
+                        (5, 18),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.5,
+                        (255, 255, 255),
+                        1,
+                        cv2.LINE_AA,
+                    )
                     frames[name] = heatmap
 
                 # 2. 按"指尖/中节/指根 × 5根手指"的网格布局拼图
@@ -233,12 +303,12 @@ def main():
                         row_frames.append(frames[phalanx_name])
                     # 水平拼接同一层级的5根手指
                     grid_rows.append(np.hstack(row_frames))
-                
+
                 # 垂直拼接三层指节，形成最终热力图
                 combined_heatmap = np.vstack(grid_rows)
 
                 cv2.imshow("Tactile Heatmap (Top / Mid / Bot)", combined_heatmap)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
+                if cv2.waitKey(1) & 0xFF == ord("q"):
                     break
 
                 viewer.sync()
@@ -246,6 +316,7 @@ def main():
     except Exception as e:
         print(f"\n[致命错误] 仿真异常终止: {e}")
         import traceback
+
         traceback.print_exc()
     finally:
         cv2.destroyAllWindows()

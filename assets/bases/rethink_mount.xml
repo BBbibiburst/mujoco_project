@@ -1,6 +1,6 @@
 <mujoco model="rethink_mount">
     <asset>
-        <mesh name="pedestal" file="meshes/rethink_mount/pedestal.stl" />
+        <mesh name="pedestal" file="meshes/rethink_mount/pedestal.stl" scale="0.6 0.6 0.6" />
     </asset>
     <worldbody>
         <body name="base" pos="0 0 -0.922">
