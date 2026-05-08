@@ -5,18 +5,14 @@
 运行方式：
 # 从项目根目录执行
 python -m source.env.demo --task pick_place
-python -m source.env.demo --task stack
-python -m source.env.demo --task insert
-python -m source.env.demo --task reorient
-python -m source.env.demo --task push
 
 完整参数示例：
-python -m source.env.demo \\
-  --task stack \\
-  --mode random \\
-  --episodes 5 \\
-  --action-mode joint \\
-  --controller osc \\
+python -m source.env.demo \
+  --task stack \
+  --mode random \
+  --episodes 5 \
+  --action-mode joint \
+  --controller osc \
   --no-render
 
 功能：
@@ -39,72 +35,45 @@ from source.sensors.tactile_sensor import FINGER_PHALANX_ORDER
 
 # ====================== 任务注册表 ======================
 TASK_REGISTRY: dict = {
-    "pick_place": {
-        "module": "source.env.pick_place_env",
-        "env_class": "PickPlaceEnv",
-        "cfg_class": "PickPlaceConfig",
+    "pick_and_place": {
+        "module": "source.env.pick_and_place_env",
+        "env_class": "PickAndPlaceEnv",
+        "cfg_class": "PickAndPlaceConfig",
         "display_name": "Pick and Place",
-        "default_cfg_kwargs": {
-            "r_step_penalty": -0.005,
-            "r_place_bonus": 100.0,
-            "r_grasp_bonus": 10.0,
-        },
-        "info_display": {
-            "phase": "Phase",
-            "dist_obj_target": "Obj-Target Dist(m)",
-            "is_grasped": "Grasped",
-        },
-    },
-    "stack": {
-        "module": "source.env.stack_env",
-        "env_class": "StackEnv",
-        "cfg_class": "StackConfig",
-        "display_name": "Stack Blocks",
         "default_cfg_kwargs": {},
-        "info_display": {
-            "phase": "Phase",
-            "is_grasped": "Grasped",
-            "is_stacked": "Stacked",
-        },
+        "info_display": {}
     },
-    "insert": {
-        "module": "source.env.insert_env",
-        "env_class": "InsertEnv",
-        "cfg_class": "InsertConfig",
-        "display_name": "Insert Peg",
+    "block_stacking": {
+        "module": "source.env.block_stacking_env",
+        "env_class": "BlockStackingEnv",
+        "cfg_class": "BlockStackingConfig",
+        "display_name": "Block Stacking",
         "default_cfg_kwargs": {},
-        "info_display": {
-            "phase": "Phase",
-            "xy_dist_to_hole": "XY Dist to Hole(m)",
-            "is_grasped": "Grasped",
-            "is_inserted": "Inserted",
-        },
+        "info_display": {}
     },
-    "reorient": {
-        "module": "source.env.reorient_env",
-        "env_class": "ReorientEnv",
-        "cfg_class": "ReorientConfig",
-        "display_name": "Reorient Object",
+    "block_lifting": {
+        "module": "source.env.block_lifting_env",
+        "env_class": "BlockLiftingEnv",
+        "cfg_class": "BlockLiftingConfig",
+        "display_name": "Block Lifting",
         "default_cfg_kwargs": {},
-        "info_display": {
-            "phase": "Phase",
-            "orient_error_rad": "Orient Error(rad)",
-            "is_grasped": "Grasped",
-            "is_success": "Success",
-        },
+        "info_display": {}
     },
-    "push": {
-        "module": "source.env.push_env",
-        "env_class": "PushEnv",
-        "cfg_class": "PushConfig",
-        "display_name": "Push Object",
+    "nut_assembly": {
+        "module": "source.env.nut_assembly_env",
+        "env_class": "NutAssemblyEnv",
+        "cfg_class": "NutAssemblyConfig",
+        "display_name": "Nut Assembly",
         "default_cfg_kwargs": {},
-        "info_display": {
-            "phase": "Phase",
-            "dist_obj_target": "Obj-Target Dist(m)",
-            "tactile_max": "Tactile Max(Norm)",
-            "is_success": "Success",
-        },
+        "info_display": {}
+    },
+    "door_opening": {
+        "module": "source.env.door_opening_env",
+        "env_class": "DoorOpeningEnv",
+        "cfg_class": "DoorOpeningConfig",
+        "display_name": "Door Opening",
+        "default_cfg_kwargs": {},
+        "info_display": {}
     },
 }
 
@@ -289,7 +258,7 @@ def _get_ee_position(env: RobotArmEnvBase) -> Optional[np.ndarray]:
 # ====================== 演示模式1：随机策略 ======================
 
 def demo_random_policy(
-    task_name: str = "pick_place",
+    task_name: str = "pick_and_place",
     n_episodes: int = 3,
     render: bool = True,
     action_mode: str = "joint",
@@ -330,13 +299,11 @@ def demo_random_policy(
         with mujoco.viewer.launch_passive(env.model, env.data) as viewer:
             episode   = 0
             step      = 0
-            ep_reward = 0.0
 
             while viewer.is_running() and episode < n_episodes:
                 action = env.action_space.sample()
                 obs, reward, terminated, truncated, info = env.step(action)
-                ep_reward += reward
-                step      += 1
+                step += 1
 
                 # 轨迹可视化
                 if show_ee_traj and traj_vis is not None:
@@ -367,15 +334,14 @@ def demo_random_policy(
                 viewer.sync()
 
                 if terminated or truncated:
-                    status    = "✓ 成功" if terminated else "✗ 超时"
+                    status = "✓ 终止" if terminated else "✗ 超时"
                     info_line = _format_info_line(info, info_display)
                     print(
                         f"[Episode {episode+1}] {status} | "
-                        f"steps={step}, reward={ep_reward:.2f} | {info_line}"
+                        f"steps={step} | {info_line}"
                     )
-                    episode  += 1
-                    step      = 0
-                    ep_reward = 0.0
+                    episode += 1
+                    step = 0
                     if traj_vis is not None:
                         traj_vis.reset()
                     if episode < n_episodes:
@@ -386,36 +352,32 @@ def demo_random_policy(
 
     else:
         # 无渲染模式
-        total_rewards, total_steps, successes = [], [], 0
+        total_steps, successes = [], 0
         for ep in range(n_episodes):
             obs, info = env.reset(seed=ep)
-            ep_reward = 0.0
-            ep_steps  = 0
-            done      = False
+            ep_steps = 0
+            done = False
             while not done:
                 action = env.action_space.sample()
                 obs, reward, terminated, truncated, info = env.step(action)
-                ep_reward += reward
-                ep_steps  += 1
+                ep_steps += 1
                 done = terminated or truncated
-            total_rewards.append(ep_reward)
             total_steps.append(ep_steps)
             if terminated:
                 successes += 1
             info_line = _format_info_line(info, info_display)
             print(
-                f"  Ep {ep+1:3d}: reward={ep_reward:7.2f}, "
-                f"steps={ep_steps:4d}, {'SUCCESS' if terminated else 'timeout'} | {info_line}"
+                f"  Ep {ep+1:3d}: "
+                f"steps={ep_steps:4d}, {'TERMINATED' if terminated else 'timeout'} | {info_line}"
             )
-        print(f"\n  平均奖励: {np.mean(total_rewards):.2f} ± {np.std(total_rewards):.2f}")
-        print(f"  平均步数: {np.mean(total_steps):.1f}")
-        print(f"  成功率:   {successes / n_episodes * 100:.1f}%")
+        print(f"\n  平均步数: {np.mean(total_steps):.1f}")
+        print(f"  终止率:   {successes / n_episodes * 100:.1f}%")
         env.close()
 
 
 # ====================== 演示模式2：观测空间验证 ======================
 
-def demo_verify_observation_space(task_name: str = "pick_place"):
+def demo_verify_observation_space(task_name: str = "pick_and_place"):
     """验证所有观测分量的形状与数值范围."""
     reg = TASK_REGISTRY[task_name]
     print("=" * 65)
@@ -463,7 +425,7 @@ def demo_verify_observation_space(task_name: str = "pick_place"):
 # ====================== 演示模式3：基准测试 ======================
 
 def demo_benchmark(
-    task_name: str = "pick_place",
+    task_name: str = "pick_and_place",
     n_episodes: int = 100,
     action_mode: str = "joint",
     controller_type: str = "osc",
@@ -477,6 +439,7 @@ def demo_benchmark(
         controller_type=controller_type,
         max_episode_steps=200,
         action_scale=0.03,
+        action_scale_rot=0.06,
         control_freq=20.0,
         tactile_backend="simple_avg",
     )
@@ -484,7 +447,7 @@ def demo_benchmark(
 
     t0          = time.time()
     total_steps = 0
-    successes   = 0
+    terminations = 0   # <-- 修复：重命名，避免与成功率语义混淆
 
     for ep in range(n_episodes):
         env.reset(seed=ep)
@@ -494,7 +457,7 @@ def demo_benchmark(
             total_steps += 1
             done = terminated or truncated
             if terminated:
-                successes += 1
+                terminations += 1
 
     elapsed = time.time() - t0
     env.close()
@@ -502,7 +465,8 @@ def demo_benchmark(
     print(f"  总步数:  {total_steps} | 总时间: {elapsed:.1f}s")
     print(f"  步频:    {total_steps / elapsed:.0f} steps/s")
     print(f"  回合频:  {n_episodes / elapsed:.1f} eps/s")
-    print(f"  成功率:  {successes / n_episodes * 100:.1f}%")
+    print(f"  终止率:  {terminations / n_episodes * 100:.1f}%")   # <-- 修复：改为终止率
+
 
 # ====================== 入口 ======================
 
@@ -510,13 +474,13 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="通用任务环境演示（支持5个灵巧手任务）",
+        description="通用任务环境演示",
         formatter_class=argparse.RawTextHelpFormatter,
     )
     parser.add_argument(
         "--task",
         choices=list(TASK_REGISTRY.keys()),
-        default="pick_place",
+        default="pick_and_place",
         help=(
             "要演示的任务名称：\n"
             + "\n".join(f"  {k}: {v['display_name']}" for k, v in TASK_REGISTRY.items())

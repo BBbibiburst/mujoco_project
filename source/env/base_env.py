@@ -6,23 +6,22 @@
 
 继承后需要实现的方法：
     - _build_scene(spec)       : 向 MjSpec 添加任务所需的物体、相机、传感器
-    - _get_obs(data)           : 构建并返回观测向量
-    - _compute_reward(data)    : 计算当前步奖励
-    - _is_terminated(data)     : 判断是否达到成功终止条件
-    - _is_truncated(data)      : 判断是否超时或触发安全截断
-    - _reset_scene(data)       : 重置任务特定状态（物体位置等）
+    - _get_obs()               : 构建并返回观测向量
+    - _compute_reward()        : 计算当前步奖励
+    - _is_terminated()         : 判断是否达到成功终止条件
+    - _reset_scene()           : 重置任务特定状态（物体位置等）
 
 可选重写：
-    - _get_info(data)          : 返回额外调试信息字典
+    - _is_truncated()          : 判断是否超时或触发安全截断
+    - _get_info()              : 返回额外调试信息字典
     - observation_space        : 属性，返回 gym.Space（默认 Box）
     - action_space             : 属性，返回 gym.Space（默认 Box）
 """
 
 from pathlib import Path
-import time
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Tuple, List, Union
+from dataclasses import dataclass
+from typing import Any, Dict, Optional, Tuple, Union
 import mujoco
 import numpy as np
 import gymnasium as gym
@@ -80,7 +79,7 @@ class RobotConfig:
     # 初始构型（弧度）
     init_arm_qpos: Optional[np.ndarray] = None   # None 时使用模型 qpos0 默认值
     init_hand_qpos: Optional[np.ndarray] = None  # None 时使用模型 qpos0 默认值
-    
+
     # 桌子配置
     table_size: Tuple[float, float, float] = (0.8, 1.2, 0.05)
     table_pos: Tuple[float, float, float] = (0.5, 0.0, 0.55)
@@ -126,7 +125,7 @@ class RobotArmEnvBase(gym.Env, ABC):
         - 动作空间处理（末端位移/姿态或关节增量）
         - 统计信息维护
 
-    类负责：
+    子类负责：
         - 场景搭建（物体、相机）
         - 观测空间定义
         - 奖励函数
@@ -150,6 +149,10 @@ class RobotArmEnvBase(gym.Env, ABC):
         self.reader: Optional[TactileReader] = None
         self.hw: Optional[HandArmController] = None
         self.controller: Optional[Union[OSCController, IKController]] = None
+
+        # 缓存 spaces，避免每次访问 property 都新建对象
+        self._observation_space: Optional[spaces.Box] = None
+        self._action_space: Optional[spaces.Box] = None
 
         self._initialized = False
 
@@ -235,48 +238,79 @@ class RobotArmEnvBase(gym.Env, ABC):
         }
 
     @property
-    def observation_space(self):
-        """观测空间（默认：7+6+6=19维 Box，子类可覆盖）."""
-        obs_dim = self.ARM_DOF + self.HAND_DOF + 6  # qpos(7) + hand_qpos(6) + ee_pose(6)
-        return spaces.Box(low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32)
+    def observation_space(self) -> spaces.Box:
+        """
+        观测空间（默认：7+6+6=19维 Box，子类可覆盖）.
+
+        结果在首次访问时缓存，避免重复创建。
+        """
+        # FIX: 缓存 Space 对象，避免每次访问 property 都重新分配
+        if self._observation_space is None:
+            obs_dim = self.ARM_DOF + self.HAND_DOF + 6  # qpos(7) + hand_qpos(6) + ee_pose(6)
+            self._observation_space = spaces.Box(
+                low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32
+            )
+        return self._observation_space
+
+    @observation_space.setter
+    def observation_space(self, value: spaces.Space) -> None:
+        """允许子类或 Gymnasium 内部直接赋值（gym.Env 约定）."""
+        self._observation_space = value
 
     @property
-    def action_space(self):
+    def action_space(self) -> spaces.Box:
         """
         动作空间.
 
         根据 action_mode 返回对应维度：
             - "joint" : 7Dof 机械臂 + 手部 6Dof = 13维
-            - "ee" : 末端位姿增量（位置 + 姿态）+ 手部 6Dof = 12维
-         维度顺序统一为 [arm, hand]，其中 arm 根据 mode式解析为关节增量或末端位姿增量，hand 始终为关节增量。动作值归一化到 [-1, 1]，由 _apply_action 解析为实际控制指令。
-            "joint" 模式下 action[:7] 是臂关节增量，action[7:] 是手部关节增量；
-            "ee" 模式下 action[:6] 是末端位姿增量（位置 + 姿态），action[6:] 是手部关节增量。
-         这种设计使得控制器类型（osc/ik）与动作解析方式解耦，便于在不同任务中灵活选择控制方式和动作表示。
+            - "ee"    : 末端位姿增量（位置+姿态）+ 手部 6Dof = 12维
+
+        维度顺序统一为 [arm, hand]，其中 arm 根据 mode 解析为关节增量或末端
+        位姿增量，hand 始终为关节增量。动作值归一化到 [-1, 1]，由 _apply_action
+        解析为实际控制指令：
+            "joint" 模式：action[:7] 是臂关节增量，action[7:] 是手部关节增量；
+            "ee"    模式：action[:6] 是末端位姿增量（位置+姿态），action[6:] 是手部关节增量。
+
+        这种设计使控制器类型（osc/ik）与动作解析方式解耦，便于在不同任务中
+        灵活选择控制方式和动作表示。
+
+        结果在首次访问时缓存，避免重复创建。
         """
-        mode = self.cfg.action_mode
-        if mode == "joint":
-            action_dim = self.ARM_DOF + self.HAND_DOF  # 机械臂 7Dof + 手部 6Dof = 13维
-        elif mode == "ee":
-            action_dim = 6 + self.HAND_DOF  # 末端位姿增量（位置+姿态）+ 手部 6Dof = 12维
-        else:
-            raise ValueError(
-                f"Unknown action_mode: '{mode}'. "
-                f"Expected 'joint' or 'ee'."
+        # FIX: 缓存 Space 对象，避免每次访问 property 都重新分配
+        if self._action_space is None:
+            mode = self.cfg.action_mode
+            if mode == "joint":
+                action_dim = self.ARM_DOF + self.HAND_DOF  # 7 + 6 = 13
+            elif mode == "ee":
+                action_dim = 6 + self.HAND_DOF             # 6 + 6 = 12
+            else:
+                raise ValueError(
+                    f"Unknown action_mode: '{mode}'. "
+                    f"Expected 'joint' or 'ee'."
+                )
+            self._action_space = spaces.Box(
+                low=-1.0, high=1.0, shape=(action_dim,), dtype=np.float32
             )
-        return spaces.Box(low=-1.0, high=1.0, shape=(action_dim,), dtype=np.float32)
+        return self._action_space
+
+    @action_space.setter
+    def action_space(self, value: spaces.Space) -> None:
+        """允许子类或 Gymnasium 内部直接赋值（gym.Env 约定）."""
+        self._action_space = value
 
     # ====================== 公开接口 ======================
 
     def reset(self, seed: Optional[int] = None, options: Optional[dict] = None):
         """
         重置环境，返回初始观测.
-        
+
         Args:
             seed: 随机数种子（可选）。
             options: 额外选项（Gymnasium 标准接口，可选）。
         """
         if seed is not None:
-            np.random.seed(seed)
+            self.np_random, _ = gym.utils.seeding.np_random(seed)
 
         # 首次调用时初始化仿真
         if not self._initialized:
@@ -316,7 +350,7 @@ class RobotArmEnvBase(gym.Env, ABC):
         obs = self._get_obs()
         info = self._get_info()
         return obs, info
-    
+
     def _rebuild_controller(self) -> None:
         """重新初始化控制器（用于 reset 时彻底重置状态）."""
         ctrl_type = self.cfg.controller_type
@@ -386,6 +420,8 @@ class RobotArmEnvBase(gym.Env, ABC):
             raise RuntimeError("请先调用 reset() 初始化环境。")
         with mujoco.viewer.launch_passive(self.model, self.data) as v:
             while v.is_running():
+                # FIX: 保持控制目标不变再步进，防止机器人在重力下自由坠落
+                self._keep_target()
                 mujoco.mj_step(self.model, self.data)
                 v.sync()
 
@@ -394,8 +430,13 @@ class RobotArmEnvBase(gym.Env, ABC):
         self._initialized = False
         self.model = None
         self.data = None
+        # FIX: 同步清理控制器与传感器，避免 C 扩展对象泄漏
+        self.reader = None
+        self.hw = None
+        self.controller = None
 
     # ====================== 便捷查询接口 ======================
+
     def get_arm_qpos(self) -> np.ndarray:
         """返回机械臂关节角度 (7,)."""
         return self.data.qpos[self.controller.arm_qpos_ids].copy()
@@ -418,14 +459,13 @@ class RobotArmEnvBase(gym.Env, ABC):
         return self.reader.read_image(self.data)
 
     # ====================== 私有实现 ======================
+
     def _build_base_scene(self, spec: mujoco.MjSpec) -> None:
         """
         构建 empty_arena 风格的基础场景（地板、墙壁、灯光、相机）。
         """
-        import os
-        
         texture_root = PROJECT_ROOT / "assets" / "textures"
-        
+
         # ====================== 1. 天空盒 ======================
         sky_tex = spec.add_texture()
         sky_tex.name = "skybox"
@@ -435,7 +475,7 @@ class RobotArmEnvBase(gym.Env, ABC):
         sky_tex.height = 256
         sky_tex.rgb1 = [0.9, 0.9, 1.0]
         sky_tex.rgb2 = [0.2, 0.3, 0.4]
-        
+
         # ====================== 2. 地板 ======================
         floor_tex_path = texture_root / "light-gray-floor-tile.png"
         if floor_tex_path.exists():
@@ -443,7 +483,7 @@ class RobotArmEnvBase(gym.Env, ABC):
             floor_tex.name = "texplane"
             floor_tex.type = mujoco.mjtTexture.mjTEXTURE_2D
             floor_tex.file = str(floor_tex_path)
-            
+
             floor_mat = spec.add_material()
             floor_mat.name = "floorplane"
             floor_mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = floor_tex.name
@@ -455,7 +495,7 @@ class RobotArmEnvBase(gym.Env, ABC):
             floor_material = floor_mat.name
         else:
             floor_material = None
-        
+
         floor_geom = spec.worldbody.add_geom(
             name="floor",
             type=mujoco.mjtGeom.mjGEOM_PLANE,
@@ -466,7 +506,7 @@ class RobotArmEnvBase(gym.Env, ABC):
         )
         if floor_material:
             floor_geom.material = floor_material
-        
+
         # ====================== 3. 墙壁（仅视觉）======================
         wall_tex_path = texture_root / "light-gray-plaster.png"
         if wall_tex_path.exists():
@@ -474,7 +514,7 @@ class RobotArmEnvBase(gym.Env, ABC):
             wall_tex.name = "tex-light-gray-plaster"
             wall_tex.type = mujoco.mjtTexture.mjTEXTURE_2D
             wall_tex.file = str(wall_tex_path)
-            
+
             wall_mat = spec.add_material()
             wall_mat.name = "walls_mat"
             wall_mat.textures[mujoco.mjtTextureRole.mjTEXROLE_RGB] = wall_tex.name
@@ -486,7 +526,7 @@ class RobotArmEnvBase(gym.Env, ABC):
             wall_material = wall_mat.name
         else:
             wall_material = None
-        
+
         walls = [
             ("wall_leftcorner_visual",  [-1.25,  2.25, 1.5], [0.6532815,  0.6532815,  0.2705981,  0.2705981],  [1.06, 1.5, 0.01]),
             ("wall_rightcorner_visual", [-1.25, -2.25, 1.5], [0.6532815,  0.6532815, -0.2705981, -0.2705981], [1.06, 1.5, 0.01]),
@@ -495,7 +535,7 @@ class RobotArmEnvBase(gym.Env, ABC):
             ("wall_rear_visual",        [-2.0,   0.0,  1.5], [0.5,        0.5,        0.5,        0.5],       [1.5,  1.5, 0.01]),
             ("wall_front_visual",       [ 3.0,   0.0,  1.5], [0.5,        0.5,       -0.5,       -0.5],       [3.0,  1.5, 0.01]),
         ]
-        
+
         for name, pos, quat, size in walls:
             wall_geom = spec.worldbody.add_geom(
                 name=name,
@@ -509,7 +549,7 @@ class RobotArmEnvBase(gym.Env, ABC):
             )
             if wall_material:
                 wall_geom.material = wall_material
-        
+
         # ====================== 4. 灯光 ======================
         spec.worldbody.add_light(
             name="main_light",
@@ -519,7 +559,7 @@ class RobotArmEnvBase(gym.Env, ABC):
             type=1,  # 定向光
             castshadow=False,
         )
-        
+
         # ====================== 5. 桌子（如果启用）======================
         if self.cfg.has_table:
             self._add_table(
@@ -531,7 +571,8 @@ class RobotArmEnvBase(gym.Env, ABC):
                 table_leg_texture=self.cfg.table_leg_texture,
                 table_leg_rgba=self.cfg.table_leg_rgba,
             )
-            self._table_height = self.cfg.table_pos[2] + self.cfg.table_size[2] / 2.0
+            self._table_height = self.cfg.table_pos[2]
+
     def _add_table(
         self,
         spec: mujoco.MjSpec,
@@ -586,7 +627,9 @@ class RobotArmEnvBase(gym.Env, ABC):
 
             tex = spec.add_texture()
             tex.name = "table_surface_tex"
-            tex.type = mujoco.mjtTexture.mjTEXTURE_CUBE
+            # FIX: 桌面是普通 PNG，应使用 mjTEXTURE_2D 而非 mjTEXTURE_CUBE，
+            #      否则 MuJoCo 期望 CUBE 格式，加载普通图片会产生警告或渲染异常。
+            tex.type = mujoco.mjtTexture.mjTEXTURE_2D
             tex.file = str(table_surface_texture)
 
             mat = spec.add_material()
@@ -683,7 +726,7 @@ class RobotArmEnvBase(gym.Env, ABC):
                     leg.material = leg_material_name
                 else:
                     leg.rgba = list(table_leg_rgba)
-                
+
     def _init_simulation(self) -> None:
         """初始化 MuJoCo 仿真（加载模型、初始化控制器）."""
 
@@ -717,31 +760,36 @@ class RobotArmEnvBase(gym.Env, ABC):
         """
         将机器人重置到初始构型.
         """
-        arm_ids  = self.controller.arm_qpos_ids
-        hand_ids = self.controller.hand_qpos_ids
+        arm_qpos_ids  = self.controller.arm_qpos_ids
+        hand_qpos_ids = self.controller.hand_qpos_ids
 
         # --- 机械臂 ---
         if self.cfg.init_arm_qpos is not None:
-            self.data.qpos[arm_ids] = self.cfg.init_arm_qpos
+            self.data.qpos[arm_qpos_ids] = self.cfg.init_arm_qpos
         else:
             # 回退到模型默认构型（XML 中 <key> 或 <default> 定义的 qpos0）
-            self.data.qpos[arm_ids] = self.model.qpos0[arm_ids]
+            self.data.qpos[arm_qpos_ids] = self.model.qpos0[arm_qpos_ids]
 
         # --- 灵巧手 ---
         if self.cfg.init_hand_qpos is not None:
-            self.data.qpos[hand_ids] = self.cfg.init_hand_qpos
+            self.data.qpos[hand_qpos_ids] = self.cfg.init_hand_qpos
         else:
-            self.data.qpos[hand_ids] = self.model.qpos0[hand_ids]
+            self.data.qpos[hand_qpos_ids] = self.model.qpos0[hand_qpos_ids]
 
         # --- 速度清零（防止残留速度导致初始抖动）---
-        self.data.qvel[arm_ids]  = 0.0
-        self.data.qvel[hand_ids] = 0.0
+        # FIX: qpos 与 qvel 的维度在有自由关节时不同（自由关节 qpos=7, qvel=6），
+        #      必须使用控制器暴露的专用 qvel ids，而非直接复用 qpos ids，
+        #      否则在含自由关节的模型中会写入错误位置，导致速度异常或越界。
+        arm_qvel_ids  = self.controller.arm_qvel_ids
+        hand_qvel_ids = self.controller.hand_qvel_ids
+        self.data.qvel[arm_qvel_ids]  = 0.0
+        self.data.qvel[hand_qvel_ids] = 0.0
 
     def _apply_action(self, action: np.ndarray) -> None:
         """
         将归一化动作映射到控制器指令.
 
-        根据 action_mode 解析动作，统一调用控制器的set_joint_target或其他接口，控制器类型（osc/ik）与动作解析方式解耦。
+        根据 action_mode 解析动作，统一调用控制器接口。
         控制器类型（osc/ik）与动作解析方式解耦。
         """
         action = np.clip(action, -1.0, 1.0)
@@ -762,7 +810,7 @@ class RobotArmEnvBase(gym.Env, ABC):
         关节空间增量动作解析.
 
         action[:7]   → 臂关节角度增量（×action_scale）
-        action[7:]   → 手部关节增量（×action_scale）
+        action[7:]   → 手部关节增量（×action_scale_hand）
         """
         current_arm = self.get_arm_qpos()
         current_hand = self.get_hand_qpos()
@@ -772,19 +820,19 @@ class RobotArmEnvBase(gym.Env, ABC):
         scale_hand = self.cfg.action_scale_hand if self.cfg.action_scale_hand is not None else self.cfg.action_scale
         hand_delta = action[self.ARM_DOF:] * scale_hand
 
-        # 统一调用 
         self.controller.set_joint_target(
             self.data,
             arm_target=current_arm + arm_delta,
             hand_target=current_hand + hand_delta,
         )
-    
+
     def _apply_ee_action(self, action: np.ndarray) -> None:
         """
-        末端空间增量动作解析
+        末端空间增量动作解析.
 
-        action[:6]   -> 位置 + 姿态增量
-        action[6:]   -> 手部关节增量
+        action[:3]   → 位置增量（×action_scale）
+        action[3:6]  → 姿态增量，轴角表示（×action_scale_rot）
+        action[6:]   → 手部关节增量（×action_scale_hand）
         """
         current_pos, current_quat = self.get_ee_pose()
         current_hand = self.get_hand_qpos()
@@ -838,13 +886,14 @@ class RobotArmEnvBase(gym.Env, ABC):
             ee_quat_target=self._target_quat,
             hand_target=current_hand + hand_delta,
         )
-        
+
     def _keep_target(self) -> None:
         """保持当前目标不变，持续推进仿真.
+
         重要！否则动作只在第一步生效，后续仿真漂移。
         """
         self.controller.hold(self.data)
-    
+
     def get_ee_pose(self) -> Tuple[np.ndarray, np.ndarray]:
         """返回末端执行器当前位姿（位置 + 四元数）."""
         return self.controller.get_ee_pose(self.data)
