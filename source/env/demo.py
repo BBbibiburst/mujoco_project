@@ -199,32 +199,47 @@ class EETrajectoryVisualizer:
         # === 新增：绘制 EE 目标朝向坐标轴 ===
         # 将四元数转换为 3x3 旋转矩阵
         target_mat = np.zeros(9)
-        # 假设你传入的 target_quat 存储在类中（稍后修改 update 方法）
         if hasattr(self, 'target_quat') and self.target_quat is not None:
+            # 1. 准备旋转矩阵 (9元素数组)
+            target_mat = np.zeros(9, dtype=np.float64)
             mujoco.mju_quat2Mat(target_mat, self.target_quat)
+            rot_matrix = target_mat.reshape(3, 3)
             
-            # 绘制三色轴：R=X, G=Y, B=Z
-            axis_len = 0.1  # 箭头长度 10cm
-            axis_width = 0.002 # 箭头粗细
+            axis_len = 0.1
+            # 注意颜色需要是 float32
+            colors = [
+                np.array([1, 0, 0, 1], dtype=np.float32), # X: 红
+                np.array([0, 1, 0, 1], dtype=np.float32), # Y: 绿
+                np.array([0, 0, 1, 1], dtype=np.float32)  # Z: 蓝
+            ]
             
-            for i in range(3): # 0:X, 1:Y, 2:Z
-                color = np.array([0.0, 0.0, 0.0, 1.0])
-                color[i] = 1.0 # 对应轴设为满色
+            for i in range(3):
+                axis_dir = rot_matrix[:, i]
+                from_pos = self.target_pos.astype(np.float64)
+                to_pos = (self.target_pos + axis_dir * axis_len).astype(np.float64)
                 
                 geom_id = viewer.user_scn.ngeom
-                if geom_id < max_geoms:
-                    # 使用 mjGEOM_ARROW 绘制箭头
+                if geom_id < 1000:
+                    geom = viewer.user_scn.geoms[geom_id]
+                    
+                    # 修复后的调用：必须传入所有 6 个参数，并确保类型正确
                     mujoco.mjv_initGeom(
-                        viewer.user_scn.geoms[geom_id],
-                        type=mujoco.mjtGeom.mjGEOM_ARROW,
-                        size=[axis_width, axis_width, axis_len],
-                        pos=self.target_pos,
-                        mat=target_mat, # 箭头的方向由矩阵决定
-                        rgba=color
+                        geom,
+                        type=int(mujoco.mjtGeom.mjGEOM_CYLINDER),
+                        size=np.array([0.002, 0.002, axis_len], dtype=np.float64), # size 对于 cylinder 有特定含义
+                        pos=from_pos,
+                        mat=np.eye(3).flatten().astype(np.float64), # 初始矩阵，会被 makeConnector 覆盖
+                        rgba=colors[i]
                     )
-                    # 注意：mjGEOM_ARROW 默认沿 Z 轴方向。为了画 X/Y 轴，
-                    # 我们需要对矩阵做局部变换，或者简单地使用 mjv_makeConnector 
-                    # 这里为了代码简洁，直接在 target_mat 基础上偏移方向
+                    
+                    # 使用 mjv_makeConnector 自动计算位置和方向
+                    mujoco.mjv_connector(
+                        geom,
+                        int(mujoco.mjtGeom.mjGEOM_CYLINDER),
+                        0.002,         # 宽度/半径
+                        from_pos,      # 起点
+                        to_pos         # 终点
+                    )
                     viewer.user_scn.ngeom += 1
 
     def reset(self):
@@ -622,7 +637,7 @@ class KeyboardControlPanel:
         self._pos_step = 0.01  # ee 位置步长 (m)
         self._rot_step = 0.05  # ee 旋转步长 (rad)
         self._arm_step = 0.05  # joint 臂步长 (rad)
-        self._hand_step = 0.001  # 手部推杆步长 (m)
+        self._hand_step = 0.005  # 手部推杆步长 (m)
 
         self._root = None
         self._ready = threading.Event()
@@ -1212,9 +1227,9 @@ def demo_keyboard_control(
                             # 轴角 → 四元数增量
                             dq = np.zeros(4)
                             mujoco.mju_axisAngle2Quat(dq, axis, angle)
-                            # 世界系左乘：target_quat = dq ⊗ current_target_quat
+                            # 世界系右乘
                             new_quat = np.zeros(4)
-                            mujoco.mju_mulQuat(new_quat, dq, ee_target_quat)
+                            mujoco.mju_mulQuat(new_quat, ee_target_quat, dq)
                             # 归一化防止数值漂移
                             norm = np.linalg.norm(new_quat)
                             if norm > 1e-8:

@@ -47,7 +47,7 @@ class CircleTrajectoryConfig:
     center: np.ndarray = field(default_factory=lambda: np.array([0.5, 0.0, 0.4]))
     radius: float = 0.15
     speed: float = 1.5
-    z_offset: float = 0.0  # 如果需要 Z 轴变化，可在此配置
+    z_offset: float = 0.5  # 如果需要 Z 轴变化，可在此配置
 
 
 @dataclass

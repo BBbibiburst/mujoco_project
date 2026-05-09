@@ -159,24 +159,24 @@ class PhysicsConfig:
 # ====================== 物理参数配置 ======================
 DEFAULT_GRASP_PHYSICS = PhysicsConfig(
     arm_defaults=JointPhysicsConfig(
-        damping=100.0,
-        frictionloss=0.1,
-        armature=0.01,
+        damping=60.0,
+        frictionloss=0.5,
+        armature=0.05,
     ),
     hand_defaults=JointPhysicsConfig(
-        damping=1,
-        frictionloss=0.01,
-        armature=0.1,
+        damping=2.0,
+        frictionloss=0.1,
+        armature=0.2,
     ),
     per_joint_overrides={
-        "thumb_rotate_act_push_j": JointPhysicsConfig(damping=10.0),
-        "joint1": JointPhysicsConfig(damping=1000.0),
-        "joint2": JointPhysicsConfig(damping=500.0),
-        "joint3": JointPhysicsConfig(damping=100.0),
-        "joint4": JointPhysicsConfig(damping=100.0),
-        "joint5": JointPhysicsConfig(damping=100.0),
-        "joint6": JointPhysicsConfig(damping=50.0),
-        "joint7": JointPhysicsConfig(damping=50.0),
+        "thumb_rotate_act_push_j": JointPhysicsConfig(damping=20.0),
+        "joint1": JointPhysicsConfig(damping=60.0),
+        "joint2": JointPhysicsConfig(damping=50.0),
+        "joint3": JointPhysicsConfig(damping=40.0),
+        "joint4": JointPhysicsConfig(damping=40.0),
+        "joint5": JointPhysicsConfig(damping=35.0),
+        "joint6": JointPhysicsConfig(damping=40.0),
+        "joint7": JointPhysicsConfig(damping=40.0),
     },
 )
 
