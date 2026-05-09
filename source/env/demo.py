@@ -128,14 +128,20 @@ class EETrajectoryVisualizer:
         self.max_history = max_history
         self.actual_pos: Optional[np.ndarray] = None
         self.target_pos: Optional[np.ndarray] = None
+        self.target_quat: Optional[np.ndarray] = None
         self.history: list = []
 
-    def update(self, actual_pos: np.ndarray, target_pos: Optional[np.ndarray] = None, target_quat: Optional[np.ndarray] = None):
+    def update(
+        self,
+        actual_pos: np.ndarray,
+        target_pos: Optional[np.ndarray] = None,
+        target_quat: Optional[np.ndarray] = None,
+    ):
         self.actual_pos = actual_pos.copy()
         if target_pos is not None:
             self.target_pos = target_pos.copy()
         if target_quat is not None:
-            self.target_quat = target_quat.copy() # 保存目标四元数
+            self.target_quat = target_quat.copy()
         if self.max_history > 0:
             self.history.append(actual_pos.copy())
             if len(self.history) > self.max_history:
@@ -196,56 +202,51 @@ class EETrajectoryVisualizer:
                 rgba=self.style.target_rgba,
             )
             viewer.user_scn.ngeom += 1
-        # === 新增：绘制 EE 目标朝向坐标轴 ===
-        # 将四元数转换为 3x3 旋转矩阵
-        target_mat = np.zeros(9)
-        if hasattr(self, 'target_quat') and self.target_quat is not None:
-            # 1. 准备旋转矩阵 (9元素数组)
+
+        # 4. 目标朝向坐标轴（局部坐标系三轴）
+        if self.target_quat is not None and self.target_pos is not None:
             target_mat = np.zeros(9, dtype=np.float64)
             mujoco.mju_quat2Mat(target_mat, self.target_quat)
             rot_matrix = target_mat.reshape(3, 3)
-            
+
             axis_len = 0.1
-            # 注意颜色需要是 float32
             colors = [
-                np.array([1, 0, 0, 1], dtype=np.float32), # X: 红
-                np.array([0, 1, 0, 1], dtype=np.float32), # Y: 绿
-                np.array([0, 0, 1, 1], dtype=np.float32)  # Z: 蓝
+                np.array([1, 0, 0, 1], dtype=np.float32),  # X: 红
+                np.array([0, 1, 0, 1], dtype=np.float32),  # Y: 绿
+                np.array([0, 0, 1, 1], dtype=np.float32),  # Z: 蓝
             ]
-            
+
             for i in range(3):
+                if viewer.user_scn.ngeom >= max_geoms - safety_margin:
+                    break
                 axis_dir = rot_matrix[:, i]
                 from_pos = self.target_pos.astype(np.float64)
                 to_pos = (self.target_pos + axis_dir * axis_len).astype(np.float64)
-                
+
                 geom_id = viewer.user_scn.ngeom
-                if geom_id < 1000:
-                    geom = viewer.user_scn.geoms[geom_id]
-                    
-                    # 修复后的调用：必须传入所有 6 个参数，并确保类型正确
-                    mujoco.mjv_initGeom(
-                        geom,
-                        type=int(mujoco.mjtGeom.mjGEOM_CYLINDER),
-                        size=np.array([0.002, 0.002, axis_len], dtype=np.float64), # size 对于 cylinder 有特定含义
-                        pos=from_pos,
-                        mat=np.eye(3).flatten().astype(np.float64), # 初始矩阵，会被 makeConnector 覆盖
-                        rgba=colors[i]
-                    )
-                    
-                    # 使用 mjv_makeConnector 自动计算位置和方向
-                    mujoco.mjv_connector(
-                        geom,
-                        int(mujoco.mjtGeom.mjGEOM_CYLINDER),
-                        0.002,         # 宽度/半径
-                        from_pos,      # 起点
-                        to_pos         # 终点
-                    )
-                    viewer.user_scn.ngeom += 1
+                geom = viewer.user_scn.geoms[geom_id]
+                mujoco.mjv_initGeom(
+                    geom,
+                    type=int(mujoco.mjtGeom.mjGEOM_CYLINDER),
+                    size=np.array([0.002, 0.002, axis_len], dtype=np.float64),
+                    pos=from_pos,
+                    mat=np.eye(3).flatten().astype(np.float64),
+                    rgba=colors[i],
+                )
+                mujoco.mjv_connector(
+                    geom,
+                    int(mujoco.mjtGeom.mjGEOM_CYLINDER),
+                    0.002,
+                    from_pos,
+                    to_pos,
+                )
+                viewer.user_scn.ngeom += 1
 
     def reset(self):
         self.history.clear()
         self.actual_pos = None
         self.target_pos = None
+        self.target_quat = None
 
 
 # ====================== 通用可视化工具 ======================
@@ -303,20 +304,6 @@ def render_tactile_heatmap(obs: dict, sub_h: int = 160, sub_w: int = 200) -> np.
     if not grid_rows:
         return np.zeros((sub_h * 3, sub_w * 5, 3), dtype=np.uint8)
     return np.vstack(grid_rows)
-
-
-def _format_info_line(info: dict, display_keys: dict) -> str:
-    """将 info 字典的指定字段格式化为单行字符串."""
-    parts = []
-    for k, label in display_keys.items():
-        v = info.get(k, "N/A")
-        if isinstance(v, float):
-            parts.append(f"{label}={v:.3f}")
-        elif isinstance(v, bool):
-            parts.append(f"{label}={'✓' if v else '✗'}")
-        else:
-            parts.append(f"{label}={v}")
-    return " | ".join(parts)
 
 
 def _get_ee_position(env: RobotArmEnvBase) -> Optional[np.ndarray]:
@@ -557,6 +544,7 @@ _HAND_JOINT_NAMES = [
     "F4 (Actuator 4)",
     "F5 (Actuator 5)",
 ]
+
 # ee 模式下末端自由度名称（索引 0-5）
 _EE_DOF_NAMES = [
     "EE X  (pos, m)",
@@ -566,6 +554,9 @@ _EE_DOF_NAMES = [
     "EE Ry (rot, rad)",
     "EE Rz (rot, rad)",
 ]
+
+# ee 旋转轴显示名（面板右侧标签用）
+_EE_ROT_NAMES = ["Roll", "Pitch", "Yaw"]
 
 # 按键绑定（键盘模式）
 _KEY_INCREASE = "Up"
@@ -598,6 +589,12 @@ class KeyboardControlPanel:
 
     joint 模式：显示 7 个臂关节目标值 + 6 个手部目标值（共 13 列）
     ee    模式：显示 EE 位置(xyz) + 欧拉角(rpy) + 6 个手部目标值（共 12 列）
+
+    修复项：
+    - [FIX-3] 步长参数通过构造函数传入，不再依赖外部直接赋值私有属性
+    - [FIX-4] joint 模式按键提示 Label 现在正确调用 .pack()
+    - [FIX-8] ee 旋转轴名称改用 _EE_ROT_NAMES 列表，不再用字符串 split
+    - [FIX-9] 命令队列消费改为纯 try/except，移除冗余的 empty() 检查
     """
 
     HISTORY_LEN = 200
@@ -610,20 +607,22 @@ class KeyboardControlPanel:
         arm_dof: int = 7,
         hand_dof: int = 6,
         action_mode: str = "joint",  # "joint" | "ee"
+        # [FIX-3] 步长通过构造函数注入，不再暴露私有属性给外部赋值
+        arm_step: float = 0.05,
+        hand_step: float = 0.001,
+        pos_step: float = 0.01,
+        rot_step: float = 0.05,
     ):
         self.cmd_queue = cmd_queue
         self.arm_dof = arm_dof
         self.hand_dof = hand_dof
         self.action_mode = action_mode
 
-        # joint 模式：总自由度 = arm_dof + hand_dof
-        # ee    模式：总自由度 = 6 (ee) + hand_dof
         self.ee_dof = 6
         self.ctrl_dof = (arm_dof if action_mode == "joint" else self.ee_dof) + hand_dof
 
         self._lock = threading.Lock()
         self._sel_idx = 0
-        # _display_vals: joint模式=13维目标, ee模式=[pos(3)+rpy_deg(3)+hand(6)]
         self._display_vals = np.zeros(self.ctrl_dof)
         self._reward = 0.0
         self._ep_reward = 0.0
@@ -633,11 +632,11 @@ class KeyboardControlPanel:
         self._reward_hist: list = []
         self._info_extra = {}
 
-        # 步长（主线程也可直接读写）
-        self._pos_step = 0.01  # ee 位置步长 (m)
-        self._rot_step = 0.05  # ee 旋转步长 (rad)
-        self._arm_step = 0.05  # joint 臂步长 (rad)
-        self._hand_step = 0.005  # 手部推杆步长 (m)
+        # [FIX-3] 步长由外部传入，初始值统一在此处设置
+        self._pos_step = pos_step
+        self._rot_step = rot_step
+        self._arm_step = arm_step
+        self._hand_step = hand_step
 
         self._root = None
         self._ready = threading.Event()
@@ -647,7 +646,7 @@ class KeyboardControlPanel:
     def update_state(
         self,
         sel_idx: int,
-        display_vals: np.ndarray,  # joint: 13维目标; ee: pos(3)+rpy_deg(3)+hand(6)
+        display_vals: np.ndarray,
         reward: float,
         ep_reward: float,
         step: int,
@@ -682,7 +681,7 @@ class KeyboardControlPanel:
         root = tk.Tk()
         self._root = root
         mode_label = "Joint Space" if self.action_mode == "joint" else "EE Space"
-        root.title(f"Robot Arm Control [{mode_label}]")
+        root.title(f"Robot Arm Control [{mode_label}]  ← 点击此窗口激活键盘")
         root.configure(bg="#1e1e2e")
         root.resizable(False, False)
 
@@ -691,8 +690,8 @@ class KeyboardControlPanel:
         FG = "#cdd6f4"
         ACC = "#89b4fa"
         ARM_COL = "#a6e3a1"
-        EE_P_COL = "#89dceb"  # ee 位置（青色）
-        EE_R_COL = "#cba6f7"  # ee 旋转（紫色）
+        EE_P_COL = "#89dceb"
+        EE_R_COL = "#cba6f7"
         HAND_COL = "#fab387"
         SEL_COL = "#f38ba8"
         WARN_COL = "#f9e2af"
@@ -711,14 +710,23 @@ class KeyboardControlPanel:
             fg=ACC,
         ).pack(pady=(10, 2))
 
-        # ---- 按键说明 ----
+        # [FIX-6] 焦点提示始终可见
+        tk.Label(
+            root,
+            text="Click the panel and use keyboard to control!",
+            font=FS,
+            bg="#3e2a00",
+            fg=WARN_COL,
+        ).pack(fill="x", padx=8, pady=(0, 2))
+
+        # ---- 按键说明 [FIX-4] joint 模式也正确调用 .pack() ----
         if self.action_mode == "joint":
             hint = "  ←/→ Select Joint    ↑/↓ Adjust    R Reset    O Open    C Close    Q Quit  "
         else:
             hint = "  ←/→ Select DOF    ↑/↓ Adjust    R Reset    O Open    C Close    Q Quit  "
-            tk.Label(root, text=hint, font=FS, bg=BG2, fg=FG).pack(
-                fill="x", padx=8, pady=(0, 4)
-            )
+        tk.Label(root, text=hint, font=FS, bg=BG2, fg=FG).pack(
+            fill="x", padx=8, pady=(0, 4)
+        )
 
         # ---- 步长设置 ----
         sf = tk.Frame(root, bg=BG)
@@ -785,10 +793,10 @@ class KeyboardControlPanel:
         jf = tk.Frame(root, bg=BG)
         jf.pack(fill="x", padx=8, pady=4)
 
-        self._ctrl_labels = []  # 左列（臂/ee）
-        self._hand_labels = []  # 右列（手部）
+        self._ctrl_labels = []
+        self._hand_labels = []
 
-        # 左列
+        # 左列（臂 / ee）
         lc = tk.Frame(jf, bg=BG2, padx=6, pady=4)
         lc.pack(side="left", fill="y", padx=(0, 4))
 
@@ -810,7 +818,11 @@ class KeyboardControlPanel:
                 self._ctrl_labels.append((lbl, ARM_COL))
         else:
             tk.Label(
-                lc, text="── End-Effector Pose [target values] ──", font=FS, bg=BG2, fg=EE_P_COL
+                lc,
+                text="── End-Effector Pose [target values] ──",
+                font=FS,
+                bg=BG2,
+                fg=EE_P_COL,
             ).pack()
             # 位置 xyz
             for i in range(3):
@@ -825,12 +837,11 @@ class KeyboardControlPanel:
                 )
                 lbl.pack(fill="x")
                 self._ctrl_labels.append((lbl, EE_P_COL))
-            # 旋转 rpy（以度显示）
-            rot_names = ["EE Roll  (deg)", "EE Pitch (deg)", "EE Yaw   (deg)"]
+            # 旋转 rpy
             for i in range(3):
                 lbl = tk.Label(
                     lc,
-                    text=f"[{3+i}] {rot_names[i]}: 0.00°",
+                    text=f"[{3+i}] EE {_EE_ROT_NAMES[i]:5s} (deg): 0.00°",
                     font=FM,
                     bg=BG2,
                     fg=EE_R_COL,
@@ -840,7 +851,7 @@ class KeyboardControlPanel:
                 lbl.pack(fill="x")
                 self._ctrl_labels.append((lbl, EE_R_COL))
 
-        # 右列（手部，两种模式一样）
+        # 右列（手部）
         rc = tk.Frame(jf, bg=BG2, padx=6, pady=4)
         rc.pack(side="left", fill="y")
         ee_offset = self.arm_dof if self.action_mode == "joint" else self.ee_dof
@@ -870,7 +881,7 @@ class KeyboardControlPanel:
         self._step_var   = tk.StringVar(value="Step:  0")
         self._ep_var     = tk.StringVar(value="Episode:  1")
         self._status_var = tk.StringVar(value="Status:  Running")
-        self._extra_var = tk.StringVar(value="")
+        self._extra_var  = tk.StringVar(value="")
 
         for var, col in [
             (self._rwd_var, FG),
@@ -904,17 +915,9 @@ class KeyboardControlPanel:
         self._canvas.pack(padx=8, pady=(0, 8))
 
         self._COLORS = dict(
-            BG=BG,
-            BG2=BG2,
-            FG=FG,
-            ACC=ACC,
-            ARM=ARM_COL,
-            EEP=EE_P_COL,
-            EER=EE_R_COL,
-            HAND=HAND_COL,
-            SEL=SEL_COL,
-            WARN=WARN_COL,
-            OK=OK_COL,
+            BG=BG, BG2=BG2, FG=FG, ACC=ACC,
+            ARM=ARM_COL, EEP=EE_P_COL, EER=EE_R_COL,
+            HAND=HAND_COL, SEL=SEL_COL, WARN=WARN_COL, OK=OK_COL,
         )
 
         root.bind("<KeyPress>", self._on_key)
@@ -925,6 +928,7 @@ class KeyboardControlPanel:
         self._root = None
 
     def _sync_steps(self):
+        """从 Entry 控件读取并更新步长."""
         try:
             self._hand_step = float(self._hand_step_var.get())
         except ValueError:
@@ -987,7 +991,8 @@ class KeyboardControlPanel:
             elif i < 3:
                 text = f"[{i}] {_EE_DOF_NAMES[i]}: {val:+.4f} m"
             else:
-                text = f"[{i}] {'Roll/Pitch/Yaw'.split('/')[i-3]}: {val:+.2f}°"
+                # [FIX-8] 使用列表索引，不再用字符串 split
+                text = f"[{i}] EE {_EE_ROT_NAMES[i-3]:5s}: {val:+.2f}°"
             lbl.config(
                 text=text,
                 fg=C["SEL"] if is_sel else base_col,
@@ -1013,7 +1018,7 @@ class KeyboardControlPanel:
         self._step_var.set(f"Step:  {step}  (no timeout)")
         self._ep_var.set(f"Episode:  {ep}")
         if term:
-            self._status_var.set("Status:  ✅ Success (TERMINATED)")
+            self._status_var.set("Status:  ✅ Success — Press R to reset")
         else:
             self._status_var.set("Status:  ▶ Running...")
 
@@ -1053,24 +1058,21 @@ class KeyboardControlPanel:
             ly = _y(lv)
             cv.create_oval(lx - 3, ly - 3, lx + 3, ly + 3, fill="#f38ba8", outline="")
             cv.create_text(
-                lx - 4,
-                ly - 10,
+                lx - 4, ly - 10,
                 text=f"{lv:+.3f}",
                 fill="#f38ba8",
                 font=("Consolas", 8),
                 anchor="e",
             )
             cv.create_text(
-                pad + 2,
-                H - pad,
+                pad + 2, H - pad,
                 text=f"min:{mn:.3f}",
                 fill="#6c7086",
                 font=("Consolas", 8),
                 anchor="sw",
             )
             cv.create_text(
-                pad + 2,
-                pad,
+                pad + 2, pad,
                 text=f"max:{mx:.3f}",
                 fill="#6c7086",
                 font=("Consolas", 8),
@@ -1098,13 +1100,18 @@ def demo_keyboard_control(
 
     ee 模式：
       ←/→  切换自由度（0-2 位置xyz，3-5 旋转rpy，6-11 手部）
-      ↑/↓  位置 ±pos_step m，旋转 ±rot_step rad，手部 ±hand_step m
-      旋转增量在世界坐标系下施加（左乘四元数）
+      ↑/↓  位置 ±pos_step m，旋转 ±rot_step rad（局部坐标系），手部 ±hand_step m
 
     通用：
       R    重置回合（唯一触发重置的方式，无超时）
       O/C  张手/握手
       Q    退出
+
+    修复项：
+    - [FIX-1] terminated 不再自动触发重置，仅在用户按 R 后重置；
+              成功后停在原地，面板显示 "Press R to reset"
+    - [FIX-2] ee 旋转增量注释修正为"局部坐标系右乘"，与实现一致
+    - [FIX-3] 步长通过构造函数传入 KeyboardControlPanel，不再外部直接赋值私有属性
     """
     reg = TASK_REGISTRY[task_name]
     is_ee = action_mode == "ee"
@@ -1113,17 +1120,15 @@ def demo_keyboard_control(
     print(f" [Demo] 键盘控制 | 任务={reg['display_name']}  模式={action_mode}")
     print(f" controller={controller_type}  超时=禁用（手动R重置）")
     if is_ee:
-        print(f" 位置步长={pos_step}m  旋转步长={rot_step}rad  手步长={hand_step}m")
+        print(f" 位置步长={pos_step}m  旋转步长={rot_step}rad（局部系）  手步长={hand_step}m")
     else:
         print(f" 臂步长={arm_step}rad  手步长={hand_step}m")
     print("=" * 65)
 
-    # ---- 建环境 ----
-    # max_episode_steps 设极大值禁用超时；action_scale=1.0 直接传差值/绝对增量
     robot_cfg = RobotConfig(
         action_mode=action_mode,
         controller_type=controller_type,
-        max_episode_steps=999_999,  # 实质上禁用超时截断
+        max_episode_steps=999_999,
         action_scale=1.0,
         action_scale_rot=1.0,
         action_scale_hand=1.0,
@@ -1133,42 +1138,50 @@ def demo_keyboard_control(
     env = _load_task(task_name, robot_cfg)
     HAND_MAX, HAND_MIN = 0.0095, 0.0
 
-    # ---- 命令队列 + 面板 ----
+    # [FIX-3] 步长统一通过构造函数传入
     cmd_q: queue.Queue = queue.Queue()
     panel = KeyboardControlPanel(
-        cmd_q, arm_dof=env.ARM_DOF, hand_dof=env.HAND_DOF, action_mode=action_mode
+        cmd_q,
+        arm_dof=env.ARM_DOF,
+        hand_dof=env.HAND_DOF,
+        action_mode=action_mode,
+        arm_step=arm_step,
+        hand_step=hand_step,
+        pos_step=pos_step,
+        rot_step=rot_step,
     )
-    panel._arm_step = arm_step
-    panel._hand_step = hand_step
-    panel._pos_step = pos_step
-    panel._rot_step = rot_step
     threading.Thread(target=panel.run, daemon=True).start()
     panel.wait_ready(timeout=10.0)
 
     traj_vis = EETrajectoryVisualizer(TrajectoryVisualStyle(), max_history=40)
     obs, info = env.reset(seed=42)
 
-    # =====================================================================
-    # 累积目标初始化
-    # =====================================================================
+    # ---- 累积目标初始化 ----
     ee_target_pos, ee_target_quat = None, None
     joint_target = None
     hand_target = None
-    if is_ee:
-        # ee 模式：维护绝对末端位姿目标（pos + quat）+ 手部目标
-        ee_target_pos, ee_target_quat = env.get_ee_pose()
-        hand_target = env.get_hand_qpos().copy()
-        # ctrl_dof = 6 + hand_dof = 12，面板用 [pos(3), rpy_deg(3), hand(6)]
-    else:
-        # joint 模式：维护绝对关节角目标（arm + hand）
-        joint_target = np.concatenate([env.get_arm_qpos(), env.get_hand_qpos()])
+
+    def _init_targets_from_env():
+        """从环境当前真实状态初始化所有控制目标."""
+        nonlocal ee_target_pos, ee_target_quat, joint_target, hand_target
+        if is_ee:
+            ee_target_pos, ee_target_quat = env.get_ee_pose()
+            ee_target_pos = ee_target_pos.copy()
+            ee_target_quat = ee_target_quat.copy()
+            hand_target = env.get_hand_qpos().copy()
+        else:
+            joint_target = np.concatenate(
+                [env.get_arm_qpos(), env.get_hand_qpos()]
+            )
+
+    _init_targets_from_env()
 
     sel_idx = 0
     episode = 1
     step = 0
     ep_reward = 0.0
     reward = 0.0
-    terminated = False
+    terminated = False   # [FIX-1] 记录成功状态，但不自动重置
     running = True
 
     with mujoco.viewer.launch_passive(env.model, env.data) as viewer:
@@ -1179,11 +1192,11 @@ def demo_keyboard_control(
         while viewer.is_running() and running:
 
             # ================================================================
-            # 处理命令队列
+            # [FIX-9] 命令队列消费：纯 try/except，移除冗余 empty() 检查
             # ================================================================
             pending_reset = False
 
-            while not cmd_q.empty():
+            while True:
                 try:
                     cmd, val = cmd_q.get_nowait()
                 except queue.Empty:
@@ -1204,38 +1217,36 @@ def demo_keyboard_control(
                     if is_ee:
                         hand_target[:] = HAND_MIN
                     else:
-                        joint_target[env.ARM_DOF :] = HAND_MIN
+                        joint_target[env.ARM_DOF:] = HAND_MIN
 
                 elif cmd == "close_hand":
                     if is_ee:
                         hand_target[:] = HAND_MAX
                     else:
-                        joint_target[env.ARM_DOF :] = HAND_MAX
+                        joint_target[env.ARM_DOF:] = HAND_MAX
 
                 elif cmd == "delta":
+                    # [FIX-1] 成功后不再响应调整指令，等待 R 重置
+                    if terminated:
+                        continue
+
                     if is_ee:
-                        # ------ ee 模式增量 ------
                         if sel_idx < 3:
-                            # 位置 xyz
                             ee_target_pos[sel_idx] += val * panel._pos_step
                         elif sel_idx < 6:
-                            # 旋转（世界坐标系下绕对应轴旋转）
-                            axis_idx = sel_idx - 3  # 0=X, 1=Y, 2=Z
+                            # [FIX-2] 局部坐标系右乘旋转增量（注释与实现一致）
+                            axis_idx = sel_idx - 3  # 0=X, 1=Y, 2=Z（末端局部系）
                             axis = np.zeros(3)
                             axis[axis_idx] = 1.0
                             angle = val * panel._rot_step
-                            # 轴角 → 四元数增量
                             dq = np.zeros(4)
                             mujoco.mju_axisAngle2Quat(dq, axis, angle)
-                            # 世界系右乘
                             new_quat = np.zeros(4)
                             mujoco.mju_mulQuat(new_quat, ee_target_quat, dq)
-                            # 归一化防止数值漂移
                             norm = np.linalg.norm(new_quat)
                             if norm > 1e-8:
                                 ee_target_quat[:] = new_quat / norm
                         else:
-                            # 手部推杆
                             hi = sel_idx - 6
                             hand_target[hi] = np.clip(
                                 hand_target[hi] + val * panel._hand_step,
@@ -1243,7 +1254,6 @@ def demo_keyboard_control(
                                 HAND_MAX,
                             )
                     else:
-                        # ------ joint 模式增量 ------
                         if sel_idx < env.ARM_DOF:
                             joint_target[sel_idx] += val * panel._arm_step
                         else:
@@ -1257,9 +1267,10 @@ def demo_keyboard_control(
                 break
 
             # ================================================================
-            # 手动重置（只在 pending_reset 或 terminated 时触发）
+            # [FIX-1] 重置：只在用户主动按 R（pending_reset）时触发
+            #         terminated 仅作展示，不再自动重置
             # ================================================================
-            if pending_reset or terminated:
+            if pending_reset:
                 if terminated:
                     print(
                         f"[回合 {episode}] ✅ 任务成功！  累积奖励={ep_reward:.4f}  步数={step}"
@@ -1271,16 +1282,7 @@ def demo_keyboard_control(
 
                 obs, info = env.reset()
                 traj_vis.reset()
-
-                # reset 后重新从真实状态初始化目标
-                ee_target_pos, ee_target_quat, joint_target = None, None, None
-                if is_ee:
-                    ee_target_pos, ee_target_quat = env.get_ee_pose()
-                    hand_target = env.get_hand_qpos().copy()
-                else:
-                    joint_target = np.concatenate(
-                        [env.get_arm_qpos(), env.get_hand_qpos()]
-                    )
+                _init_targets_from_env()
 
                 episode += 1
                 step = 0
@@ -1290,42 +1292,48 @@ def demo_keyboard_control(
 
             # ================================================================
             # 构造 action 并 step
+            # [FIX-1] 已成功时跳过 step，原地保持
             # ================================================================
-            if is_ee:
-                # ee 模式：直接传绝对末端目标和手部目标
-                # _apply_ee_action 期望归一化到 [-1,1] 的增量，但我们 scale=1.0 且直接计算差值
-                # 实际做法：传当前位置差作为位置增量，传姿态差作为旋转增量，手部传差值
-                cur_pos, cur_quat = env.get_ee_pose()
-                cur_hand = env.get_hand_qpos()
+            if not terminated:
+                if is_ee:
+                    cur_pos, cur_quat = env.get_ee_pose()
+                    cur_hand = env.get_hand_qpos()
 
-                pos_delta = ee_target_pos - cur_pos  # (3,) 米
+                    pos_delta = ee_target_pos - cur_pos
 
-                # 姿态差 → 轴角增量（局部坐标系，与 _apply_ee_action 一致）
-                cur_quat_inv = np.zeros(4)
-                mujoco.mju_negQuat(cur_quat_inv, cur_quat)
-                dq = np.zeros(4)
-                mujoco.mju_mulQuat(dq, ee_target_quat, cur_quat_inv)
-                rot_delta = np.zeros(3)
-                mujoco.mju_quat2Vel(rot_delta, dq, 1.0)  # (3,) 弧度
+                    cur_quat_inv = np.zeros(4)
+                    mujoco.mju_negQuat(cur_quat_inv, cur_quat)
+                    dq = np.zeros(4)
+                    mujoco.mju_mulQuat(dq, ee_target_quat, cur_quat_inv)
+                    rot_delta = np.zeros(3)
+                    mujoco.mju_quat2Vel(rot_delta, dq, 1.0)
 
-                hand_delta = hand_target - cur_hand  # (6,) 米
+                    hand_delta = hand_target - cur_hand
 
-                action = np.concatenate([pos_delta, rot_delta, hand_delta]).astype(
-                    np.float32
-                )
-            else:
-                # joint 模式：差值方案
-                current_qpos = np.concatenate([env.get_arm_qpos(), env.get_hand_qpos()])
-                action = (joint_target - current_qpos).astype(np.float32)
+                    action = np.concatenate([pos_delta, rot_delta, hand_delta]).astype(
+                        np.float32
+                    )
+                else:
+                    current_qpos = np.concatenate(
+                        [env.get_arm_qpos(), env.get_hand_qpos()]
+                    )
+                    action = (joint_target - current_qpos).astype(np.float32)
 
-            obs, reward, terminated, truncated, info = env.step(action)
-            # truncated 在键盘模式下永远不触发（max_episode_steps=999999）
-            # 但即便万一触发也只打印日志，不自动重置
-            if truncated:
-                print(f"[警告] 意外截断（步数={step}），请检查 max_episode_steps 设置")
+                obs, reward, terminated, truncated, info = env.step(action)
 
-            step += 1
-            ep_reward += reward
+                if truncated:
+                    print(
+                        f"[警告] 意外截断（步数={step}），请检查 max_episode_steps 设置"
+                    )
+
+                step += 1
+                ep_reward += reward
+
+                if terminated:
+                    print(
+                        f"[回合 {episode}] ✅ 任务成功！  步数={step}  累积奖励={ep_reward:.4f}"
+                        f"  → 按 R 重置"
+                    )
 
             # ================================================================
             # 可视化
@@ -1333,7 +1341,11 @@ def demo_keyboard_control(
             viewer.user_scn.ngeom = 0
             actual_pos = _get_ee_position(env)
             if actual_pos is not None:
-                traj_vis.update(actual_pos, target_pos=ee_target_pos, target_quat=ee_target_quat)
+                traj_vis.update(
+                    actual_pos,
+                    target_pos=ee_target_pos,
+                    target_quat=ee_target_quat,
+                )
                 traj_vis.draw(viewer)
 
             # ---- 构造面板显示值 ----
@@ -1377,52 +1389,32 @@ def demo_keyboard_control(
                     f"Step: {step}  Ep: {episode}  (R=reset, no timeout)",
                 ]
 
-                # ===== 1. 半透明背景条 =====
                 overlay = cam_bgr.copy()
                 bar_h = 20 * len(overlay_texts) + 10
                 cv2.rectangle(overlay, (0, 0), (640, bar_h), (0, 0, 0), -1)
                 cam_bgr = cv2.addWeighted(overlay, 0.4, cam_bgr, 0.6, 0)
 
-                # ===== 2. 描边文字 =====
                 for li, txt in enumerate(overlay_texts):
                     y = 18 + li * 18
-
-                    # 黑色描边（关键）
                     cv2.putText(
-                        cam_bgr,
-                        txt,
-                        (5, y),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.45,
-                        (0, 0, 0),
-                        3,
-                        cv2.LINE_AA,
+                        cam_bgr, txt, (5, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 3, cv2.LINE_AA,
+                    )
+                    cv2.putText(
+                        cam_bgr, txt, (5, y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA,
                     )
 
-                    # 白色主文字（比绿色更稳）
-                    cv2.putText(
-                        cam_bgr,
-                        txt,
-                        (5, y),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.45,
-                        (255, 255, 255),
-                        1,
-                        cv2.LINE_AA,
-                    )
-
-                # ===== 3. SUCCESS 提示（同样加描边）=====
                 if terminated:
-                    msg = "TASK SUCCESS!"
-                    pos = (60, 130)
-
-                    cv2.putText(cam_bgr, msg, pos,
-                                cv2.FONT_HERSHEY_SIMPLEX, 1.2,
-                                (0, 0, 0), 4, cv2.LINE_AA)
-
-                    cv2.putText(cam_bgr, msg, pos,
-                                cv2.FONT_HERSHEY_SIMPLEX, 1.2,
-                                (0, 255, 80), 2, cv2.LINE_AA)
+                    msg = "TASK SUCCESS! — Press R to reset"
+                    cv2.putText(
+                        cam_bgr, msg, (30, 130),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 4, cv2.LINE_AA,
+                    )
+                    cv2.putText(
+                        cam_bgr, msg, (30, 130),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 80), 2, cv2.LINE_AA,
+                    )
 
                 cv2.namedWindow("Camera", cv2.WINDOW_NORMAL)
                 cv2.imshow("Camera", cam_bgr)
@@ -1498,6 +1490,18 @@ if __name__ == "__main__":
         default=0.001,
         help="键盘模式：灵巧手单次调整步长（米），默认 0.001",
     )
+    parser.add_argument(
+        "--pos-step",
+        type=float,
+        default=0.01,
+        help="键盘模式（ee）：位置单次调整步长（米），默认 0.01",
+    )
+    parser.add_argument(
+        "--rot-step",
+        type=float,
+        default=0.05,
+        help="键盘模式（ee）：旋转单次调整步长（弧度），默认 0.05",
+    )
     args = parser.parse_args()
 
     render = not args.no_render
@@ -1539,4 +1543,6 @@ if __name__ == "__main__":
             controller_type=args.controller,
             arm_step=args.arm_step,
             hand_step=args.hand_step,
+            pos_step=args.pos_step,
+            rot_step=args.rot_step,
         )
