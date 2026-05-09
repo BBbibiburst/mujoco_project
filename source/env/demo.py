@@ -388,7 +388,7 @@ def demo_random_policy(
                     status = "✓ 终止" if terminated else "✗ 超时"
                     print(
                         f"[Episode {episode+1}] {status} | "
-                        f"steps={step} | {info_line}"
+                        f"steps={step}"
                     )
                     episode += 1
                     step = 0

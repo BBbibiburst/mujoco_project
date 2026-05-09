@@ -93,16 +93,16 @@ class OSCGains:
         null_kd: 零空间阻尼增益，None 时自动计算为 2*sqrt(null_kp)。
         torque_rate_limit: 关节力矩变化率限制 [N·m/step]。
     """
-    kp_pos: float = 400.0
-    kd_pos: float = 40.0
-    kp_rot: float = 100.0
-    kd_rot: float = 20.0
+    kp_pos: float = 400000.0
+    kd_pos: float = 4000.0
+    kp_rot: float = 100000.0
+    kd_rot: float = 2000.0
 
-    kp_joint: float = 40000.0
-    kd_joint: float = 400.0
+    kp_joint: float = 400000.0
+    kd_joint: float = 4000.0
 
     kp_hand: np.ndarray = field(default_factory=lambda: np.full(6, 400000.0))
-    kd_hand: np.ndarray = field(default_factory=lambda: np.full(6, 400.0))
+    kd_hand: np.ndarray = field(default_factory=lambda: np.full(6, 4000.0))
 
     ff_scale: float = 0.9
     vel_filter_alpha: float = 0.5
