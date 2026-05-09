@@ -1136,6 +1136,9 @@ def demo_keyboard_control(
     # =====================================================================
     # 累积目标初始化
     # =====================================================================
+    ee_target_pos, ee_target_quat = None, None
+    joint_target = None
+    hand_target = None
     if is_ee:
         # ee 模式：维护绝对末端位姿目标（pos + quat）+ 手部目标
         ee_target_pos, ee_target_quat = env.get_ee_pose()
@@ -1255,6 +1258,7 @@ def demo_keyboard_control(
                 traj_vis.reset()
 
                 # reset 后重新从真实状态初始化目标
+                ee_target_pos, ee_target_quat, joint_target = None, None, None
                 if is_ee:
                     ee_target_pos, ee_target_quat = env.get_ee_pose()
                     hand_target = env.get_hand_qpos().copy()

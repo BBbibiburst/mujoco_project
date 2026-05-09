@@ -27,7 +27,7 @@ import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
 from source.robot.robot_arm_system import get_combined_spec, PhysicsConfig
-from source.controllers.position_controller import OSCController, IKController, OSCGains, PDGains
+from source.controllers.position_controller import OSCController, IKController, OSCGains, PDGains, fast_tracking_osc_gains, stable_osc_gains
 from source.controllers.hand_arm_controller import HandArmController
 from source.sensors.tactile_sensor import TactileReader
 
@@ -356,7 +356,7 @@ class RobotArmEnvBase(gym.Env, ABC):
         ctrl_type = self.cfg.controller_type
 
         if ctrl_type == "osc":
-            gains = self.cfg.osc_gains if self.cfg.osc_gains is not None else OSCGains()
+            gains = self.cfg.osc_gains if self.cfg.osc_gains is not None else fast_tracking_osc_gains()
             self.controller = OSCController(
                 base=self.hw,
                 model=self.model,
