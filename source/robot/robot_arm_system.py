@@ -173,10 +173,10 @@ DEFAULT_GRASP_PHYSICS = PhysicsConfig(
         "joint1": JointPhysicsConfig(damping=60.0),
         "joint2": JointPhysicsConfig(damping=50.0),
         "joint3": JointPhysicsConfig(damping=40.0),
-        "joint4": JointPhysicsConfig(damping=40.0),
-        "joint5": JointPhysicsConfig(damping=35.0),
-        "joint6": JointPhysicsConfig(damping=40.0),
-        "joint7": JointPhysicsConfig(damping=40.0),
+        "joint4": JointPhysicsConfig(damping=30.0),
+        "joint5": JointPhysicsConfig(damping=25.0),
+        "joint6": JointPhysicsConfig(damping=10.0),
+        "joint7": JointPhysicsConfig(damping=10.0),
     },
 )
 
