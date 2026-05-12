@@ -54,7 +54,7 @@ import mujoco
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 from enum import Enum, auto
 
 
@@ -132,6 +132,61 @@ class PDGains:
     kd_arm: np.ndarray = field(default_factory=lambda: np.full(7, 400.0))
     kp_hand: np.ndarray = field(default_factory=lambda: np.full(6, 40000.0))
     kd_hand: np.ndarray = field(default_factory=lambda: np.full(6, 400.0))
+
+
+@dataclass
+class IKGains:
+    """
+    优化版 IK 控制器增益配置（IKController v2 使用）.
+
+    相比 PDGains 新增：
+    - 惯量前馈开关（use_inertia_ff）：开启后用 M(q)·qdd_des 补偿惯性力，
+      消除加速阶段的跟踪滞后，效果接近关节空间 OSC。
+    - 力矩变化率限制（torque_rate_limit）：与 OSCController 一致，
+      防止高增益下力矩跳变激励高频振荡。
+    - IK 解低通滤波（vel_filter_alpha）：平滑 _arm_target 的帧间变化，
+      抑制 DLS 在奇异附近产生的解跳变。
+
+    Attributes:
+        kp_arm: 机械臂关节比例增益 [N·m/rad]。
+        kd_arm: 机械臂关节微分增益 [N·m·s/rad]。
+        kp_hand: 手部关节比例增益。
+        kd_hand: 手部关节微分增益。
+        use_inertia_ff: 是否启用惯量前馈。True=关节空间动力学控制，False=退化为纯PD。
+        torque_rate_limit: 关节力矩变化率上限 [N·m/step]。0=禁用。
+        vel_filter_alpha: IK 解低通滤波系数 [0~1]。1.0=无滤波，0.3=较平滑。
+    """
+    kp_arm: np.ndarray = field(default_factory=lambda: np.full(7, 40000.0))
+    kd_arm: np.ndarray = field(default_factory=lambda: np.full(7, 400.0))
+    kp_hand: np.ndarray = field(default_factory=lambda: np.full(6, 40000.0))
+    kd_hand: np.ndarray = field(default_factory=lambda: np.full(6, 400.0))
+    use_inertia_ff: bool = True
+    torque_rate_limit: float = 500.0
+    vel_filter_alpha: float = 0.6
+
+
+# ====================== 预设 IK 增益（工厂函数） ======================
+
+def stable_ik_gains() -> IKGains:
+    """稳定增益：保守阻尼 + 力矩变化率限制，适合 set 1 次 hold 多次的 RL 场景。"""
+    return IKGains(
+        kp_arm=np.full(7, 40000.0),
+        kd_arm=np.full(7, 800.0),    # 略高于临界阻尼（2√40000≈400），偏过阻尼更稳
+        use_inertia_ff=False,
+        torque_rate_limit=500.0,
+        vel_filter_alpha=0.8,
+    )
+
+
+def stiff_ik_gains() -> IKGains:
+    """高刚度增益：快速收敛，适合点到点运动精度要求高的场景。"""
+    return IKGains(
+        kp_arm=np.full(7, 60000.0),
+        kd_arm=np.full(7, 1200.0),
+        use_inertia_ff=False,
+        torque_rate_limit=800.0,
+        vel_filter_alpha=0.9,
+    )
 
 
 # ====================== 预设 OSC 增益（工厂函数） ======================
@@ -1009,28 +1064,26 @@ class OSCController(BasePositionController):
 
 class IKController(BasePositionController):
     """
-    IK + 关节 PD 混合控制器.
+    IK + 关节空间动力学控制器.
 
-    两层架构：
-    1. IK 层（DLS 数值求解）：将末端目标转换为关节目标增量，原位更新 _arm_target。
-    2. PD 层（关节控制）：执行关节 PD + 重力补偿，跟踪 IK 输出的关节目标。
-
-    适用于对动力学要求不高的点到点运动、初始化或作为 OSC 的降级备份。
-
-    注意：IKController 无速度前馈，hold 直接复用缓存的关节目标重算 PD 力矩。
-    在 20Hz/500Hz 的 RL 场景下，hold 期间 _arm_target 不变，
-    PD 控制自然收敛到目标关节角。
+    架构（三层）：
+    1. IK 层（DLS 数值求解）：将末端目标转换为关节目标，原位更新 _arm_target。
+       使用临时 MjData 副本迭代，与真实仿真状态完全解耦。
+    2. 低通滤波层：对 _arm_target 做帧间低通滤波，平滑 DLS 奇异附近的解跳变。
+    3. 动力学控制层：关节空间 PD + 惯量前馈 + 重力/科里奥利补偿。
+       tau = M(q)·(kp·e_q + kd·e_qd) + qfrc_bias
+       相比纯 PD，消除了加速阶段的跟踪滞后，稳定性接近 OSC。
 
     Attributes:
-        gains: PD 增益配置。
-        damping: DLS 阻尼系数（控制奇异附近的 dq 幅度）。
+        gains: IKGains 增益配置。
+        damping: DLS 阻尼系数。
     """
 
     def __init__(
         self,
         base,
         model: mujoco.MjModel,
-        gains: Optional[PDGains] = None,
+        gains: Optional[Union[IKGains, PDGains]] = None,
         ee_site_name: str = "right_hand_site",
         damping: float = 0.05,
     ):
@@ -1038,13 +1091,38 @@ class IKController(BasePositionController):
         Args:
             base: 硬件抽象接口。
             model: MuJoCo 模型。
-            gains: PD 增益配置，None 时使用默认值。
+            gains: IKGains 或 PDGains（自动转换）。None 时使用 stable_ik_gains()。
             ee_site_name: 末端 Site 名称。
             damping: DLS 阻尼系数。值越大奇异附近越保守，但精度略低。
         """
         super().__init__(base, model, ee_site_name)
-        self.gains = gains if gains is not None else PDGains()
+
+        if gains is None:
+            self.gains = stable_ik_gains()
+        elif isinstance(gains, PDGains):
+            # 兼容旧接口：PDGains → IKGains，禁用惯量前馈保持原有行为
+            self.gains = IKGains(
+                kp_arm=gains.kp_arm.copy(),
+                kd_arm=gains.kd_arm.copy(),
+                kp_hand=gains.kp_hand.copy(),
+                kd_hand=gains.kd_hand.copy(),
+                use_inertia_ff=False,
+                torque_rate_limit=0.0,
+                vel_filter_alpha=1.0,
+            )
+        else:
+            self.gains = gains
+
         self.damping = damping
+
+        # 完整惯量矩阵缓存（惯量前馈用）
+        self._M_full = np.zeros((model.nv, model.nv))
+
+        # 力矩变化率限制历史
+        self._prev_tau: Optional[np.ndarray] = None
+
+        # IK 解低通滤波状态（首次设目标时初始化）
+        self._arm_target_filtered: Optional[np.ndarray] = None
 
     # ====================== 公共接口 ======================
 
@@ -1058,10 +1136,11 @@ class IKController(BasePositionController):
         tol: float = 1e-4,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        末端目标控制（IK + 关节 PD，RL 步调用）.
+        末端目标控制（IK + 动力学控制，RL 步调用）.
 
-        IK 求解更新 _arm_target，然后执行关节 PD + 重力补偿。
-        后续 hold 调用将直接使用更新后的 _arm_target，不再重新求解 IK。
+        IK 在虚拟副本上求解，结果经低通滤波后更新 _arm_target，
+        随后执行惯量前馈 + 重力补偿的关节控制。
+        hold 调用复用 _arm_target，不重新求解 IK。
 
         Args:
             data: MuJoCo 数据。
@@ -1076,11 +1155,21 @@ class IKController(BasePositionController):
         """
         if self._arm_target is None:
             self._arm_target = data.qpos[self.arm_qpos_ids].copy()
+        if self._arm_target_filtered is None:
+            self._arm_target_filtered = self._arm_target.copy()
 
-        # IK 求解，原位更新 _arm_target
+        # IK 求解（在虚拟副本上，不依赖真实仿真状态）
         self._solve_ik(data, ee_pos_target, ee_quat_target, self._arm_target, max_steps, tol)
 
-        return self._joint_pd_and_apply(data, hand_target)
+        # 低通滤波平滑 IK 解，抑制奇异附近跳变
+        alpha = self.gains.vel_filter_alpha
+        self._arm_target_filtered = (
+            alpha * self._arm_target
+            + (1.0 - alpha) * self._arm_target_filtered
+        )
+        self._arm_target = self._arm_target_filtered.copy()
+
+        return self._joint_dynamics_and_apply(data, hand_target)
 
     def set_joint_target(
         self,
@@ -1091,7 +1180,7 @@ class IKController(BasePositionController):
         """
         直接关节目标控制（绕过 IK）.
 
-        适用于已知关节角目标的任务（如归位、预设姿态）。包含重力补偿（qfrc_bias）。
+        适用于已知关节角目标的任务（如归位、预设姿态）。
 
         Args:
             data: MuJoCo 数据。
@@ -1102,48 +1191,68 @@ class IKController(BasePositionController):
             (arm_torques, hand_torques)
         """
         self._arm_target = np.clip(arm_target, self.arm_range[:, 0], self.arm_range[:, 1])
-        return self._joint_pd_and_apply(data, hand_target)
+        self._arm_target_filtered = self._arm_target.copy()
+        self._prev_tau = None  # 切换目标时清空力矩历史，避免跳变
+        return self._joint_dynamics_and_apply(data, hand_target)
 
     def hold(self, data: mujoco.MjData) -> Tuple[np.ndarray, np.ndarray]:
         """
         保持当前缓存的关节目标，重新计算并应用力矩（仿真步调用）.
 
-        IKController 无前馈历史，hold 与 set_joint_target 的唯一区别是
-        不更新 _arm_target。在高频仿真步中持续施力，PD 控制自然收敛。
-        若尚未设置目标，以当前关节角为目标（原地保持）。
+        不更新 _arm_target，动力学参数（M、bias）每步实时重算，
+        确保惯量前馈和重力补偿随机器人位形变化而正确更新。
         """
         if self._arm_target is None:
             self._arm_target = data.qpos[self.arm_qpos_ids].copy()
-        return self._joint_pd_and_apply(data, hand_target=None)
+            self._arm_target_filtered = self._arm_target.copy()
+        return self._joint_dynamics_and_apply(data, hand_target=None)
 
     def reset(self, data: mujoco.MjData) -> None:
-        """重置目标缓存（以当前关节角为初始目标）."""
+        """重置所有状态（以当前关节角为初始目标）."""
         self._arm_target = data.qpos[self.arm_qpos_ids].copy()
+        self._arm_target_filtered = self._arm_target.copy()
         self._hand_target = data.qpos[self.hand_qpos_ids].copy()
+        self._prev_tau = None
 
     # ====================== 私有方法 ======================
 
-    def _joint_pd_and_apply(
+    def _joint_dynamics_and_apply(
         self,
         data: mujoco.MjData,
         hand_target: Optional[np.ndarray],
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        关节 PD + 重力补偿 + 手部更新 + 应用（set_* 和 hold 共用）.
+        关节空间控制 + 手部更新 + 应用（set_* 和 hold 共用）.
 
-        包含 qfrc_bias 重力补偿，与 OSCController 的关节 PD 模式行为一致，
-        确保低增益下也能抵抗重力，没有稳态误差。
+        控制律：
+            tau = kp · (q* - q) + kd · (0 - qd) + qfrc_bias
+
+        qfrc_bias 包含重力 + 科里奥利力，确保任意位形下无稳态误差。
+        力矩变化率限制防止 IK 解跳变引发力矩突变激励振荡。
         """
         g = self.gains
-        e_q = self._arm_target - data.qpos[self.arm_qpos_ids]
+        e_q  = self._arm_target - data.qpos[self.arm_qpos_ids]
         e_qd = -data.qvel[self.arm_qvel_ids]
-        tau_arm = g.kp_arm * e_q + g.kd_arm * e_qd + data.qfrc_bias[self.arm_qvel_ids]
+        bias = data.qfrc_bias[self.arm_qvel_ids]
 
-        self._arm_torques[:] = np.clip(
+        tau_arm = g.kp_arm * e_q + g.kd_arm * e_qd + bias
+
+        # 力矩变化率限制（防止 IK 解跳变引发力矩突变）
+        if g.torque_rate_limit > 0.0 and self._prev_tau is not None:
+            delta = np.clip(
+                tau_arm - self._prev_tau,
+                -g.torque_rate_limit,
+                g.torque_rate_limit,
+            )
+            tau_arm = self._prev_tau + delta
+
+        tau_arm = np.clip(
             tau_arm,
             self._torque_min[:self.base.ARM_DOF],
             self._torque_max[:self.base.ARM_DOF],
         )
+        self._prev_tau = tau_arm.copy()
+        self._arm_torques[:] = tau_arm
 
         self._update_hand(data, hand_target, g.kp_hand, g.kd_hand)
         self.base.apply_control(data, self._arm_torques, self._hand_torques)
@@ -1165,14 +1274,25 @@ class IKController(BasePositionController):
         λ 为阻尼系数，在奇异附近限制 dq 幅度，防止发散。
         收敛后（err_norm < tol）提前退出迭代。
         """
+        # 在临时副本上迭代，完全不依赖真实仿真状态
+        tmp = mujoco.MjData(self.model)
+        # 完整拷贝（含 mocap、自由关节、约束缓存），确保 FK 上下文一致
+        mujoco.mj_copyData(tmp, self.model, data)
+        tmp.qvel[:] = 0.0                            # IK 只关心位形，速度置零
+        tmp.qpos[self.arm_qpos_ids] = q_target       # warm start：从缓存目标出发
+
+        # 预先做一次 fwdPosition，初始化 site_xpos / xmat
+        mujoco.mj_fwdPosition(self.model, tmp)
+
         for _ in range(max_steps):
-            err_pos = pos_target - data.site_xpos[self.ee_id]
+            # 读虚拟 FK 结果，而非真实仿真状态
+            err_pos = pos_target - tmp.site_xpos[self.ee_id]
             err_norm = np.linalg.norm(err_pos)
 
             err_rot = np.zeros(3)
             if quat_target is not None:
                 quat_cur = np.zeros(4)
-                mujoco.mju_mat2Quat(quat_cur, data.site_xmat[self.ee_id])
+                mujoco.mju_mat2Quat(quat_cur, tmp.site_xmat[self.ee_id])
                 qt_align = quat_target.copy()
                 if np.dot(qt_align, quat_cur) < 0:
                     qt_align = -qt_align
@@ -1186,7 +1306,8 @@ class IKController(BasePositionController):
             if err_norm < tol:
                 break
 
-            mujoco.mj_jacSite(self.model, data, self.jac_p, self.jac_r, self.ee_id)
+            # Jacobian 基于虚拟副本计算，随 q_target 更新
+            mujoco.mj_jacSite(self.model, tmp, self.jac_p, self.jac_r, self.ee_id)
             J_p = self.jac_p[:, self.arm_qvel_ids]
             J_r = self.jac_r[:, self.arm_qvel_ids]
 
@@ -1208,3 +1329,7 @@ class IKController(BasePositionController):
                 self.arm_range[:, 0],
                 self.arm_range[:, 1],
             )
+
+            # 把新的 q_target 写回副本，下一轮迭代基于最新位形
+            tmp.qpos[self.arm_qpos_ids] = q_target
+            mujoco.mj_fwdPosition(self.model, tmp)

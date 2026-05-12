@@ -207,8 +207,9 @@ class BlockLiftingEnv(RobotArmEnvBase):
             size=[tc.obj_size] * 3,
             rgba=list(tc.obj_color),
             mass=tc.obj_mass,
-            friction=[1.0, 0.005, 0.0001],
+            friction=[1.0, 0.5, 0.001],
             condim=4,
+            conaffinity=15,
         )
         obj.add_joint(type=mujoco.mjtJoint.mjJNT_FREE, name="obj_free_joint")
 

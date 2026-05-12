@@ -123,7 +123,7 @@ class EETrajectoryVisualizer:
     同时显示实际位置（青色小球）和目标位置（红色大球）。
     """
 
-    def __init__(self, style: TrajectoryVisualStyle, max_history: int = 50):
+    def __init__(self, style: TrajectoryVisualStyle, max_history: int = 2000):
         self.style = style
         self.max_history = max_history
         self.actual_pos: Optional[np.ndarray] = None
@@ -388,10 +388,7 @@ def demo_random_policy(
 
                 if terminated or truncated:
                     status = "✓ 终止" if terminated else "✗ 超时"
-                    print(
-                        f"[Episode {episode+1}] {status} | "
-                        f"steps={step}"
-                    )
+                    print(f"[Episode {episode+1}] {status} | " f"steps={step}")
                     episode += 1
                     step = 0
                     if traj_vis is not None:
@@ -543,6 +540,7 @@ _HAND_JOINT_NAMES = [
     "F3 (Actuator 3)",
     "F4 (Actuator 4)",
     "F5 (Actuator 5)",
+    "F2-4 Sync",       # [修改] 同步调节第2、3、4 DOF
 ]
 
 # ee 模式下末端自由度名称（索引 0-5）
@@ -567,6 +565,7 @@ _KEY_RESET = "r"
 _KEY_OPEN_HAND = "o"
 _KEY_CLOSE_HAND = "c"
 _KEY_QUIT = "q"
+_KEY_GRIPPER_OPEN = "g"
 
 
 def _quat_to_euler_deg(quat: np.ndarray) -> np.ndarray:
@@ -587,8 +586,8 @@ class KeyboardControlPanel:
     """
     Tkinter 键盘控制面板（joint / ee 双模式）.
 
-    joint 模式：显示 7 个臂关节目标值 + 6 个手部目标值（共 13 列）
-    ee    模式：显示 EE 位置(xyz) + 欧拉角(rpy) + 6 个手部目标值（共 12 列）
+    joint 模式：显示 7 个臂关节目标值 + 7 个手部目标值（共 14 列）
+    ee    模式：显示 EE 位置(xyz) + 欧拉角(rpy) + 7 个手部目标值（共 13 列）
 
     修复项：
     - [FIX-3] 步长参数通过构造函数传入，不再依赖外部直接赋值私有属性
@@ -609,7 +608,7 @@ class KeyboardControlPanel:
         action_mode: str = "joint",  # "joint" | "ee"
         # [FIX-3] 步长通过构造函数注入，不再暴露私有属性给外部赋值
         arm_step: float = 0.05,
-        hand_step: float = 0.001,
+        hand_step: float = 0.0005,
         pos_step: float = 0.01,
         rot_step: float = 0.05,
     ):
@@ -619,7 +618,8 @@ class KeyboardControlPanel:
         self.action_mode = action_mode
 
         self.ee_dof = 6
-        self.ctrl_dof = (arm_dof if action_mode == "joint" else self.ee_dof) + hand_dof
+        self.hand_display_num = hand_dof + 1
+        self.ctrl_dof = (arm_dof if action_mode == "joint" else self.ee_dof) + self.hand_display_num
 
         self._lock = threading.Lock()
         self._sel_idx = 0
@@ -681,7 +681,7 @@ class KeyboardControlPanel:
         root = tk.Tk()
         self._root = root
         mode_label = "Joint Space" if self.action_mode == "joint" else "EE Space"
-        root.title(f"Robot Arm Control [{mode_label}]  ← 点击此窗口激活键盘")
+        root.title(f"Robot Arm Control [{mode_label}]  ← Click to Focus")
         root.configure(bg="#1e1e2e")
         root.resizable(False, False)
 
@@ -719,11 +719,11 @@ class KeyboardControlPanel:
             fg=WARN_COL,
         ).pack(fill="x", padx=8, pady=(0, 2))
 
-        # ---- 按键说明 [FIX-4] joint 模式也正确调用 .pack() ----
+        # ---- 按键说明
         if self.action_mode == "joint":
-            hint = "  ←/→ Select Joint    ↑/↓ Adjust    R Reset    O Open    C Close    Q Quit  "
+            hint = " ←/→ Select Joint, ↑/↓ Adjust, R Reset, O Open, C Close, G Gripper Open, Q Quit "
         else:
-            hint = "  ←/→ Select DOF    ↑/↓ Adjust    R Reset    O Open    C Close    Q Quit  "
+            hint = " ←/→ Select DOF, ↑/↓ Adjust, R Reset, O Open, C Close, G Gripper Open, Q Quit "
         tk.Label(root, text=hint, font=FS, bg=BG2, fg=FG).pack(
             fill="x", padx=8, pady=(0, 4)
         )
@@ -733,7 +733,9 @@ class KeyboardControlPanel:
         sf.pack(fill="x", padx=8, pady=2)
 
         if self.action_mode == "joint":
-            tk.Label(sf, text="Arm Step (rad):", font=FS, bg=BG, fg=FG).pack(side="left")
+            tk.Label(sf, text="Arm Step (rad):", font=FS, bg=BG, fg=FG).pack(
+                side="left"
+            )
             self._arm_step_var = tk.StringVar(value=str(self._arm_step))
             e1 = tk.Entry(
                 sf,
@@ -747,7 +749,9 @@ class KeyboardControlPanel:
             e1.pack(side="left", padx=(2, 12))
             e1.bind("<Return>", lambda *_: self._sync_steps())
         else:
-            tk.Label(sf, text="Position Step (m):", font=FS, bg=BG, fg=FG).pack(side="left")
+            tk.Label(sf, text="Position Step (m):", font=FS, bg=BG, fg=FG).pack(
+                side="left"
+            )
             self._pos_step_var = tk.StringVar(value=str(self._pos_step))
             e1 = tk.Entry(
                 sf,
@@ -761,7 +765,9 @@ class KeyboardControlPanel:
             e1.pack(side="left", padx=(2, 12))
             e1.bind("<Return>", lambda *_: self._sync_steps())
 
-            tk.Label(sf, text="Rotation Step (rad):", font=FS, bg=BG, fg=FG).pack(side="left")
+            tk.Label(sf, text="Rotation Step (rad):", font=FS, bg=BG, fg=FG).pack(
+                side="left"
+            )
             self._rot_step_var = tk.StringVar(value=str(self._rot_step))
             e2 = tk.Entry(
                 sf,
@@ -856,9 +862,9 @@ class KeyboardControlPanel:
         rc.pack(side="left", fill="y")
         ee_offset = self.arm_dof if self.action_mode == "joint" else self.ee_dof
         tk.Label(
-            rc, text="── Hand 6 DOF [target m] ──", font=FS, bg=BG2, fg=HAND_COL
+            rc, text="── Hand 6 Dof [target m] ──", font=FS, bg=BG2, fg=HAND_COL
         ).pack()
-        for i in range(self.hand_dof):
+        for i in range(self.hand_display_num):
             idx = ee_offset + i
             lbl = tk.Label(
                 rc,
@@ -876,12 +882,12 @@ class KeyboardControlPanel:
         rf = tk.Frame(root, bg=BG2, padx=8, pady=6)
         rf.pack(fill="x", padx=8, pady=(4, 0))
 
-        self._rwd_var    = tk.StringVar(value="Reward:  0.0000")
+        self._rwd_var = tk.StringVar(value="Reward:  0.0000")
         self._ep_rwd_var = tk.StringVar(value="Cumulative:  0.0000")
-        self._step_var   = tk.StringVar(value="Step:  0")
-        self._ep_var     = tk.StringVar(value="Episode:  1")
+        self._step_var = tk.StringVar(value="Step:  0")
+        self._ep_var = tk.StringVar(value="Episode:  1")
         self._status_var = tk.StringVar(value="Status:  Running")
-        self._extra_var  = tk.StringVar(value="")
+        self._extra_var = tk.StringVar(value="")
 
         for var, col in [
             (self._rwd_var, FG),
@@ -915,9 +921,17 @@ class KeyboardControlPanel:
         self._canvas.pack(padx=8, pady=(0, 8))
 
         self._COLORS = dict(
-            BG=BG, BG2=BG2, FG=FG, ACC=ACC,
-            ARM=ARM_COL, EEP=EE_P_COL, EER=EE_R_COL,
-            HAND=HAND_COL, SEL=SEL_COL, WARN=WARN_COL, OK=OK_COL,
+            BG=BG,
+            BG2=BG2,
+            FG=FG,
+            ACC=ACC,
+            ARM=ARM_COL,
+            EEP=EE_P_COL,
+            EER=EE_R_COL,
+            HAND=HAND_COL,
+            SEL=SEL_COL,
+            WARN=WARN_COL,
+            OK=OK_COL,
         )
 
         root.bind("<KeyPress>", self._on_key)
@@ -966,6 +980,8 @@ class KeyboardControlPanel:
             self.cmd_queue.put(("close_hand", None))
         elif key.lower() == _KEY_QUIT:
             self.cmd_queue.put(("quit", None))
+        elif key.lower() == _KEY_GRIPPER_OPEN:
+            self.cmd_queue.put(("gripper_open", None))
 
     def _refresh(self):
         with self._lock:
@@ -1005,8 +1021,18 @@ class KeyboardControlPanel:
             idx = ee_offset + i
             val = vals[idx] if idx < len(vals) else 0.0
             is_sel = idx == sel
+            # [修改] 同步条目(F2-4 Sync) 显示2,3,4的平均值
+            if i == 6:  # F2-4 Sync 条目
+                # 显示 F2,F3,F4 的平均值
+                v2 = vals[ee_offset + 2] if (ee_offset + 2) < len(vals) else 0.0
+                v3 = vals[ee_offset + 3] if (ee_offset + 3) < len(vals) else 0.0
+                v4 = vals[ee_offset + 4] if (ee_offset + 4) < len(vals) else 0.0
+                avg_val = (v2 + v3 + v4) / 3.0
+                text = f"[{idx}] {_HAND_JOINT_NAMES[i]}: {avg_val:+.5f} (avg)"
+            else:
+                text = f"[{idx}] {_HAND_JOINT_NAMES[i]}: {val:+.5f}"
             lbl.config(
-                text=f"[{idx}] {_HAND_JOINT_NAMES[i]}: {val:+.5f}",
+                text=text,
                 fg=C["SEL"] if is_sel else C["HAND"],
                 font=("Consolas", 11, "bold") if is_sel else ("Consolas", 11),
                 bg="#3e1e2e" if is_sel else C["BG2"],
@@ -1058,21 +1084,24 @@ class KeyboardControlPanel:
             ly = _y(lv)
             cv.create_oval(lx - 3, ly - 3, lx + 3, ly + 3, fill="#f38ba8", outline="")
             cv.create_text(
-                lx - 4, ly - 10,
+                lx - 4,
+                ly - 10,
                 text=f"{lv:+.3f}",
                 fill="#f38ba8",
                 font=("Consolas", 8),
                 anchor="e",
             )
             cv.create_text(
-                pad + 2, H - pad,
+                pad + 2,
+                H - pad,
                 text=f"min:{mn:.3f}",
                 fill="#6c7086",
                 font=("Consolas", 8),
                 anchor="sw",
             )
             cv.create_text(
-                pad + 2, pad,
+                pad + 2,
+                pad,
                 text=f"max:{mx:.3f}",
                 fill="#6c7086",
                 font=("Consolas", 8),
@@ -1087,7 +1116,7 @@ def demo_keyboard_control(
     action_mode: str = "joint",
     controller_type: str = "osc",
     arm_step: float = 0.05,
-    hand_step: float = 0.001,
+    hand_step: float = 0.0005,
     pos_step: float = 0.01,
     rot_step: float = 0.05,
 ):
@@ -1095,11 +1124,11 @@ def demo_keyboard_control(
     键盘控制模式（joint / ee 双模式，禁用超时，仅手动 R 重置）.
 
     joint 模式：
-      ←/→  切换关节（0-6 臂，7-12 手）
+      ←/→  切换关节（0-6 臂，7-13 手）  [修改] 手部条目变为7个
       ↑/↓  当前关节 ±arm_step rad（手部 ±hand_step m）
 
     ee 模式：
-      ←/→  切换自由度（0-2 位置xyz，3-5 旋转rpy，6-11 手部）
+      ←/→  切换自由度（0-2 位置xyz，3-5 旋转rpy，6-12 手部） [修改] 手部条目变为7个
       ↑/↓  位置 ±pos_step m，旋转 ±rot_step rad（局部坐标系），手部 ±hand_step m
 
     通用：
@@ -1120,7 +1149,9 @@ def demo_keyboard_control(
     print(f" [Demo] 键盘控制 | 任务={reg['display_name']}  模式={action_mode}")
     print(f" controller={controller_type}  超时=禁用（手动R重置）")
     if is_ee:
-        print(f" 位置步长={pos_step}m  旋转步长={rot_step}rad（局部系）  手步长={hand_step}m")
+        print(
+            f" 位置步长={pos_step}m  旋转步长={rot_step}rad（局部系）  手步长={hand_step}m"
+        )
     else:
         print(f" 臂步长={arm_step}rad  手步长={hand_step}m")
     print("=" * 65)
@@ -1137,6 +1168,9 @@ def demo_keyboard_control(
     )
     env = _load_task(task_name, robot_cfg)
     HAND_MAX, HAND_MIN = 0.0095, 0.0
+    GRIPPER_OPEN_POS = np.array(
+        [HAND_MAX, HAND_MAX, HAND_MIN, HAND_MIN, HAND_MIN, HAND_MAX]
+    )
 
     # [FIX-3] 步长统一通过构造函数传入
     cmd_q: queue.Queue = queue.Queue()
@@ -1170,9 +1204,7 @@ def demo_keyboard_control(
             ee_target_quat = ee_target_quat.copy()
             hand_target = env.get_hand_qpos().copy()
         else:
-            joint_target = np.concatenate(
-                [env.get_arm_qpos(), env.get_hand_qpos()]
-            )
+            joint_target = np.concatenate([env.get_arm_qpos(), env.get_hand_qpos()])
 
     _init_targets_from_env()
 
@@ -1181,7 +1213,7 @@ def demo_keyboard_control(
     step = 0
     ep_reward = 0.0
     reward = 0.0
-    terminated = False   # [FIX-1] 记录成功状态，但不自动重置
+    terminated = False  # [FIX-1] 记录成功状态，但不自动重置
     running = True
 
     with mujoco.viewer.launch_passive(env.model, env.data) as viewer:
@@ -1192,7 +1224,7 @@ def demo_keyboard_control(
         while viewer.is_running() and running:
 
             # ================================================================
-            # [FIX-9] 命令队列消费：纯 try/except，移除冗余 empty() 检查
+            # [FIX-9] 命令队列消费：纯 try/except，移除冗余的 empty() 检查
             # ================================================================
             pending_reset = False
 
@@ -1210,20 +1242,29 @@ def demo_keyboard_control(
                     pending_reset = True
 
                 elif cmd == "sel":
-                    n_ctrl = env.HAND_DOF + (env.ARM_DOF if not is_ee else 6)
+                    # [修改] 控制条目数 = 臂/ee + 手显示条目7个
+                    n_ctrl = (env.ARM_DOF if not is_ee else 6) + 7  # 7 = 6 DOF + 1 Sync
                     sel_idx = (sel_idx + val) % n_ctrl
 
                 elif cmd == "open_hand":
                     if is_ee:
                         hand_target[:] = HAND_MIN
                     else:
-                        joint_target[env.ARM_DOF:] = HAND_MIN
+                        # [修改] 包括同步条目对应的物理DOF
+                        joint_target[env.ARM_DOF : env.ARM_DOF + env.HAND_DOF] = HAND_MIN
 
                 elif cmd == "close_hand":
                     if is_ee:
                         hand_target[:] = HAND_MAX
                     else:
-                        joint_target[env.ARM_DOF:] = HAND_MAX
+                        # [修改] 包括同步条目对应的物理DOF
+                        joint_target[env.ARM_DOF : env.ARM_DOF + env.HAND_DOF] = HAND_MAX
+                elif cmd == "gripper_open":
+                    if is_ee:
+                        hand_target[:] = GRIPPER_OPEN_POS
+                    else:
+                        # [修改] 包括同步条目对应的物理DOF
+                        joint_target[env.ARM_DOF : env.ARM_DOF + env.HAND_DOF] = GRIPPER_OPEN_POS
 
                 elif cmd == "delta":
                     # [FIX-1] 成功后不再响应调整指令，等待 R 重置
@@ -1246,22 +1287,43 @@ def demo_keyboard_control(
                             norm = np.linalg.norm(new_quat)
                             if norm > 1e-8:
                                 ee_target_quat[:] = new_quat / norm
-                        else:
-                            hi = sel_idx - 6
-                            hand_target[hi] = np.clip(
-                                hand_target[hi] + val * panel._hand_step,
-                                HAND_MIN,
-                                HAND_MAX,
-                            )
+                        elif sel_idx < 13:  # 手部条目 6-12 (6个独立DOF + 1个同步条目)
+                            # [修改] 处理手部DOF和同步条目
+                            hi = sel_idx - 6  # 0-6
+                            if hi < 6:
+                                # 普通DOF 0-5
+                                hand_target[hi] = np.clip(
+                                    hand_target[hi] + val * panel._hand_step,
+                                    HAND_MIN,
+                                    HAND_MAX,
+                                )
+                            else:
+                                # [新增] 同步条目 hi=6，同时调节 DOF 2,3,4
+                                for sync_idx in [2, 3, 4]:
+                                    hand_target[sync_idx] = np.clip(
+                                        hand_target[sync_idx] + val * panel._hand_step,
+                                        HAND_MIN,
+                                        HAND_MAX,
+                                    )
                     else:
                         if sel_idx < env.ARM_DOF:
                             joint_target[sel_idx] += val * panel._arm_step
-                        else:
+                        elif sel_idx < env.ARM_DOF + env.HAND_DOF:
+                            # 普通手部DOF
                             joint_target[sel_idx] = np.clip(
                                 joint_target[sel_idx] + val * panel._hand_step,
                                 HAND_MIN,
                                 HAND_MAX,
                             )
+                        else:
+                            # [新增] 同步条目，同时调节 DOF 2,3,4
+                            base_idx = env.ARM_DOF
+                            for sync_idx in [base_idx + 2, base_idx + 3, base_idx + 4]:
+                                joint_target[sync_idx] = np.clip(
+                                    joint_target[sync_idx] + val * panel._hand_step,
+                                    HAND_MIN,
+                                    HAND_MAX,
+                                )
 
             if not running:
                 break
@@ -1351,9 +1413,14 @@ def demo_keyboard_control(
             # ---- 构造面板显示值 ----
             if is_ee:
                 rpy_deg = _quat_to_euler_deg(ee_target_quat)
-                display_vals = np.concatenate([ee_target_pos, rpy_deg, hand_target])
+                # [修改] 添加同步条目的显示值（F2,F3,F4的平均值）
+                sync_val = np.array([(hand_target[2] + hand_target[3] + hand_target[4]) / 3.0])
+                display_vals = np.concatenate([ee_target_pos, rpy_deg, hand_target, sync_val])
             else:
-                display_vals = joint_target.copy()
+                # [修改] 添加同步条目的显示值（F2,F3,F4的平均值）
+                hand_part = joint_target[env.ARM_DOF : env.ARM_DOF + env.HAND_DOF]
+                sync_val = np.array([(hand_part[2] + hand_part[3] + hand_part[4]) / 3.0])
+                display_vals = np.concatenate([joint_target[:env.ARM_DOF + env.HAND_DOF], sync_val])
 
             info_extra = {
                 k: v
@@ -1397,23 +1464,47 @@ def demo_keyboard_control(
                 for li, txt in enumerate(overlay_texts):
                     y = 18 + li * 18
                     cv2.putText(
-                        cam_bgr, txt, (5, y),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 3, cv2.LINE_AA,
+                        cam_bgr,
+                        txt,
+                        (5, y),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.45,
+                        (0, 0, 0),
+                        3,
+                        cv2.LINE_AA,
                     )
                     cv2.putText(
-                        cam_bgr, txt, (5, y),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA,
+                        cam_bgr,
+                        txt,
+                        (5, y),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.45,
+                        (255, 255, 255),
+                        1,
+                        cv2.LINE_AA,
                     )
 
                 if terminated:
                     msg = "TASK SUCCESS! — Press R to reset"
                     cv2.putText(
-                        cam_bgr, msg, (30, 130),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 4, cv2.LINE_AA,
+                        cam_bgr,
+                        msg,
+                        (30, 130),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.9,
+                        (0, 0, 0),
+                        4,
+                        cv2.LINE_AA,
                     )
                     cv2.putText(
-                        cam_bgr, msg, (30, 130),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 80), 2, cv2.LINE_AA,
+                        cam_bgr,
+                        msg,
+                        (30, 130),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.9,
+                        (0, 255, 80),
+                        2,
+                        cv2.LINE_AA,
                     )
 
                 cv2.namedWindow("Camera", cv2.WINDOW_NORMAL)
@@ -1487,8 +1578,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--hand-step",
         type=float,
-        default=0.001,
-        help="键盘模式：灵巧手单次调整步长（米），默认 0.001",
+        default=0.0005,
+        help="键盘模式：灵巧手单次调整步长（米），默认 0.0005",
     )
     parser.add_argument(
         "--pos-step",
