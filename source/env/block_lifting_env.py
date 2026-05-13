@@ -54,6 +54,8 @@ class BlockLiftingConfig:
     obs_camera_name: str = "frontview"
 
     # 物体配置
+    # obj_size 在本环境中表示 MuJoCo 的 half-size（半尺寸）
+    # 因此实际边长 = 2 * obj_size。默认 0.025 → 实际边长 0.05m
     obj_size: float = 0.025
     obj_mass: float = 0.1
     obj_color: Tuple = (0.9, 0.2, 0.1, 1.0)
@@ -86,6 +88,19 @@ class BlockLiftingConfig:
         ]
     )
 
+    # ---- 奖励与终止条件配置 ----
+    # 掉落判定容差：物体中心低于桌面此高度即判失败
+    drop_threshold_offset: float = -0.025  # -obj_size，物体底部接触桌面
+
+    # 奖励权重
+    lift_base_reward: float = 2.0      # 离地基础奖
+    lift_progress_reward: float = 5.0  # 过程奖（与通关奖量级接近）
+    lift_success_reward: float = 10.0  # 通关大奖
+
+    # 抓握稳定性奖励参数
+    grasp_stability_weight: float = 1.0  # 触觉接触奖励权重
+    grasp_stability_threshold: float = 50.0  # 触觉激活阈值（像素值）
+
 
 # ====================== 触觉传感器配置 ======================
 
@@ -112,7 +127,7 @@ for _finger, _phalanges in FINGER_PHALANX_ORDER.items():
 
 class BlockLiftingEnv(RobotArmEnvBase):
     """
-    Block Lifting 任务强化学习环境.
+    Block Lifting 任务强化学习环境 (改进版).
     任务：从桌面抓取立方体，将其提升到目标高度以上。
     """
 
@@ -148,10 +163,16 @@ class BlockLiftingEnv(RobotArmEnvBase):
         # MuJoCo ID 缓存（-1 表示未缓存）
         self._obj_body_id: int = -1
         self._obj_free_jnt_qposadr: int = -1
+        self._target_marker_body_id: int = -1  # target_marker body ID
         self._cached_model_ptr: int = -1  # 用于检测 model 是否重建
 
         # 相机渲染器（在 _reset_scene 中按需重建）
         self._renderer: Optional[mujoco.Renderer] = None
+
+        # ---- 新增：训练辅助指标 ----
+        self._max_height: float = 0.0  # 本 episode 达到的最大高度
+        self._is_dropped: bool = False  # 是否已掉落
+        self._grasp_success: bool = False  # 是否成功抓握（触觉反馈足够）
 
     # ====================== 高度计算======================
 
@@ -159,7 +180,8 @@ class BlockLiftingEnv(RobotArmEnvBase):
         """
         计算立方体中心的世界坐标系 Z 高度.
 
-        立方体放在桌面上，底部贴桌面，中心高度 = 桌面高度 + 物体半高
+        立方体放在桌面上，底部贴桌面，中心高度 = 桌面高度 + obj_size
+        （obj_size 为 MuJoCo half-size）
 
         Returns:
             cube_z: 立方体中心的世界 Z
@@ -207,18 +229,18 @@ class BlockLiftingEnv(RobotArmEnvBase):
             size=[tc.obj_size] * 3,
             rgba=list(tc.obj_color),
             mass=tc.obj_mass,
-            friction=[1.0, 0.5, 0.001],
+            friction=[1.0, 0.5, 0.05],
             condim=4,
             conaffinity=15,
         )
         obj.add_joint(type=mujoco.mjtJoint.mjJNT_FREE, name="obj_free_joint")
 
         # 2. 目标高度 marker（可视化目标高度平面，无碰撞）
-        # 在目标高度处放置一个半透明的平面标记
         target_marker = wb.add_body(
             name="target_marker", 
             pos=[tc.obj_spawn_center[0], tc.obj_spawn_center[1], 
-                 self._table_height + tc.target_lift_height]
+                 self._table_height + tc.target_lift_height],
+            mocap=True,  # 使用 mocap 以便在运行时更新位置
         )
         target_marker.add_geom(
             type=mujoco.mjtGeom.mjGEOM_BOX,
@@ -228,7 +250,7 @@ class BlockLiftingEnv(RobotArmEnvBase):
             conaffinity=0,
         )
 
-        # 3. 相机（统一从 task_cfg.cameras 读取，不再硬编码）
+        # 3. 相机
         for cam in tc.cameras:
             spec.worldbody.add_camera(
                 name=cam.name, mode=0, pos=list(cam.pos), quat=list(cam.quat)
@@ -251,25 +273,74 @@ class BlockLiftingEnv(RobotArmEnvBase):
         }
 
     def _compute_reward(self) -> float:
-        """计算奖励：鼓励物体高度超过目标高度."""
+        """
+        奖励函数：
+        1. 离地基础奖：物体离开桌面即激活
+        2. 过程奖：随高度线性增加，权重与通关奖接近
+        3. 通关大奖：达到最终 target_height
+        4. 抓握稳定性奖：触觉传感器有激活时给予奖励
+        """
         obj_pos = self._get_obj_pos()
-        target_z = self._table_height + self.task_cfg.target_lift_height
+        current_height = obj_pos[2] - self._table_height
+        tc = self.task_cfg
 
-        # 基于高度的奖励
-        height_reward = max(0.0, obj_pos[2] - target_z)
+        # 更新本 episode 最大高度
+        self._max_height = max(self._max_height, current_height)
 
-        # 如果物体被成功提升，给予额外奖励
-        if obj_pos[2] >= target_z:
-            height_reward += 1.0
+        # 抬起阈值：物体底部离开桌面（中心高度 > obj_size）
+        lift_threshold = tc.obj_size
+        target_height = tc.target_lift_height
 
-        return height_reward
+        reward = 0.0
+
+        # ---- 1. 离地基础奖 ----
+        if current_height > lift_threshold:
+            reward += tc.lift_base_reward
+
+            # ---- 2. 上升过程奖 ----
+            # 线性插值，权重与通关奖量级接近（5 vs 10）
+            progress = (current_height - lift_threshold) / max(target_height - lift_threshold, 0.001)
+            reward += np.clip(progress, 0.0, 1.0) * tc.lift_progress_reward
+
+        # ---- 3. 最终通关大奖 ----
+        if current_height >= target_height:
+            reward += tc.lift_success_reward
+
+        # ---- 4. 抓握稳定性奖励 ----
+        # 触觉有显著激活时给予奖励，鼓励正确抓握
+        tactile = self._get_tactile_grouped()
+        tactile_active = False
+        for level in ["bottom", "middle", "top"]:
+            if level in tactile and tactile[level].max() > tc.grasp_stability_threshold:
+                tactile_active = True
+                break
+
+        if tactile_active and current_height > lift_threshold:
+            # 只有在离地且有触觉接触时才给稳定性奖励
+            reward += tc.grasp_stability_weight
+            self._grasp_success = True
+
+        return reward
 
     def _is_terminated(self) -> bool:
-        """终止条件：物体掉落（低于桌面）或成功提升并保持."""
+        """
+        终止条件：
+        - 成功：物体中心达到目标高度
+        - 失败：物体掉落（底部接触或低于桌面）
+        """
         obj_pos = self._get_obj_pos()
+        current_height = obj_pos[2] - self._table_height
+        tc = self.task_cfg
 
-        # 物体掉落到桌面以下
-        if obj_pos[2] < self._table_height - 0.05:
+        # 成功通关：达到配置的目标高度
+        if current_height >= tc.target_lift_height:
+            return True
+
+        # 任务失败：物体掉落（底部接触桌面或更低）
+        # 改进：使用 -obj_size 作为阈值，物体底部触桌即失败
+        drop_threshold = tc.drop_threshold_offset  # -obj_size = -0.025
+        if current_height < drop_threshold:
+            self._is_dropped = True
             return True
 
         return False
@@ -279,7 +350,13 @@ class BlockLiftingEnv(RobotArmEnvBase):
         return False
 
     def _reset_scene(self) -> None:
-        """随机化物体位置（限制在桌面指定区域内），重建缓存和渲染器."""
+        """
+        reset：
+        1. 随机化物体位置（限制在桌面指定区域内）
+        2. 更新 target_marker mocap 位置跟随物体
+        3. 重建缓存和渲染器
+        4. 重置辅助指标
+        """
         tc = self.task_cfg
 
         # 无条件刷新 ID 缓存（防止 model 重建后缓存失效）
@@ -321,6 +398,20 @@ class BlockLiftingEnv(RobotArmEnvBase):
             jnt_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "obj_free_joint")
             dof_adr = self.model.jnt_dofadr[jnt_id]
             self.data.qvel[dof_adr : dof_adr + 6] = 0.0  # 清除平移(3) + 旋转(3)
+
+        # ---- 更新 target_marker mocap 位置，使其 XY 跟随物体 ----
+        if self._target_marker_body_id >= 0:
+            # MuJoCo mocap body 的位置存储在 data.mocap_pos 中
+            mocap_adr = self.model.body_mocapid[self._target_marker_body_id]
+            if mocap_adr >= 0:
+                # 更新 XY 为物体当前位置，Z 保持目标高度
+                target_z = self._table_height + tc.target_lift_height
+                self.data.mocap_pos[mocap_adr] = [obj_pos[0], obj_pos[1], target_z]
+
+        # ---- 重置辅助指标 ----
+        self._max_height = 0.0
+        self._is_dropped = False
+        self._grasp_success = False
 
     # ====================== 视觉与触觉观测 ======================
 
@@ -407,11 +498,6 @@ class BlockLiftingEnv(RobotArmEnvBase):
         for level, (h, w) in _TACTILE_LEVELS.items():
             print(f"  {level}: ({h}, {w})")
 
-    # ====================== 动作应用 ======================
-
-    def _apply_action(self, action: np.ndarray) -> None:
-        """应用动作并更新任务阶段."""
-        super()._apply_action(action)
 
     # ====================== 内部辅助方法 ======================
 
@@ -449,6 +535,11 @@ class BlockLiftingEnv(RobotArmEnvBase):
             self.model.jnt_qposadr[jnt_id] if jnt_id >= 0 else -1
         )
 
+        # ---- 新增：缓存 target_marker body ID ----
+        self._target_marker_body_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_BODY, "target_marker"
+        )
+
     def _sample_pos(self, pos_range: np.ndarray) -> np.ndarray:
         """在 pos_range 定义的长方体区域内均匀采样 3D 位置."""
         lo, hi = pos_range[0], pos_range[1]
@@ -462,3 +553,16 @@ class BlockLiftingEnv(RobotArmEnvBase):
     def is_lifted(self) -> bool:
         """检查物体是否已被提升到目标高度以上."""
         return self.get_obj_height() >= self.task_cfg.target_lift_height
+
+    # ---- 辅助指标 getter 方法 ----
+    def get_max_height(self) -> float:
+        """获取本 episode 达到的最大高度."""
+        return self._max_height
+
+    def is_dropped(self) -> bool:
+        """检查物体是否已经掉落."""
+        return self._is_dropped
+
+    def is_grasp_success(self) -> bool:
+        """检查是否成功抓握（触觉反馈足够且物体离地）."""
+        return self._grasp_success

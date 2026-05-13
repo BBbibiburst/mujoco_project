@@ -1044,7 +1044,7 @@ class KeyboardControlPanel:
         self._step_var.set(f"Step:  {step}  (no timeout)")
         self._ep_var.set(f"Episode:  {ep}")
         if term:
-            self._status_var.set("Status:  ✅ Success — Press R to reset")
+            self._status_var.set("Status:  Success — Press R to reset")
         else:
             self._status_var.set("Status:  ▶ Running...")
 
@@ -1485,7 +1485,7 @@ def demo_keyboard_control(
                     )
 
                 if terminated:
-                    msg = "TASK SUCCESS! — Press R to reset"
+                    msg = "TASK SUCCESS!"
                     cv2.putText(
                         cam_bgr,
                         msg,
