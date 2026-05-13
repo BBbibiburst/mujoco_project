@@ -457,6 +457,29 @@ class RobotArmEnvBase(gym.Env, ABC):
         if self.reader is None:
             return None
         return self.reader.read_image(self.data)
+    
+    def get_site_pos(self, site_name: str) -> np.ndarray:
+        """
+        返回指定 Site 的世界坐标位置.
+        
+        Args:
+            site_name (str): MuJoCo 模型中 Site 的名称。
+            
+        Returns:
+            np.ndarray: 形状为 (3,) 的 numpy 数组，表示 Site 在世界坐标系下的 (x, y, z) 坐标。
+            
+        Raises:
+            ValueError: 当提供的 site_name 在模型中不存在时抛出。
+        """
+        # 1. 根据名称获取 Site 的 ID
+        site_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SITE, site_name)
+        
+        # 2. 检查 ID 是否有效
+        if site_id == -1:
+            raise ValueError(f"Site '{site_name}' 不存在于模型中。")
+            
+        # 3. 从 data 中获取并返回该 Site 的世界坐标
+        return self.data.site_xpos[site_id].copy()
 
     # ====================== 私有实现 ======================
 

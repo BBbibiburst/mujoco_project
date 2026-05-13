@@ -1,12 +1,14 @@
 <?xml version='1.0' encoding='utf-8'?>
 <mujoco model="dexterity_hand_assembly.SLDASM">
-  <option iterations="100" timestep="0.001" solver="Newton" gravity="0 0 -9.81" impratio="10" cone="elliptic"/>
+  <option iterations="100" timestep="0.001" solver="Newton" gravity="0 0 -9.81" impratio="10"
+    cone="elliptic" />
 
   <compiler angle="radian" meshdir="meshes" eulerseq="zyx" autolimits="true" />
 
   <default>
     <joint limited="true" damping="0.01" armature="0.01" frictionloss="0.01" range="-3.14 3.14" />
-    <geom condim="4" contype="1" conaffinity="15" friction="2.0 0.5 0.05" solref="0.005 1.0" solimp="0.99 0.999 0.001"/>
+    <geom condim="4" contype="1" conaffinity="15" friction="2.0 0.5 0.05" solref="0.005 1.0"
+      solimp="0.99 0.999 0.001" />
     <motor ctrllimited="true" />
     <equality solref="0.001 2" />
     <default class="visualgeom">
@@ -131,7 +133,8 @@
           density="0" group="1" class="visualgeom" />
         <geom pos="0.0138061 -0.0104899 -2.5e-05" quat="0.00268632 -0.00268632 -0.707102 0.707102"
           type="mesh" rgba="0.15 0.15 0.15 1" mesh="skin_0_0_p" contype="3" conaffinity="3"
-          density="0" group="1" class="visualgeom" friction="20.0 5.0 1.0" solref="0.005 1.0" solimp="0.99 0.999 0.001" mass="0.001"
+          density="0" group="1" class="visualgeom" friction="20.0 5.0 1.0" solref="0.005 1.0"
+          solimp="0.99 0.999 0.001" mass="0.001"
           name="skin_0_0_p" />
         <body name="finger_second_0_p" pos="0.0320179 -0.00661611 -2.5e-05"
           quat="1.77121e-05 0 0 -1">
@@ -144,12 +147,15 @@
             density="0" group="1" class="visualgeom" />
           <geom pos="-0.0121856 0.00345375 0" quat="0.706897 -0.706897 0.0172099 -0.0172099"
             type="mesh" rgba="0.15 0.15 0.15 1" mesh="skin_0_1_p" contype="3" conaffinity="3"
-            density="0" group="1" class="visualgeom" friction="20.0 5.0 1.0" solref="0.005 1.0" solimp="0.99 0.999 0.001" mass="0.001"
+            density="0" group="1" class="visualgeom" friction="20.0 5.0 1.0" solref="0.005 1.0"
+            solimp="0.99 0.999 0.001" mass="0.001"
             name="skin_0_1_p" />
           <geom pos="-0.0313116 0.0072319 0" quat="0.700031 -0.700031 0.0997823 -0.0997823"
             type="mesh" rgba="0.15 0.15 0.15 1" mesh="skin_0_2_p" contype="3" conaffinity="3"
-            density="0" group="1" class="visualgeom" friction="20.0 5.0 1.0" solref="0.005 1.0" solimp="0.99 0.999 0.001" mass="0.001"
+            density="0" group="1" class="visualgeom" friction="20.0 5.0 1.0" solref="0.005 1.0"
+            solimp="0.99 0.999 0.001" mass="0.001"
             name="skin_0_2_p" />
+          <site name="fingertip_0" pos="-0.035 0.008 0" size="0.001" type="sphere" />
           <site name="bar_close_0_p_site" pos="0.0047421 -0.00564363 -2.5e-05" size="0.001"
             type="sphere" />
         </body>
@@ -193,7 +199,8 @@
           density="0" group="1" class="visualgeom" />
         <geom pos="-0.0138058 0.0104904 -2.5e-05" quat="0.707102 -0.707102 0.00269886 -0.00269886"
           type="mesh" rgba="0.15 0.15 0.15 1" mesh="skin_1_0_p" contype="3" conaffinity="3"
-          density="0" group="1" class="visualgeom" friction="20.0 5.0 1.0" solref="0.005 1.0" solimp="0.99 0.999 0.001" mass="0.001"
+          density="0" group="1" class="visualgeom" friction="20.0 5.0 1.0" solref="0.005 1.0"
+          solimp="0.99 0.999 0.001" mass="0.001"
           name="skin_1_0_p" />
         <body name="finger_second_1_p" pos="-0.0320177 0.00661724 -2.5e-05">
           <inertial pos="-0.0247032 0.000261663 -4.57519e-07"
@@ -205,12 +212,15 @@
             density="0" group="1" class="visualgeom" />
           <geom pos="-0.0136733 0.00377146 0" quat="0.706743 -0.706743 0.0226841 -0.0226841"
             type="mesh" rgba="0.15 0.15 0.15 1" mesh="skin_1_1_p" contype="3" conaffinity="3"
-            density="0" group="1" class="visualgeom" friction="20.0 5.0 1.0" solref="0.005 1.0" solimp="0.99 0.999 0.001" mass="0.001"
+            density="0" group="1" class="visualgeom" friction="20.0 5.0 1.0" solref="0.005 1.0"
+            solimp="0.99 0.999 0.001" mass="0.001"
             name="skin_1_1_p" />
           <geom pos="-0.037375 0.00857068 0" quat="0.699627 -0.699627 0.102575 -0.102575"
             type="mesh" rgba="0.15 0.15 0.15 1" mesh="skin_1_2_p" contype="3" conaffinity="3"
-            density="0" group="1" class="visualgeom" friction="20.0 5.0 1.0" solref="0.005 1.0" solimp="0.99 0.999 0.001" mass="0.001"
+            density="0" group="1" class="visualgeom" friction="20.0 5.0 1.0" solref="0.005 1.0"
+            solimp="0.99 0.999 0.001" mass="0.001"
             name="skin_1_2_p" />
+          <site name="fingertip_1" pos="-0.041 0.009 0" size="0.001" type="sphere" />
           <site name="bar_close_1_p_site" pos="0.0047421 -0.00564363 -2.5e-05" size="0.001"
             type="sphere" />
         </body>
@@ -254,7 +264,8 @@
           density="0" group="1" class="visualgeom" />
         <geom pos="-0.0138058 0.0104904 -2.5e-05" quat="0.7066 -0.7066 0.0267764 -0.0267764"
           type="mesh" rgba="0.15 0.15 0.15 1" mesh="skin_2_0_p" contype="3" conaffinity="3"
-          density="0" group="1" class="visualgeom" friction="20.0 5.0 1.0" solref="0.005 1.0" solimp="0.99 0.999 0.001" mass="0.001"
+          density="0" group="1" class="visualgeom" friction="20.0 5.0 1.0" solref="0.005 1.0"
+          solimp="0.99 0.999 0.001" mass="0.001"
           name="skin_2_0_p" />
         <body name="finger_second_2_p" pos="-0.0314644 0.00653055 -2.5e-05">
           <inertial pos="-0.0280491 0.000830209 -1.35316e-06"
@@ -266,11 +277,14 @@
             density="0" group="1" class="visualgeom" />
           <geom pos="-0.0164115 0.0042075 0" quat="0.7066 -0.7066 0.0267764 -0.0267764" type="mesh"
             rgba="0.15 0.15 0.15 1" mesh="skin_2_1_p" contype="3" conaffinity="3" density="0"
-            group="1" class="visualgeom" friction="20.0 5.0 1.0" solref="0.005 1.0" solimp="0.99 0.999 0.001" mass="0.001" name="skin_2_1_p" />
+            group="1" class="visualgeom" friction="20.0 5.0 1.0" solref="0.005 1.0"
+            solimp="0.99 0.999 0.001" mass="0.001" name="skin_2_1_p" />
           <geom pos="-0.0435682 0.00981795 0" quat="0.699443 -0.699443 0.103827 -0.103827"
             type="mesh" rgba="0.15 0.15 0.15 1" mesh="skin_2_2_p" contype="3" conaffinity="3"
-            density="0" group="1" class="visualgeom" friction="20.0 5.0 1.0" solref="0.005 1.0" solimp="0.99 0.999 0.001" mass="0.001"
+            density="0" group="1" class="visualgeom" friction="20.0 5.0 1.0" solref="0.005 1.0"
+            solimp="0.99 0.999 0.001" mass="0.001"
             name="skin_2_2_p" />
+          <site name="fingertip_2" pos="-0.047 0.010 0" size="0.001" type="sphere" />
           <site name="bar_close_2_p_site" pos="0.0041888 -0.00555694 -2.5e-05" size="0.001"
             type="sphere" />
         </body>
@@ -313,7 +327,8 @@
           density="0" group="1" class="visualgeom" />
         <geom pos="-0.0138058 0.0104904 -2.5e-05" quat="0.707102 -0.707102 0.00269887 -0.00269887"
           type="mesh" rgba="0.15 0.15 0.15 1" mesh="skin_3_0_p" contype="3" conaffinity="3"
-          density="0" group="1" class="visualgeom" friction="20.0 5.0 1.0" solref="0.005 1.0" solimp="0.99 0.999 0.001" mass="0.001"
+          density="0" group="1" class="visualgeom" friction="20.0 5.0 1.0" solref="0.005 1.0"
+          solimp="0.99 0.999 0.001" mass="0.001"
           name="skin_3_0_p" />
         <body name="finger_second_3_p" pos="-0.0314644 0.00653055 -2.5e-05">
           <inertial pos="-0.0251508 0.000302307 -1.11393e-06"
@@ -325,11 +340,14 @@
             density="0" group="1" class="visualgeom" />
           <geom pos="-0.0144028 0.00386948 0" quat="0.706743 -0.706743 0.0226841 -0.0226841"
             type="mesh" rgba="0.15 0.15 0.15 1" mesh="skin_3_1_p" contype="3" conaffinity="3"
-            density="0" group="1" class="visualgeom" friction="20.0 5.0 1.0" solref="0.005 1.0" solimp="0.99 0.999 0.001" mass="0.001"
+            density="0" group="1" class="visualgeom" friction="20.0 5.0 1.0" solref="0.005 1.0"
+            solimp="0.99 0.999 0.001" mass="0.001"
             name="skin_3_1_p" />
           <geom pos="-0.0377007 0.00859524 0" quat="0.699632 -0.699632 0.10254 -0.10254" type="mesh"
             rgba="0.15 0.15 0.15 1" mesh="skin_3_2_p" contype="3" conaffinity="3" density="0"
-            group="1" class="visualgeom" friction="20.0 5.0 1.0" solref="0.005 1.0" solimp="0.99 0.999 0.001" mass="0.001" name="skin_3_2_p" />
+            group="1" class="visualgeom" friction="20.0 5.0 1.0" solref="0.005 1.0"
+            solimp="0.99 0.999 0.001" mass="0.001" name="skin_3_2_p" />
+            <site name="fingertip_3" pos="-0.041 0.009 0" size="0.001" type="sphere" />
           <site name="bar_close_3_p_site" pos="0.0041888 -0.00555694 -2.5e-05" size="0.001"
             type="sphere" />
         </body>
@@ -382,7 +400,8 @@
             density="0" group="1" class="visualgeom" />
           <geom pos="-0.0426457 0.00930675 0" quat="0.274244 -0.274244 -0.651759 0.651759"
             type="mesh" rgba="0.15 0.15 0.15 1" mesh="skin_4_0_p" contype="3" conaffinity="3"
-            density="0" group="1" class="visualgeom" friction="20.0 5.0 1.0" solref="0.005 1.0" solimp="0.99 0.999 0.001" mass="0.001"
+            density="0" group="1" class="visualgeom" friction="20.0 5.0 1.0" solref="0.005 1.0"
+            solimp="0.99 0.999 0.001" mass="0.001"
             name="skin_4_0_p" />
           <body name="thumb_grasp_act_root_p" pos="0.00120462 0.00869237 0"
             quat="0.705334 0 0 -0.708875">
@@ -411,7 +430,8 @@
               density="0" group="1" class="visualgeom" />
             <geom pos="0.0160983 -0.00255215 0" quat="0.190753 -0.190753 0.680892 -0.680892"
               type="mesh" rgba="0.15 0.15 0.15 1" mesh="skin_4_1_p" contype="3" conaffinity="3"
-              density="0" group="1" class="visualgeom" friction="20.0 5.0 1.0" solref="0.005 1.0" solimp="0.99 0.999 0.001" mass="0.001"
+              density="0" group="1" class="visualgeom" friction="20.0 5.0 1.0" solref="0.005 1.0"
+              solimp="0.99 0.999 0.001" mass="0.001"
               name="skin_4_1_p" />
             <body name="thumb_third_p" pos="0.020306 0.011797 -0.002475">
               <inertial pos="0.0153256 0.00977074 0.00247144"
@@ -425,6 +445,7 @@
                 type="mesh" rgba="0.15 0.15 0.15 1" mesh="skin_4_2_p" contype="3"
                 conaffinity="3" density="0" group="1" class="visualgeom" friction="20.0 5.0 1.0"
                 solref="0.005 1.0" solimp="0.99 0.999 0.001" mass="0.001" name="skin_4_2_p" />
+              <site name="fingertip_thumb" pos="0.022 0.003 0.005" size="0.001" type="sphere" />
               <site name="thumb_bar_second_close_p_site" pos="-0.00459613 0.00385689 0.0025"
                 size="0.001" type="sphere" />
             </body>

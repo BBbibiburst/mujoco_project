@@ -249,6 +249,83 @@ class EETrajectoryVisualizer:
         self.target_quat = None
 
 
+# ====================== 【新增】指尖连线中点可视化 ======================
+
+
+@dataclass
+class FingertipMidpointStyle:
+    """指尖连线中点可视化样式配置."""
+    line_rgba: np.ndarray = field(
+        default_factory=lambda: np.array([1.0, 0.8, 0.0, 0.9])  # 金黄色
+    )
+    midpoint_rgba: np.ndarray = field(
+        default_factory=lambda: np.array([1.0, 0.2, 0.8, 1.0])  # 品红色
+    )
+    endpoint_rgba: np.ndarray = field(
+        default_factory=lambda: np.array([0.2, 0.8, 1.0, 0.7])  # 浅蓝色
+    )
+    line_width: float = 0.003  # 3mm
+    midpoint_size: float = 0.012  # 12mm
+    endpoint_size: float = 0.008  # 8mm
+
+
+class FingertipMidpointVisualizer:
+    """
+    绘制 thumb 和 finger_3 指尖连线及其中点.
+
+    使用 env.get_site_pos() 获取两个 fingertip site 的世界坐标，
+    在 viewer 中绘制：
+      - 两个端点（半透明小球）
+      - 连线（圆柱体）
+      - 中点（高亮球体）
+    """
+
+    def __init__(self, style: Optional[FingertipMidpointStyle] = None):
+        self.style = style or FingertipMidpointStyle()
+        self.thumb_pos: Optional[np.ndarray] = None
+        self.finger3_pos: Optional[np.ndarray] = None
+        self.midpoint: Optional[np.ndarray] = None
+
+    def update(self, env: RobotArmEnvBase):
+        """从环境获取两个 fingertip 位置并计算中点."""
+        try:
+            self.thumb_pos = env.get_site_pos("inspirehand_fingertip_thumb").copy()
+            self.finger3_pos = env.get_site_pos("inspirehand_fingertip_3").copy()
+            self.midpoint = (self.thumb_pos + self.finger3_pos) / 2.0
+        except ValueError:
+            # 如果 site 不存在则静默跳过
+            self.thumb_pos = None
+            self.finger3_pos = None
+            self.midpoint = None
+            print("[Warning] 无法获取 fingertip site 位置，指尖中点可视化将被跳过。")
+
+    def draw(self, viewer) -> None:
+        """在 MuJoCo viewer 中绘制几何体."""
+        if self.midpoint is None or self.thumb_pos is None or self.finger3_pos is None:
+            return
+
+        max_geoms = 1000
+        safety_margin = 50
+
+        # 绘制中点（品红色大球，高亮）
+        if viewer.user_scn.ngeom < max_geoms - safety_margin:
+            geom_id = viewer.user_scn.ngeom
+            mujoco.mjv_initGeom(
+                viewer.user_scn.geoms[geom_id],
+                type=mujoco.mjtGeom.mjGEOM_SPHERE,
+                size=[self.style.midpoint_size, 0, 0],
+                pos=self.midpoint,
+                mat=np.eye(3).flatten(),
+                rgba=self.style.midpoint_rgba,
+            )
+            viewer.user_scn.ngeom += 1
+
+    def reset(self):
+        self.thumb_pos = None
+        self.finger3_pos = None
+        self.midpoint = None
+
+
 # ====================== 通用可视化工具 ======================
 
 
@@ -321,13 +398,15 @@ def demo_random_policy(
     action_mode: str = "joint",
     controller_type: str = "osc",
     show_ee_traj: bool = True,
+    show_fingertip_midpoint: bool = True,  # [新增] 控制是否显示指尖中点
 ):
-    """随机策略演示：仿真窗口 + 触觉热力图 + 任务状态信息 + 末端轨迹可视化."""
+    """随机策略演示：仿真窗口 + 触觉热力图 + 任务状态信息 + 末端轨迹可视化 + 指尖中点."""
     reg = TASK_REGISTRY[task_name]
     print("=" * 65)
     print(f" [Demo] 随机策略 | 任务={reg['display_name']}")
     print(f" action_mode={action_mode}, controller={controller_type}")
     print(f" 末端轨迹可视化: {'开启' if show_ee_traj else '关闭'}")
+    print(f" 指尖中点可视化: {'开启' if show_fingertip_midpoint else '关闭'}")  # [新增]
     print("=" * 65)
 
     robot_cfg = RobotConfig(
@@ -352,6 +431,11 @@ def demo_random_policy(
         if show_ee_traj:
             traj_vis = EETrajectoryVisualizer(TrajectoryVisualStyle(), max_history=30)
 
+        # [新增] 初始化指尖中点可视化器
+        ft_vis = None
+        if show_fingertip_midpoint:
+            ft_vis = FingertipMidpointVisualizer()
+
         with mujoco.viewer.launch_passive(env.model, env.data) as viewer:
             episode = 0
             step = 0
@@ -368,6 +452,15 @@ def demo_random_policy(
                     if actual_pos is not None:
                         traj_vis.update(actual_pos)
                         traj_vis.draw(viewer)
+
+                # [新增] 指尖中点可视化
+                if show_fingertip_midpoint and ft_vis is not None:
+                    # 注意：如果上面 traj_vis 已经设置了 ngeom=0，这里不需要重复设置
+                    # 但如果只开启 fingertip 可视化，需要确保 ngeom 重置
+                    if not show_ee_traj:
+                        viewer.user_scn.ngeom = 0
+                    ft_vis.update(env)
+                    ft_vis.draw(viewer)
 
                 # 触觉热力图
                 heatmap = render_tactile_heatmap(obs)
@@ -393,6 +486,8 @@ def demo_random_policy(
                     step = 0
                     if traj_vis is not None:
                         traj_vis.reset()
+                    if ft_vis is not None:  # [新增]
+                        ft_vis.reset()
                     if episode < n_episodes:
                         obs, info = env.reset()
 
@@ -1119,6 +1214,7 @@ def demo_keyboard_control(
     hand_step: float = 0.0005,
     pos_step: float = 0.01,
     rot_step: float = 0.05,
+    show_fingertip_midpoint: bool = True,  # [新增] 控制是否显示指尖中点
 ):
     """
     键盘控制模式（joint / ee 双模式，禁用超时，仅手动 R 重置）.
@@ -1154,6 +1250,7 @@ def demo_keyboard_control(
         )
     else:
         print(f" 臂步长={arm_step}rad  手步长={hand_step}m")
+    print(f" 指尖中点可视化: {'开启' if show_fingertip_midpoint else '关闭'}")  # [新增]
     print("=" * 65)
 
     robot_cfg = RobotConfig(
@@ -1188,6 +1285,10 @@ def demo_keyboard_control(
     panel.wait_ready(timeout=10.0)
 
     traj_vis = EETrajectoryVisualizer(TrajectoryVisualStyle(), max_history=40)
+    
+    # [新增] 初始化指尖中点可视化器
+    ft_vis = FingertipMidpointVisualizer() if show_fingertip_midpoint else None
+    
     obs, info = env.reset(seed=42)
 
     # ---- 累积目标初始化 ----
@@ -1344,6 +1445,8 @@ def demo_keyboard_control(
 
                 obs, info = env.reset()
                 traj_vis.reset()
+                if ft_vis is not None:  # [新增]
+                    ft_vis.reset()
                 _init_targets_from_env()
 
                 episode += 1
@@ -1409,6 +1512,11 @@ def demo_keyboard_control(
                     target_quat=ee_target_quat,
                 )
                 traj_vis.draw(viewer)
+
+            # [新增] 指尖中点可视化
+            if ft_vis is not None:
+                ft_vis.update(env)
+                ft_vis.draw(viewer)
 
             # ---- 构造面板显示值 ----
             if is_ee:
@@ -1558,6 +1666,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--no-traj", action="store_true", help="禁用末端执行器轨迹可视化"
     )
+    # [新增] 控制指尖中点可视化开关
+    parser.add_argument(
+        "--no-ft-mid", action="store_true", help="禁用指尖连线中点可视化"
+    )
     parser.add_argument("--episodes", type=int, default=3, help="演示回合数")
     parser.add_argument(
         "--action-mode",
@@ -1597,6 +1709,7 @@ if __name__ == "__main__":
 
     render = not args.no_render
     show_traj = not args.no_traj
+    show_ft_mid = not args.no_ft_mid  # [新增]
 
     print(f"\n{'='*65}")
     print(f"  任务:       {TASK_REGISTRY[args.task]['display_name']}")
@@ -1604,9 +1717,11 @@ if __name__ == "__main__":
     if args.mode == "random":
         print(f"  渲染:       {'是' if render else '否'}")
         print(f"  轨迹可视化: {'是' if show_traj else '否'}")
+        print(f"  指尖中点:   {'是' if show_ft_mid else '否'}")  # [新增]
     elif args.mode == "keyboard":
         print(f"  臂步长:     {args.arm_step} rad")
         print(f"  手步长:     {args.hand_step} m")
+        print(f"  指尖中点:   {'是' if show_ft_mid else '否'}")  # [新增]
     print(f"{'='*65}\n")
 
     if args.mode == "random":
@@ -1617,6 +1732,7 @@ if __name__ == "__main__":
             action_mode=args.action_mode,
             controller_type=args.controller,
             show_ee_traj=show_traj,
+            show_fingertip_midpoint=show_ft_mid,  # [新增]
         )
     elif args.mode == "verify":
         demo_verify_observation_space(task_name=args.task)
@@ -1631,9 +1747,4 @@ if __name__ == "__main__":
         demo_keyboard_control(
             task_name=args.task,
             action_mode=args.action_mode,
-            controller_type=args.controller,
-            arm_step=args.arm_step,
-            hand_step=args.hand_step,
-            pos_step=args.pos_step,
-            rot_step=args.rot_step,
         )
