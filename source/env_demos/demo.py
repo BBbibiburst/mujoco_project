@@ -23,7 +23,9 @@ from source.env_demos.modes import (
     demo_verify_observation_space,
     demo_benchmark,
     demo_keyboard_control,
+    demo_pipeline,
 )
+
 
 
 def main():
@@ -39,7 +41,7 @@ def main():
     )
     parser.add_argument(
         "--mode",
-        choices=["random", "verify", "benchmark", "keyboard"],
+        choices=["random", "verify", "benchmark", "keyboard", "pipeline"],
         default="random",
         help=(
             "演示模式：\n"
@@ -47,6 +49,7 @@ def main():
             "  verify    观测空间验证\n"
             "  benchmark 无渲染基准测试\n"
             "  keyboard  键盘控制\n"
+            "  pipeline  流程化任务执行（自动策略）\n"
         ),
     )
     parser.add_argument("--no-render", action="store_true", help="禁用可视化（random模式）")
@@ -107,6 +110,16 @@ def main():
             hand_step=args.hand_step,
             pos_step=args.pos_step,
             rot_step=args.rot_step,
+            show_fingertip_midpoint=show_ft_mid,
+        )
+    elif args.mode == "pipeline":
+        demo_pipeline(
+            task_name=args.task,
+            n_episodes=args.episodes,
+            render=render,
+            action_mode=args.action_mode,
+            controller_type=args.controller,
+            show_ee_traj=show_traj,
             show_fingertip_midpoint=show_ft_mid,
         )
 

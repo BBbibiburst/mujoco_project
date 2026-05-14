@@ -15,6 +15,7 @@ import numpy as np
 
 from source.env.base_env import RobotArmEnvBase
 from source.env.env_config import RobotConfig, SimConfig, ActionConfig
+from source.env_demos.pipeline_overlay import PipelineStateOverlay
 from source.env_demos.registry import TASK_REGISTRY, load_task
 
 from .heatmap import render_tactile_heatmap
@@ -23,6 +24,7 @@ from .visualizers import (
     FingertipMidpointVisualizer,
 )
 from .keyboard_panel import KeyboardControlPanel
+from .strategies import create_strategy
 
 
 # ====================== 共用辅助 ======================
@@ -478,3 +480,137 @@ def _overlay_camera(obs, action_mode, reward, ep_reward, step, episode, terminat
     cv2.namedWindow("Camera", cv2.WINDOW_NORMAL)
     cv2.imshow("Camera", cam_bgr)
     cv2.resizeWindow("Camera", 640, 480)
+    
+    
+# ====================== 模式 5：流程化任务执行 ======================
+
+def demo_pipeline(
+    task_name: str = "block_lifting",
+    n_episodes: int = 3,
+    render: bool = True,
+    action_mode: str = "ee",
+    controller_type: str = "osc",
+    show_ee_traj: bool = True,
+    show_fingertip_midpoint: bool = True,
+) -> None:
+    """
+    流程化任务执行：按任务类型自动编排行为序列完成目标.
+    实时显示当前阶段、进度和策略状态.
+    """
+    from .registry import load_strategy
+    from .pipeline_overlay import PipelineStateOverlay
+
+    reg = TASK_REGISTRY[task_name]
+    print(f"\n{'='*65}\n [Demo] 流程化执行 | 任务={reg['display_name']}")
+    print(f" action_mode={action_mode}, controller={controller_type}")
+    print(f"{'='*65}")
+
+    robot_cfg = _make_robot_cfg(
+        action_mode=action_mode, controller_type=controller_type,
+        max_episode_steps=800,
+        action_scale=0.05,
+        action_scale_rot=0.1,
+        action_scale_hand=0.005,
+        control_freq=20.0,
+    )
+    env = load_task(task_name, robot_cfg)
+    strategy = load_strategy(task_name)
+    obs, info = env.reset(seed=42)
+    strategy.reset()
+
+    # 初始化通用叠加器
+    overlay = PipelineStateOverlay(strategy)
+
+    traj_vis = EETrajectoryVisualizer(TrajectoryVisualStyle(), max_history=100) if show_ee_traj else None
+    ft_vis = FingertipMidpointVisualizer() if show_fingertip_midpoint else None
+
+    with mujoco.viewer.launch_passive(env.model, env.data) as viewer:
+        viewer.cam.distance = 1.5
+        viewer.cam.elevation = -30
+        viewer.cam.azimuth = 120
+
+        episode, step = 0, 0
+
+        while viewer.is_running() and episode < n_episodes:
+            running, action, terminated = strategy.tick(obs, info, step, env)
+
+            if not running:
+                terminated = strategy.success
+                truncated = False
+                obs, reward, _, _, info = env.step(np.zeros(env.action_space.shape))
+            else:
+                obs, reward, terminated, truncated, info = env.step(action)
+                step += 1
+
+            # ---- 通用状态更新与检测 ----
+            switch_msg = overlay.update(step)
+            if switch_msg:
+                print(switch_msg)  # 阶段切换时打印
+
+            # ---- 可视化 ----
+            viewer.user_scn.ngeom = 0
+            if traj_vis:
+                actual = env.get_ee_pose()[0]
+                traj_vis.update(actual)
+                traj_vis.draw(viewer)
+            if ft_vis:
+                ft_vis.update(env)
+                ft_vis.draw(viewer)
+
+            # 通用阶段指示器
+            overlay.draw_viewer_indicator(viewer)
+
+            # ---- OpenCV 通用叠加 ----
+            _show_cv_windows_pipeline(obs, overlay, reward, env)
+
+            viewer.sync()
+
+            if terminated or truncated:
+                status = "✓ 成功" if strategy.success else "✗ 失败/超时"
+                print(f"\n  [回合 {episode+1} 结束] {status}")
+                print(f"   总步数: {step} | 最终阶段: {overlay._get_phase_name(strategy.phase_idx)}")
+
+                # 打印策略状态字典（通用）
+                status_dict = strategy.get_status_dict()
+                for k, v in status_dict.items():
+                    print(f"   {k}: {v}")
+
+                print(f"  {'='*40}")
+
+                episode += 1
+                step = 0
+                if traj_vis:
+                    traj_vis.reset()
+                if ft_vis:
+                    ft_vis.reset()
+                overlay.reset()
+                if episode < n_episodes:
+                    obs, info = env.reset()
+                    strategy.reset()
+
+    cv2.destroyAllWindows()
+    env.close()
+
+
+def _show_cv_windows_pipeline(obs: dict, overlay: PipelineStateOverlay,
+                              reward: float, env) -> None:
+    """
+    通用 OpenCV 显示，不依赖具体任务.
+    """
+    # 触觉热力图
+    from .heatmap import render_tactile_heatmap
+    heatmap = render_tactile_heatmap(obs)
+    cv2.namedWindow("Tactile (Top/Mid/Bot)", cv2.WINDOW_NORMAL)
+    cv2.imshow("Tactile (Top/Mid/Bot)", heatmap)
+    cv2.resizeWindow("Tactile (Top/Mid/Bot)", 1000, 480)
+
+    # 相机画面 + 通用状态叠加
+    if "camera_rgb" in obs:
+        cam_bgr = cv2.cvtColor(obs["camera_rgb"], cv2.COLOR_RGB2BGR)
+        cam_bgr = overlay.draw_camera_overlay(cam_bgr, reward)
+
+        cv2.namedWindow("Camera", cv2.WINDOW_NORMAL)
+        cv2.imshow("Camera", cam_bgr)
+        cv2.resizeWindow("Camera", 640, 480)
+
+    cv2.waitKey(1)
