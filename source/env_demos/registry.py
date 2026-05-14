@@ -19,7 +19,6 @@ TASK_REGISTRY: Dict[str, Dict[str, Any]] = {
         "env_class":    "BlockLiftingEnv",
         "cfg_class":    "BlockLiftingConfig",
         "display_name": "Block Lifting",
-        "default_cfg_kwargs": {},
     },
 }
 
@@ -42,6 +41,4 @@ def load_task(task_name: str, robot_cfg: RobotConfig) -> RobotArmEnvBase:
     reg = TASK_REGISTRY[task_name]
     mod       = importlib.import_module(reg["module"])
     EnvClass  = getattr(mod, reg["env_class"])
-    CfgClass  = getattr(mod, reg["cfg_class"])
-    task_cfg  = CfgClass(**reg["default_cfg_kwargs"])
-    return EnvClass(robot_config=robot_cfg, task_config=task_cfg)
+    return EnvClass(robot_config=robot_cfg)
