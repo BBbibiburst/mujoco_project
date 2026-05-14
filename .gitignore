@@ -4,6 +4,9 @@ __pycache__/
 *.pyo
 *.pyd
 
+#vscode
+.vscode/
+
 # 缓存
 cache/
 
