@@ -1,7 +1,7 @@
 """
 BlockLifting 任务策略实现.
 
-阶段序列: open_hand → approach → align → descend → grasp → lift → hold
+阶段序列: make_gripper_hand_form → approach → align → descend → grasp → lift → hold
 """
 
 from typing import Tuple
@@ -27,7 +27,7 @@ class BlockLiftingStrategy(TaskStrategy):
     BlockLifting 流程化策略.
 
     阶段:
-      0. open_hand : 张开手
+      0. make_gripper_hand_form : 张成夹爪形准备抓取
       1. approach  : 移动到方块上方
       2. align     : 调整末端姿态（垂直向下）
       3. descend   : 下降接触方块
@@ -44,37 +44,34 @@ class BlockLiftingStrategy(TaskStrategy):
     LIFT_SPEED: float = 0.02
     MIN_PHASE_STEPS: int = 5
 
+    _HAND_MAX: float = 0.0095
+    _HAND_MIN: float = 0.0
     GRASP_QUAT = np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float64)
-    HAND_OPEN = np.zeros(6, dtype=np.float64)
-    HAND_CLOSE = np.full(6, 0.0095, dtype=np.float64)
+    HAND_OPEN = np.full(6, _HAND_MIN, dtype=np.float64)
+    HAND_CLOSE = np.full(6, _HAND_MAX, dtype=np.float64)
+    HAND_GRIPPER = np.array([_HAND_MAX, _HAND_MAX, _HAND_MIN, _HAND_MIN, _HAND_MIN, _HAND_MAX])
 
     @property
     def phases(self) -> list:
-        return ["open_hand", "approach", "align", "descend", "grasp", "lift", "hold"]
+        return ["make_gripper_hand_form", "approach", "align", "descend", "grasp", "lift", "hold"]
 
     def execute_phase(self, phase_idx: int, ctx: PhaseContext) -> Tuple[PhaseResult, ActionContext]:
         phase = self.phases[phase_idx]
         env = ctx.env
         act = ActionContext()
 
-        if "obj_pos" not in ctx.memory:
-            try:
-                obj_pos = env.get_body_pos("target_object")
-                ctx.memory["obj_pos"] = obj_pos.copy()
-                ctx.memory["table_height"] = getattr(env, '_table_height', 0.55)
-            except ValueError:
-                ctx.memory["obj_pos"] = np.array([0.45, 0.0, 0.58])
-                ctx.memory["table_height"] = 0.55
-
-        obj_pos = ctx.memory["obj_pos"]
-        table_z = ctx.memory["table_height"]
+        # 获取方块位置和桌面高度
+        obj_pos = env.get_block_position()  # [x, y, z]
+        table_z = env._table_height
         ee_pos, ee_quat = env.get_ee_pose()
         hand_qpos = env.get_hand_qpos()
 
-        if phase == "open_hand":
-            act.hand_target = self.HAND_OPEN.copy()
+        if phase == "make_gripper_hand_form":
+            act.hand_target = self.HAND_GRIPPER.copy()
             act.ee_delta_pos = np.zeros(3)
-            if ctx.phase_step > self.MIN_PHASE_STEPS and np.all(hand_qpos < 0.001):
+            act.ee_delta_rot = np.zeros(3)
+            max_error = np.max(np.abs(hand_qpos - act.hand_target))
+            if ctx.phase_step > self.MIN_PHASE_STEPS and max_error < 0.001:
                 return PhaseResult.NEXT, act
             return PhaseResult.CONTINUE, act
 
@@ -85,7 +82,7 @@ class BlockLiftingStrategy(TaskStrategy):
             if dist > self.APPROACH_SPEED:
                 delta = delta / dist * self.APPROACH_SPEED
             act.ee_delta_pos = delta
-            act.hand_target = self.HAND_OPEN.copy()
+            act.hand_target = self.HAND_GRIPPER.copy()
             if ctx.phase_step > self.MIN_PHASE_STEPS and distance(ee_pos, target_pos) < 0.02:
                 return PhaseResult.NEXT, act
             return PhaseResult.CONTINUE, act
@@ -125,7 +122,7 @@ class BlockLiftingStrategy(TaskStrategy):
                 delta = delta / dist * self.DESCEND_SPEED
             act.ee_delta_pos = delta
             act.ee_delta_rot = np.zeros(3)
-            act.hand_target = self.HAND_OPEN.copy()
+            act.hand_target = self.HAND_GRIPPER.copy()
             if ctx.phase_step > self.MIN_PHASE_STEPS and distance(ee_pos, target_pos) < 0.02:
                 return PhaseResult.NEXT, act
             return PhaseResult.CONTINUE, act

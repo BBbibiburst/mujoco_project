@@ -295,6 +295,21 @@ class BlockLiftingEnv(RobotArmEnvBase):
     def verify_tactile(self) -> None:
         """打印触觉传感器分辨率（调试用）."""
         self._tactile.verify_shapes(self.data)
+        
+    def get_block_position(self) -> np.ndarray:
+        """
+        获取方块当前的三维位置 [x, y, z]（相对于世界坐标系）。
+        注意：z 值包含桌面高度。
+        """
+        if self._obj_body_id < 0:
+            self._cache_ids() # 确保 ID 已缓存
+        return self.data.xpos[self._obj_body_id].copy() # .copy() 避免修改原数据
+    
+    def get_mid_point_position(self) -> np.ndarray:
+        thumb = self.get_site_pos("inspirehand_fingertip_thumb")
+        finger3 = self.get_site_pos("inspirehand_fingertip_3")
+        self.midpoint = (thumb + finger3) / 2.0
+        return self.midpoint
 
     # ====================== 私有方法 ======================
 

@@ -1,0 +1,27 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    
+    {
+      "name": "Python: Run Demo Module", // 调试配置在下拉菜单中显示的名字
+      "type": "debugpy", // 使用 Python 官方调试器
+      "request": "launch", // 启动模式
+      "module": "source.env_demos.demo", // 对应命令中的 `-m source.env_demos.demo`
+      "args": [
+        // 对应后面的命令行参数
+        "--task",
+        "block_lifting",
+        "--mode",
+        "pipeline",
+        "--action-mode",
+        "ee"
+      ],
+      "console": "integratedTerminal", // 在VS Code自带的终端中运行并查看输出
+      "justMyCode": true, // 调试时只进入自己写的代码，跳过第三方库
+      "cwd": "${workspaceFolder}", // 确保工作目录在项目根目录（包含source文件夹的那一层）
+      "env": {
+        "DISPLAY": ":0"
+      }
+    }
+  ]
+}
