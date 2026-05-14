@@ -93,7 +93,7 @@ def demo_random_policy(
         episode, step = 0, 0
         while viewer.is_running() and episode < n_episodes:
             action = env.action_space.sample()
-            obs, reward, terminated, truncated, info = env.step(action)
+            obs, reward, terminated, success, truncated, info = env.step(action)
             step += 1
 
             viewer.user_scn.ngeom = 0
@@ -110,7 +110,7 @@ def demo_random_policy(
 
             if terminated or truncated:
                 status = "✓ 终止" if terminated else "✗ 超时"
-                print(f"[Episode {episode+1}] {status} | steps={step}")
+                print(f"[Episode {episode+1}] {status} {success} | steps={step}")
                 episode += 1
                 step = 0
                 if traj_vis: traj_vis.reset()
@@ -129,15 +129,15 @@ def _run_no_render(env: RobotArmEnvBase, n_episodes: int) -> None:
         done   = False
         ep_steps = 0
         while not done:
-            _, _, terminated, truncated, _ = env.step(env.action_space.sample())
+            _, _, terminated, success, truncated, _ = env.step(env.action_space.sample())
             ep_steps += 1
             done = terminated or truncated
         total_steps.append(ep_steps)
-        if terminated:
+        if success:
             successes += 1
-        print(f"  Ep {ep+1:3d}: steps={ep_steps:4d}, {'TERMINATED' if terminated else 'timeout'}")
+        print(f"  Ep {ep+1:3d}: steps={ep_steps:4d}, {'TERMINATED' if terminated else 'timeout'}, success={success}")
     print(f"\n  平均步数: {np.mean(total_steps):.1f}")
-    print(f"  终止率:   {successes / n_episodes * 100:.1f}%")
+    print(f"  成功率:   {successes / n_episodes * 100:.1f}%")
     env.close()
 
 
@@ -204,17 +204,17 @@ def demo_benchmark(
 
     t0          = time.time()
     total_steps = 0
-    terminations = 0
+    success_num = 0
 
     for ep in range(n_episodes):
         env.reset(seed=ep)
         done = False
         while not done:
-            _, _, terminated, truncated, _ = env.step(env.action_space.sample())
+            _, _, terminated, success, truncated, _ = env.step(env.action_space.sample())
             total_steps += 1
             done = terminated or truncated
-            if terminated:
-                terminations += 1
+            if success and terminated:
+                success_num += 1
 
     elapsed = time.time() - t0
     env.close()
@@ -222,7 +222,7 @@ def demo_benchmark(
     print(f"  总步数:  {total_steps} | 总时间: {elapsed:.1f}s")
     print(f"  步频:    {total_steps / elapsed:.0f} steps/s")
     print(f"  回合频:  {n_episodes / elapsed:.1f} eps/s")
-    print(f"  终止率:  {terminations / n_episodes * 100:.1f}%")
+    print(f"  成功率:  {success_num / n_episodes * 100:.1f}%")
 
 
 # ====================== 模式 4：键盘控制 ======================
@@ -359,11 +359,11 @@ def demo_keyboard_control(
                 action = _build_action(
                     is_ee, env, ee_target_pos, ee_target_quat, hand_target, joint_target
                 )
-                obs, reward, terminated, _, _ = env.step(action)
+                obs, reward, terminated, success, _, _ = env.step(action)
                 step     += 1
                 ep_reward += reward
                 if terminated:
-                    print(f"[回合 {episode}] ✅ 步数={step}  累积奖励={ep_reward:.4f}  → 按 R 重置")
+                    print(f"[回合 {episode}] 终止，success={success}  步数={step}  累积奖励={ep_reward:.4f}  → 按 R 重置")
 
             # ---- 可视化 ----
             viewer.user_scn.ngeom = 0
@@ -494,8 +494,11 @@ def demo_pipeline(
     show_fingertip_midpoint: bool = True,
 ) -> None:
     """
-    流程化任务执行：按任务类型自动编排行为序列完成目标.
-    实时显示当前阶段、进度和策略状态.
+    流程化任务执行：按任务类型自动编排行为序列完成目标。
+    
+    两种运行模式：
+      - render=True  : 可视化单回合演示（原有体验）
+      - render=False : 无渲染批量测试，统计通关率
     """
     from .registry import load_strategy
     from .pipeline_overlay import PipelineStateOverlay
@@ -503,11 +506,12 @@ def demo_pipeline(
     reg = TASK_REGISTRY[task_name]
     print(f"\n{'='*65}\n [Demo] 流程化执行 | 任务={reg['display_name']}")
     print(f" action_mode={action_mode}, controller={controller_type}")
+    print(f" 渲染模式: {'可视化' if render else '无渲染批量测试'}")
     print(f"{'='*65}")
 
     robot_cfg = _make_robot_cfg(
         action_mode=action_mode, controller_type=controller_type,
-        max_episode_steps=800,
+        max_episode_steps=1500,
         action_scale=0.05,
         action_scale_rot=0.1,
         action_scale_hand=0.005,
@@ -515,12 +519,16 @@ def demo_pipeline(
     )
     env = load_task(task_name, robot_cfg)
     strategy = load_strategy(task_name)
+
+    if not render:
+        _run_pipeline_benchmark(env, strategy, task_name, n_episodes)
+        return
+
+    # ===== 渲染模式：单回合可视化演示 =====
     obs, info = env.reset(seed=42)
     strategy.reset()
 
-    # 初始化通用叠加器
     overlay = PipelineStateOverlay(strategy)
-
     traj_vis = EETrajectoryVisualizer(TrajectoryVisualStyle(), max_history=100) if show_ee_traj else None
     ft_vis = FingertipMidpointVisualizer() if show_fingertip_midpoint else None
 
@@ -533,62 +541,56 @@ def demo_pipeline(
 
         while viewer.is_running() and episode < n_episodes:
             running, action, terminated, action_context = strategy.tick(obs, info, step, env)
-            ee_target_pos, ee_target_quat = action_context.ee_target_pos, action_context.ee_target_quat
-            ee_delta_pos, ee_delta_rot = action_context.ee_delta_pos, action_context.ee_delta_rot
-            
-            # 如果没有绝对目标，才用增量反推
-            # 只有策略没提供任何绝对目标时，才用增量反推
+            ee_target_pos = action_context.ee_target_pos
+            ee_target_quat = action_context.ee_target_quat
+            ee_delta_pos = action_context.ee_delta_pos
+            ee_delta_rot = action_context.ee_delta_rot
+
+            # 反推绝对目标
             if ee_target_pos is None and ee_target_quat is None:
                 if ee_delta_pos is not None and ee_delta_rot is not None:
                     ee_pos, ee_quat = env.get_ee_pose()
                     ee_target_pos = ee_pos + ee_delta_pos
-                    
                     delta_quat = np.zeros(4)
                     mujoco.mju_euler2Quat(delta_quat, ee_delta_rot, 'xyz')
                     ee_target_quat = np.zeros(4)
                     mujoco.mju_mulQuat(ee_target_quat, delta_quat, ee_quat)
                 else:
                     raise ValueError("[Error] 策略未提供绝对目标，也没有增量信息，无法构建动作！")
+
             if not running:
-                terminated = strategy.success
+                terminated = True
                 truncated = False
-                obs, reward, _, _, info = env.step(np.zeros(env.action_space.shape))
+                obs, reward, _, success, _, info = env.step(np.zeros(env.action_space.shape))
             else:
-                obs, reward, terminated, truncated, info = env.step(action)
+                obs, reward, terminated, success, truncated, info = env.step(action)
                 step += 1
 
-            # ---- 通用状态更新与检测 ----
             switch_msg = overlay.update(step)
             if switch_msg:
-                print(switch_msg)  # 阶段切换时打印
+                print(switch_msg)
 
             # ---- 可视化 ----
             viewer.user_scn.ngeom = 0
             if traj_vis:
                 actual = env.get_ee_pose()[0]
-                traj_vis.update(actual,
-                                target_pos=ee_target_pos,
-                                target_quat=ee_target_quat)
+                traj_vis.update(actual, target_pos=ee_target_pos, target_quat=ee_target_quat)
                 traj_vis.draw(viewer)
             if ft_vis:
                 ft_vis.update(env)
                 ft_vis.draw(viewer)
 
-            # 通用阶段指示器
             overlay.draw_viewer_indicator(viewer)
-
-            # ---- OpenCV 通用叠加 ----
             _show_cv_windows_pipeline(obs, overlay, reward, env)
-
             viewer.sync()
 
             if terminated or truncated:
-                status = "✓ 成功" if strategy.success else "✗ 失败/超时"
+                status = "✓ 成功" if success else "✗ 失败/超时"
                 print(f"\n  [回合 {episode+1} 结束] {status}")
                 print(f"   总步数: {step} | 最终阶段: {overlay._get_phase_name(strategy.phase_idx)}")
 
-                # 打印策略状态字典（通用）
                 status_dict = strategy.get_status_dict()
+                print("   策略内部状态：")
                 for k, v in status_dict.items():
                     print(f"   {k}: {v}")
 
@@ -606,6 +608,69 @@ def demo_pipeline(
                     strategy.reset()
 
     cv2.destroyAllWindows()
+    env.close()
+
+
+def _run_pipeline_benchmark(
+    env: RobotArmEnvBase,
+    strategy,
+    task_name: str,
+    n_episodes: int,
+) -> None:
+    """
+    无渲染批量基准测试：统计通关率、平均步数、耗时。
+    """
+    print(f"\n[Pipeline Benchmark] 开始 {n_episodes} 回合无渲染测试...\n")
+
+    t0 = time.time()
+    total_steps = []
+    successes = 0
+    timeouts = 0
+
+    for ep in range(n_episodes):
+        obs, info = env.reset(seed=ep)
+        strategy.reset()
+        step = 0
+        done = False
+
+        while not done:
+            running, action, terminated, action_context = strategy.tick(obs, info, step, env)
+
+            if not running:
+                terminated = True
+                truncated = False
+                obs, _, _, success, _, info = env.step(np.zeros(env.action_space.shape))
+            else:
+                obs, _, terminated, success, truncated, info = env.step(action)
+                step += 1
+
+            done = terminated or truncated
+
+        total_steps.append(step)
+        if success:
+            successes += 1
+        if not strategy.success and not terminated:
+            timeouts += 1
+
+        status = "SUCCESS" if success else ("TIMEOUT" if not terminated else "FAIL")
+        print(f"  Ep {ep+1:3d}/{n_episodes}: steps={step:4d} | {status}")
+
+    elapsed = time.time() - t0
+
+    print(f"\n{'='*50}")
+    print(f"  Pipeline Benchmark 结果 ({task_name})")
+    print(f"{'='*50}")
+    print(f"  总回合数:   {n_episodes}")
+    print(f"  成功数:     {successes}")
+    print(f"  超时数:     {timeouts}")
+    print(f"  失败数:     {n_episodes - successes - timeouts}")
+    print(f"  通关率:     {successes / n_episodes * 100:.1f}%")
+    print(f"  平均步数:   {np.mean(total_steps):.1f} ± {np.std(total_steps):.1f}")
+    print(f"  总耗时:     {elapsed:.1f}s")
+    print(f"  回合/秒:    {n_episodes / elapsed:.2f}")
+    print(f"  步/秒:      {sum(total_steps) / elapsed:.0f}")
+    print(f"{'='*50}")
+
     env.close()
 
 

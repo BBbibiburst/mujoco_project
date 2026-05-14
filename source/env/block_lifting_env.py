@@ -214,24 +214,21 @@ class BlockLiftingEnv(RobotArmEnvBase):
 
         return reward
 
-    def _is_terminated(self) -> bool:
+    def _is_terminated(self) -> Tuple[bool, bool]:
         """成功（达到目标高度）或失败（掉落）时终止."""
         height = self._get_obj_height()
         if height >= self.task_cfg.target_lift_height:
-            return True
+            return True, True
         if height < self.task_cfg.drop_threshold_offset:
             self._is_dropped = True
-            return True
-        return False
-
-    def _is_truncated(self) -> bool:
-        """不设超时（由基类 max_episode_steps 控制时返回 False 即禁用）."""
-        return False
+            return True, False
+        return False, False
 
     def _reset_scene(self) -> None:
         """随机化物体位置，更新 marker，绑定触觉助手，重置辅助指标."""
         # 每次 reset 时重新缓存 ID（防止 model 重建后失效）
         self._cache_ids()
+        self._was_lifted: bool = False
 
         # 绑定触觉助手
         self._tactile.bind(self.reader)

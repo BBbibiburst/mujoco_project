@@ -121,8 +121,8 @@ class RobotArmEnvBase(gym.Env, ABC):
         ...
 
     @abstractmethod
-    def _is_terminated(self) -> bool:
-        """判断是否因成功而终止."""
+    def _is_terminated(self) -> Tuple[bool, bool]:
+        """判断是否终止和成功."""
         ...
 
     @abstractmethod
@@ -214,7 +214,7 @@ class RobotArmEnvBase(gym.Env, ABC):
 
         return self._get_obs(), self._get_info()
 
-    def step(self, action: np.ndarray) -> Tuple[Any, float, bool, bool, Dict]:
+    def step(self, action: np.ndarray) -> Tuple[Any, float, bool, bool, bool, Dict]:
         if not self._initialized:
             raise RuntimeError("请先调用 reset() 初始化环境。")
 
@@ -227,17 +227,17 @@ class RobotArmEnvBase(gym.Env, ABC):
 
         obs        = self._get_obs()
         reward     = self._compute_reward()
-        terminated = self._is_terminated()
+        terminated, success = self._is_terminated()
         truncated  = self._is_truncated()
         info       = self._get_info()
 
         self.stats.episode_steps  += 1
         self.stats.total_steps    += 1
         self.stats.episode_reward += reward
-        if terminated:
+        if success:
             self.stats.success_count += 1
 
-        return obs, reward, terminated, truncated, info
+        return obs, reward, terminated, success, truncated, info
 
     def render(self) -> None:
         """启动 MuJoCo 被动查看器（阻塞，用于调试）."""

@@ -1,18 +1,23 @@
 """
-通用任务环境演示脚本（重构版）
+通用任务环境演示脚本
 
 基于模块化架构的演示入口，支持所有继承自 RobotArmEnvBase 的任务环境。
 通过 --task 参数切换任务，通过 --mode 参数切换演示模式。
 
 运行方式：
-    python -m source.env.demo --task block_lifting --mode random
-    python -m source.env.demo --task block_lifting --mode keyboard --action-mode ee
+    python -m source.env_demos.demo --task block_lifting --mode random
+    python -m source.env_demos.demo --task block_lifting --mode keyboard --action-mode ee
+    # 可视化模式测试 pipeline（默认，跑3回合）
+    python -m source.env_demos.demo --task block_lifting --mode pipeline
+    # 无渲染批量测试 pipeline 100次
+    python -m source.env_demos.demo --task block_lifting --mode pipeline --no-render --episodes 100
 
 模式说明：
     random    : 随机策略回合演示（仿真窗口 + 触觉热力图 + 相机画面 + 可视化）
     verify    : 观测空间形状与数值范围验证
     benchmark : 无渲染高速基准测试（N 回合）
     keyboard  : 键盘逐关节控制（Tkinter 控制面板 + 实时状态显示）
+    pipeline  : 基于流程的任务完成演示和测试
 """
 
 import argparse
