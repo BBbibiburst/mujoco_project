@@ -72,18 +72,123 @@ class BlockLiftingStrategy(TaskStrategy):
             act.ee_delta_rot = np.zeros(3)
             max_error = np.max(np.abs(hand_qpos - act.hand_target))
             if ctx.phase_step > self.MIN_PHASE_STEPS and max_error < 0.001:
+                # ===== 标定：计算 d_hand（mid-point 在 ee 坐标系下的固定偏移）=====
+                if not hasattr(self, '_d_hand'):
+                    ee_pos_cal, ee_quat_cal = env.get_ee_pose()
+                    mid_cal = env.get_mid_point_position()
+                    
+                    # 构建 ee 旋转矩阵 R_ee (3x3)
+                    R_ee_flat = np.zeros(9, dtype=np.float64)
+                    mujoco.mju_quat2Mat(R_ee_flat, ee_quat_cal)
+                    R_ee_cal = R_ee_flat.reshape(3, 3)
+                    
+                    # d_hand = R_ee^T @ (p_mid - p_ee)   [转到 ee 坐标系]
+                    self._d_hand = R_ee_cal.T @ (mid_cal - ee_pos_cal)
+                    print(f"标定 d_hand: {self._d_hand}")
+                
                 return PhaseResult.NEXT, act
             return PhaseResult.CONTINUE, act
 
         elif phase == "approach":
-            target_pos = np.array([obj_pos[0], obj_pos[1], table_z + self.PRE_GRASP_HEIGHT])
-            delta = target_pos - ee_pos
-            dist = np.linalg.norm(delta)
+            # ========== 1. 目标 mid-point 位置 ==========
+            target_mid = np.array([
+                obj_pos[0], 
+                obj_pos[1], 
+                env._table_height + self.PRE_GRASP_HEIGHT
+            ])
+            
+            # ========== 2. 确定目标手指连线方向（水平） ==========
+            # 获取当前手指位置，提取水平方向
+            thumb_pos = env.get_site_pos("inspirehand_fingertip_thumb")
+            finger3_pos = env.get_site_pos("inspirehand_fingertip_3")
+            
+            current_axis = thumb_pos - finger3_pos
+            current_axis[2] = 0.0  # 强制水平（投影到xy平面）
+            
+            axis_norm = np.linalg.norm(current_axis)
+            if axis_norm > 1e-6:
+                target_finger_axis = current_axis / axis_norm
+            else:
+                target_finger_axis = np.array([1.0, 0.0, 0.0])
+            
+            # ========== 3. 构建目标 ee 旋转矩阵 ==========
+            # 
+            # 关键约束：手指连线在 ee 的 x-z 平面内（由模型结构决定）
+            # 要让手指连线水平（世界 z=0），需要让 ee 的 x-z 平面与世界 xy 平面平行
+            # 即 ee_x 和 ee_z 都在水平面内，ee_y 垂直向上
+            #
+            # 设目标手指连线方向为 f（水平单位向量）
+            # 手指连线在 ee 坐标系下为 [a, 0, b]（a²+b²=1），在世界下为 f
+            # 即 f = a * R_ee[:,0] + b * R_ee[:,2]
+            #
+            # 我们需要 ee_y 垂直向上（世界 +z），这样 ee_x 和 ee_z 就在水平面内
+            # 然后让手指连线（ee_x 和 ee_z 的线性组合）对准 f
+            
+            # 方案：令 ee_y = 世界 +z（向上），则 ee_x, ee_z 在水平面
+            ee_y = np.array([0.0, 0.0, 1.0])
+            
+            # ee_z 在水平面内，且与手指连线方向有关
+            # 由 d_hand = [0.277, 0.030, -0.041]，ee_z 分量较小
+            # 为简化：让 ee_z 垂直于手指连线（在水平面内）
+            # 即 ee_z = normalize([f_y, -f_x, 0])
+            ee_z = np.array([target_finger_axis[1], -target_finger_axis[0], 0.0])
+            z_norm = np.linalg.norm(ee_z)
+            if z_norm < 1e-6:
+                ee_z = np.array([0.0, -1.0, 0.0])
+            else:
+                ee_z = ee_z / z_norm
+            
+            # ee_x = ee_y × ee_z（确保右手系）
+            ee_x = np.cross(ee_y, ee_z)
+            ee_x = ee_x / np.linalg.norm(ee_x)
+            
+            # 验证：重新计算 ee_z = ee_x × ee_y
+            ee_z = np.cross(ee_x, ee_y)
+            ee_z = ee_z / np.linalg.norm(ee_z)
+            
+            # 构建旋转矩阵（列向量）
+            R_target = np.column_stack([ee_x, ee_y, ee_z])
+            
+            # 转成四元数
+            target_quat = np.zeros(4, dtype=np.float64)
+            mujoco.mju_mat2Quat(target_quat, R_target.flatten('F'))
+            
+            # ========== 4. 反推目标 ee 位置 ==========
+            target_ee_pos = target_mid - R_target @ self._d_hand
+            
+            # ========== 5. 填充绝对目标（供可视化使用）==========
+            act.ee_target_pos = target_ee_pos.copy()
+            act.ee_target_quat = target_quat.copy()
+            
+            # ========== 6. 执行控制 ==========
+            pos_delta = target_ee_pos - ee_pos
+            dist = np.linalg.norm(pos_delta)
             if dist > self.APPROACH_SPEED:
-                delta = delta / dist * self.APPROACH_SPEED
-            act.ee_delta_pos = delta
+                pos_delta = pos_delta / dist * self.APPROACH_SPEED
+            act.ee_delta_pos = pos_delta
+            
+            # 姿态控制
+            rel_quat = np.zeros(4, dtype=np.float64)
+            inv_quat = np.zeros(4, dtype=np.float64)
+            mujoco.mju_negQuat(inv_quat, ee_quat)
+            mujoco.mju_mulQuat(rel_quat, target_quat, inv_quat)
+            
+            axis_angle = np.zeros(3, dtype=np.float64)
+            mujoco.mju_quat2Vel(axis_angle, rel_quat, 1.0)
+            
+            angle = np.linalg.norm(axis_angle)
+            max_rot = 0.1
+            if angle > max_rot:
+                axis_angle = axis_angle / angle * max_rot
+            act.ee_delta_rot = axis_angle
+            
             act.hand_target = self.HAND_GRIPPER.copy()
-            if ctx.phase_step > self.MIN_PHASE_STEPS and distance(ee_pos, target_pos) < 0.02:
+            
+            # ========== 7. 收敛判断 ==========
+            pos_err = distance(ee_pos, target_ee_pos)
+            quat_err = quat_distance(ee_quat, target_quat)
+            
+            if ctx.phase_step > self.MIN_PHASE_STEPS and pos_err < 0.02 and quat_err < 0.15:
                 return PhaseResult.NEXT, act
             return PhaseResult.CONTINUE, act
 

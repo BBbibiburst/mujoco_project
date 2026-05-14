@@ -38,6 +38,9 @@ class ActionContext:
     ee_delta_rot: Optional[np.ndarray] = None
     hand_target: Optional[np.ndarray] = None
     gripper_cmd: Optional[str] = None
+    # 绝对目标位姿，供可视化使用
+    ee_target_pos: Optional[np.ndarray] = None   # 目标 ee 位置（世界坐标）
+    ee_target_quat: Optional[np.ndarray] = None  # 目标 ee 姿态四元数 [w,x,y,z]
 
 
 class TaskStrategy(ABC):
@@ -69,15 +72,15 @@ class TaskStrategy(ABC):
         self.finished = False
         self.success = False
 
-    def tick(self, obs, info, step, env) -> Tuple[bool, np.ndarray, bool]:
+    def tick(self, obs, info, step, env) -> Tuple[bool, np.ndarray, bool, ActionContext]:
         """
         策略主循环调用.
 
         Returns:
-            (running, action, terminated_by_strategy)
+            (running, action, terminated_by_strategy, action_context)
         """
         if self.finished:
-            return False, np.zeros(env.action_space.shape), False
+            return False, np.zeros(env.action_space.shape), False, ActionContext()
 
         ctx = PhaseContext(
             obs=obs, info=info, step=step,
@@ -104,7 +107,7 @@ class TaskStrategy(ABC):
             self.success = False
 
         terminated = self.finished and self.success
-        return not self.finished, action, terminated
+        return not self.finished, action, terminated, act_ctx
 
     def _build_action(self, act_ctx: ActionContext, env) -> np.ndarray:
         """

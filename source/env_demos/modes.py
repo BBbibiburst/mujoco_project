@@ -532,8 +532,23 @@ def demo_pipeline(
         episode, step = 0, 0
 
         while viewer.is_running() and episode < n_episodes:
-            running, action, terminated = strategy.tick(obs, info, step, env)
-
+            running, action, terminated, action_context = strategy.tick(obs, info, step, env)
+            ee_target_pos, ee_target_quat = action_context.ee_target_pos, action_context.ee_target_quat
+            ee_delta_pos, ee_delta_rot = action_context.ee_delta_pos, action_context.ee_delta_rot
+            
+            # 如果没有绝对目标，才用增量反推
+            # 只有策略没提供任何绝对目标时，才用增量反推
+            if ee_target_pos is None and ee_target_quat is None:
+                if ee_delta_pos is not None and ee_delta_rot is not None:
+                    ee_pos, ee_quat = env.get_ee_pose()
+                    ee_target_pos = ee_pos + ee_delta_pos
+                    
+                    delta_quat = np.zeros(4)
+                    mujoco.mju_euler2Quat(delta_quat, ee_delta_rot, 'xyz')
+                    ee_target_quat = np.zeros(4)
+                    mujoco.mju_mulQuat(ee_target_quat, delta_quat, ee_quat)
+                else:
+                    raise ValueError("[Error] 策略未提供绝对目标，也没有增量信息，无法构建动作！")
             if not running:
                 terminated = strategy.success
                 truncated = False
@@ -551,7 +566,9 @@ def demo_pipeline(
             viewer.user_scn.ngeom = 0
             if traj_vis:
                 actual = env.get_ee_pose()[0]
-                traj_vis.update(actual)
+                traj_vis.update(actual,
+                                target_pos=ee_target_pos,
+                                target_quat=ee_target_quat)
                 traj_vis.draw(viewer)
             if ft_vis:
                 ft_vis.update(env)
