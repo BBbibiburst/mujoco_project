@@ -231,13 +231,34 @@ class BlockLiftingEnv(RobotArmEnvBase):
         return reward
 
     def _is_terminated(self) -> Tuple[bool, bool]:
-        """成功（达到目标高度）或失败（掉落）时终止."""
+        """成功（达到目标高度）或失败（掉落/提升后落回桌面）时终止."""
         height = self._get_obj_height()
-        if height >= self.task_cfg.target_lift_height:
+        tc = self.task_cfg
+
+        # 更新历史最高高度
+        self._max_height = max(self._max_height, height)
+
+        # 缓冲高度 = 方块边长（2 * half_size）
+        buffer_height = 2.0 * tc.obj_size
+
+        # 判断是否曾经被提升离开桌面（超过一个边长高度）
+        if not self._was_lifted and self._max_height > buffer_height:
+            self._was_lifted = True
+
+        # 成功：达到目标高度
+        if height >= tc.target_lift_height:
             return True, True
-        if height < self.task_cfg.drop_threshold_offset:
+
+        # 失败1：掉落到桌面以下（原有逻辑）
+        if height < tc.drop_threshold_offset:
             self._is_dropped = True
             return True, False
+
+        # 失败2：曾经被提升后又落回桌面（低于一个边长高度）
+        if self._was_lifted and height <= buffer_height:
+            self._is_dropped = True  # 复用 _is_dropped 标记表示失败
+            return True, False
+
         return False, False
 
     def _reset_scene(self) -> None:
