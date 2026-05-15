@@ -217,33 +217,47 @@ class BlockLiftingStrategy(TaskStrategy):
             return PhaseResult.CONTINUE, act
         
         elif phase == "adjust":
-            # 初始化：只在进入 adjust 第一步时锁定目标
+        # 初始化：只在进入 adjust 第一步时锁定目标
             if not hasattr(self, '_adjust_step'):
                 self._adjust_step = 0
-                # 锁定目标：当前方块位置 + 当前末端高度（只调水平面，不调高度）
+                # 锁定目标：当前方块位置 + 当前指尖中点高度（只调水平面，不调高度）
                 cube_now = env.get_block_position()
-                self._adjust_target = np.array([
+                # 关键修复：目标是指尖中点的xy，而不是ee_pos的xy
+                self._adjust_target_mid = np.array([
                     cube_now[0],
                     cube_now[1],
-                    ee_pos[2]
+                    self._mid_point_at_descend[2]  # 保持下降后的指尖高度
                 ])
             
             self._adjust_step += 1
             
-            # 向锁定目标移动
-            delta = self._adjust_target - ee_pos
+            # ========== 关键修复：由目标 mid-point 反推目标 ee 位置 ==========
+            # 当前姿态下，mid-point = ee_pos + R_ee @ _d_hand
+            # 所以 ee_pos = target_mid - R_ee @ _d_hand
+            R_ee_flat = np.zeros(9, dtype=np.float64)
+            mujoco.mju_quat2Mat(R_ee_flat, ee_quat)
+            R_ee = R_ee_flat.reshape(3, 3)
+            
+            target_ee_pos = self._adjust_target_mid - R_ee @ self._d_hand
+            
+            # 向目标 ee 位置移动
+            delta = target_ee_pos - ee_pos
             dist = np.linalg.norm(delta)
             if dist > self.APPROACH_SPEED:
                 delta = delta / dist * self.APPROACH_SPEED
             act.ee_delta_pos = delta
+            
             act.ee_delta_rot = self._rot_correction(ee_quat, self._approach_quat_target)
             act.hand_target = self.HAND_GRIPPER.copy()
             
-            # 固定50步后进入 grasp
-            if self._adjust_step >= 50:
-                # 清理状态，更新抓取位置
+            # 收敛判断：检查指尖中点是否对准（而不是 ee_pos）
+            current_mid = env.get_mid_point_position()
+            mid_err = np.linalg.norm(current_mid[:2] - self._adjust_target_mid[:2])
+            
+            # 固定50步或中点对准后进入 grasp
+            if self._adjust_step >= 50 or mid_err < 0.005:
                 delattr(self, '_adjust_step')
-                delattr(self, '_adjust_target')
+                delattr(self, '_adjust_target_mid')
                 self._grasp_target_pos = ee_pos.copy()
                 return PhaseResult.NEXT, act
             
@@ -262,7 +276,8 @@ class BlockLiftingStrategy(TaskStrategy):
             close_value = close_value*self._HAND_MAX+(1-close_value)*self._HAND_MIN
             HAND_GRIPPER_CLOSE = np.array([self._HAND_MAX, self._HAND_MAX, close_value, close_value, close_value, self._HAND_MAX])
             act.hand_target = HAND_GRIPPER_CLOSE.copy()
-            if ctx.phase_step > self.MIN_PHASE_STEPS and np.linalg.norm(ee_pos - self._grasp_target_pos) < 0.001:
+            # 增加最小步数限制，确保手指有足够时间闭合、接触并稳定
+            if ctx.phase_step > self.MIN_PHASE_STEPS and ctx.phase_step >= 50:
                 # 存储目前的末端位置用于 lift 阶段使用
                 self._lift_target_pos = ee_pos.copy()
                 return PhaseResult.NEXT, act

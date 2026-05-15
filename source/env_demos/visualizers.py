@@ -136,7 +136,7 @@ class FingertipMidpointStyle:
 
 
 class FingertipMidpointVisualizer:
-    """绘制 thumb 与 finger_3 指尖连线中点."""
+    """绘制 thumb 与 finger_3 和 finger_2 指尖连线中点."""
 
     def __init__(self, style: Optional[FingertipMidpointStyle] = None):
         self.style    = style or FingertipMidpointStyle()
@@ -146,7 +146,8 @@ class FingertipMidpointVisualizer:
         try:
             thumb   = env.get_site_pos("inspirehand_fingertip_thumb")
             finger3 = env.get_site_pos("inspirehand_fingertip_3")
-            self.midpoint = (thumb + finger3) / 2.0
+            finger2 = env.get_site_pos("inspirehand_fingertip_2")
+            self.midpoint = (thumb + (finger3 + finger2) / 2.0) / 2.0
         except ValueError:
             self.midpoint = None
 

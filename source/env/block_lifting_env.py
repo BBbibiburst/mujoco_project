@@ -23,18 +23,20 @@ from .base_env import RobotArmEnvBase
 from .env_config import RobotConfig
 from .tactile_obs import TactileObsHelper
 
-
 # ====================== 相机配置 ======================
+
 
 @dataclass
 class CameraConfig:
     """单个相机的位姿配置."""
+
     name: str
     pos: Tuple[float, float, float]
     quat: Tuple[float, float, float, float]  # (w, x, y, z)
 
 
 # ====================== 任务配置 ======================
+
 
 @dataclass
 class BlockLiftingConfig:
@@ -52,33 +54,38 @@ class BlockLiftingConfig:
     target_color: Tuple = (0.1, 0.8, 0.1, 0.4)
 
     # 物体生成区域（相对于桌面中心）
-    obj_spawn_range: Tuple  = (0.30, 0.15)   # (half_x, half_y)
-    obj_spawn_center: Tuple = (0.45, 0.0)    # (x, y)
+    obj_spawn_range: Tuple = (0.30, 0.15)  # (half_x, half_y)
+    obj_spawn_center: Tuple = (0.45, 0.0)  # (x, y)
 
     # 手部开合目标关节角
-    hand_open:  np.ndarray = field(default_factory=lambda: np.zeros(6))
+    hand_open: np.ndarray = field(default_factory=lambda: np.zeros(6))
     hand_close: np.ndarray = field(default_factory=lambda: np.full(6, 0.01))
 
     # 相机列表
-    cameras: List[CameraConfig] = field(default_factory=lambda: [
-        CameraConfig("frontview", (1.6, 0.0, 1.2), (0.56, 0.43, 0.43, 0.56)),
-        CameraConfig("birdview",  (-0.2, 0.0, 3.0), (0.7071, 0.0, 0.0, 0.7071)),
-        CameraConfig("agentview", (1.0, 0.0, 1.0),  (0.7071, 0.0, 0.7071, 0.0)),
-        CameraConfig("sideview",  (-0.0565, 1.276, 1.488), (0.0099, 0.0069, 0.5912, 0.8064)),
-    ])
+    cameras: List[CameraConfig] = field(
+        default_factory=lambda: [
+            CameraConfig("frontview", (1.6, 0.0, 1.2), (0.56, 0.43, 0.43, 0.56)),
+            CameraConfig("birdview", (-0.2, 0.0, 3.0), (0.7071, 0.0, 0.0, 0.7071)),
+            CameraConfig("agentview", (1.0, 0.0, 1.0), (0.7071, 0.0, 0.7071, 0.0)),
+            CameraConfig(
+                "sideview", (-0.0565, 1.276, 1.488), (0.0099, 0.0069, 0.5912, 0.8064)
+            ),
+        ]
+    )
 
     # 终止判断
-    drop_threshold_offset: float = -0.025   # 物体底部触桌即失败
+    drop_threshold_offset: float = -0.025  # 物体底部触桌即失败
 
     # 奖励权重
-    lift_base_reward:         float = 2.0
-    lift_progress_reward:     float = 5.0
-    lift_success_reward:      float = 10.0
-    grasp_stability_weight:   float = 1.0
+    lift_base_reward: float = 2.0
+    lift_progress_reward: float = 5.0
+    lift_success_reward: float = 10.0
+    grasp_stability_weight: float = 1.0
     grasp_stability_threshold: float = 50.0
 
 
 # ====================== Block Lifting 环境 ======================
+
 
 class BlockLiftingEnv(RobotArmEnvBase):
     """
@@ -119,11 +126,13 @@ class BlockLiftingEnv(RobotArmEnvBase):
 
     @property
     def observation_space(self) -> spaces.Dict:
-        return spaces.Dict({
-            "camera_rgb":     spaces.Box(0, 255, (240, 320, 3), dtype=np.uint8),
-            "proprioception": spaces.Box(-np.inf, np.inf, (13,), dtype=np.float32),
-            **TactileObsHelper.observation_spaces(),
-        })
+        return spaces.Dict(
+            {
+                "camera_rgb": spaces.Box(0, 255, (240, 320, 3), dtype=np.uint8),
+                "proprioception": spaces.Box(-np.inf, np.inf, (13,), dtype=np.float32),
+                **TactileObsHelper.observation_spaces(),
+            }
+        )
 
     # ====================== 必须实现的抽象方法 ======================
 
@@ -145,22 +154,27 @@ class BlockLiftingEnv(RobotArmEnvBase):
             rgba=list(tc.obj_color),
             mass=tc.obj_mass,
             friction=[1.0, 0.5, 0.05],
-            condim=4, conaffinity=15,
+            condim=4,
+            conaffinity=15,
         )
         obj.add_joint(type=mujoco.mjtJoint.mjJNT_FREE, name="obj_free_joint")
 
         # 目标高度 marker（mocap body，无碰撞）
         target_marker = wb.add_body(
             name="target_marker",
-            pos=[tc.obj_spawn_center[0], tc.obj_spawn_center[1],
-                 self._table_height + tc.target_lift_height],
+            pos=[
+                tc.obj_spawn_center[0],
+                tc.obj_spawn_center[1],
+                self._table_height + tc.target_lift_height,
+            ],
             mocap=True,
         )
         target_marker.add_geom(
             type=mujoco.mjtGeom.mjGEOM_BOX,
             size=[0.15, 0.15, 0.001],
             rgba=list(tc.target_color),
-            contype=0, conaffinity=0,
+            contype=0,
+            conaffinity=0,
         )
 
         # 相机
@@ -173,10 +187,10 @@ class BlockLiftingEnv(RobotArmEnvBase):
         """相机 RGB + 触觉图像 + 本体感觉."""
         tactile = self._tactile.get_grouped(self.data)
         return {
-            "camera_rgb":     self.render_camera(self._cam_name),
+            "camera_rgb": self.render_camera(self._cam_name),
             "tactile_bottom": tactile["bottom"],
             "tactile_middle": tactile["middle"],
-            "tactile_top":    tactile["top"],
+            "tactile_top": tactile["top"],
             "proprioception": np.concatenate(
                 [self.get_arm_qpos(), self.get_hand_qpos()]
             ).astype(np.float32),
@@ -207,8 +221,10 @@ class BlockLiftingEnv(RobotArmEnvBase):
         if current_height >= tc.target_lift_height:
             reward += tc.lift_success_reward
 
-        if (self._tactile.is_active(self.data, threshold=tc.grasp_stability_threshold)
-                and current_height > lift_threshold):
+        if (
+            self._tactile.is_active(self.data, threshold=tc.grasp_stability_threshold)
+            and current_height > lift_threshold
+        ):
             reward += tc.grasp_stability_weight
             self._grasp_success = True
 
@@ -246,25 +262,28 @@ class BlockLiftingEnv(RobotArmEnvBase):
         # 更新 qpos
         if self._obj_free_jnt_qposadr >= 0:
             adr = self._obj_free_jnt_qposadr
-            self.data.qpos[adr:adr + 3] = obj_pos
-            self.data.qpos[adr + 3:adr + 7] = [1, 0, 0, 0]
+            self.data.qpos[adr : adr + 3] = obj_pos
+            self.data.qpos[adr + 3 : adr + 7] = [1, 0, 0, 0]
 
-            jnt_id  = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, "obj_free_joint")
+            jnt_id = mujoco.mj_name2id(
+                self.model, mujoco.mjtObj.mjOBJ_JOINT, "obj_free_joint"
+            )
             dof_adr = self.model.jnt_dofadr[jnt_id]
-            self.data.qvel[dof_adr:dof_adr + 6] = 0.0
+            self.data.qvel[dof_adr : dof_adr + 6] = 0.0
 
         # 更新 target_marker XY 跟随物体
         if self._target_marker_body_id >= 0:
             mocap_id = self.model.body_mocapid[self._target_marker_body_id]
             if mocap_id >= 0:
                 self.data.mocap_pos[mocap_id] = [
-                    obj_pos[0], obj_pos[1],
+                    obj_pos[0],
+                    obj_pos[1],
                     self._table_height + tc.target_lift_height,
                 ]
 
         # 重置辅助指标
-        self._max_height  = 0.0
-        self._is_dropped  = False
+        self._max_height = 0.0
+        self._is_dropped = False
         self._grasp_success = False
 
     # ====================== 公开辅助方法 ======================
@@ -292,20 +311,21 @@ class BlockLiftingEnv(RobotArmEnvBase):
     def verify_tactile(self) -> None:
         """打印触觉传感器分辨率（调试用）."""
         self._tactile.verify_shapes(self.data)
-        
+
     def get_block_position(self) -> np.ndarray:
         """
         获取方块当前的三维位置 [x, y, z]（相对于世界坐标系）。
         注意：z 值包含桌面高度。
         """
         if self._obj_body_id < 0:
-            self._cache_ids() # 确保 ID 已缓存
-        return self.data.xpos[self._obj_body_id].copy() # .copy() 避免修改原数据
-    
+            self._cache_ids()  # 确保 ID 已缓存
+        return self.data.xpos[self._obj_body_id].copy()  # .copy() 避免修改原数据
+
     def get_mid_point_position(self) -> np.ndarray:
         thumb = self.get_site_pos("inspirehand_fingertip_thumb")
         finger3 = self.get_site_pos("inspirehand_fingertip_3")
-        self.midpoint = (thumb + finger3) / 2.0
+        finger2 = self.get_site_pos("inspirehand_fingertip_2")
+        self.midpoint = (thumb + (finger3 + finger2) / 2.0) / 2.0
         return self.midpoint
 
     # ====================== 私有方法 ======================
