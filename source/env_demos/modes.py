@@ -532,7 +532,8 @@ def demo_pipeline(
     traj_vis = EETrajectoryVisualizer(TrajectoryVisualStyle(), max_history=100) if show_ee_traj else None
     ft_vis = FingertipMidpointVisualizer() if show_fingertip_midpoint else None
 
-    with mujoco.viewer.launch_passive(env.model, env.data) as viewer:
+    viewer = mujoco.viewer.launch_passive(env.model, env.data)
+    try:
         viewer.cam.distance = 1.5
         viewer.cam.elevation = -30
         viewer.cam.azimuth = 120
@@ -600,8 +601,12 @@ def demo_pipeline(
                     obs, info = env.reset()
                     strategy.reset()
 
-    cv2.destroyAllWindows()
-    env.close()
+    finally:
+        # 严格保证析构顺序：viewer 先关闭释放 OpenGL/渲染资源，
+        # cv2 窗口次之，env 最后清理 MuJoCo 数据——顺序错误会导致 segfault。
+        viewer.close()
+        cv2.destroyAllWindows()
+        env.close()
 
 
 def _run_pipeline_benchmark(

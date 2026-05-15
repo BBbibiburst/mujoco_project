@@ -204,7 +204,7 @@ class BlockLiftingStrategy(TaskStrategy):
             if dist > self.DESCEND_SPEED:
                 delta = delta / dist * self.DESCEND_SPEED
             act.ee_delta_pos = delta
-            act.ee_delta_rot = np.zeros(3)
+            act.ee_delta_rot = self._rot_correction(ee_quat, self._approach_quat_target)
             act.hand_target = self.HAND_GRIPPER.copy()
             if ctx.phase_step > self.MIN_PHASE_STEPS and ee_pos[2] <= target_pos[2] + 0.01:
                 # 存储目前的末端位置用于 grasp 阶段使用
@@ -236,7 +236,7 @@ class BlockLiftingStrategy(TaskStrategy):
             if dist > self.APPROACH_SPEED:
                 delta = delta / dist * self.APPROACH_SPEED
             act.ee_delta_pos = delta
-            act.ee_delta_rot = np.zeros(3)
+            act.ee_delta_rot = self._rot_correction(ee_quat, self._approach_quat_target)
             act.hand_target = self.HAND_GRIPPER.copy()
             
             # 固定50步后进入 grasp
@@ -251,7 +251,7 @@ class BlockLiftingStrategy(TaskStrategy):
 
         elif phase == "grasp":
             ee_delta_pos = self._grasp_target_pos - ee_pos
-            ee_delta_rot = np.zeros(3)
+            ee_delta_rot = self._rot_correction(ee_quat, self._approach_quat_target)
             # grasp 阶段保持末端位置不变，逐渐闭合手指到一个合适的程度（不完全闭合以避免过大的抓取力导致方块被挤出）
             act.ee_delta_pos = ee_delta_pos
             act.ee_delta_rot = ee_delta_rot
@@ -315,3 +315,17 @@ class BlockLiftingStrategy(TaskStrategy):
             return PhaseResult.CONTINUE, act
 
         return PhaseResult.ABORT, act
+    
+    def _rot_correction(self, ee_quat: np.ndarray, target_quat: np.ndarray,
+                    max_step: float = 0.1) -> np.ndarray:
+        """计算从当前姿态朝目标姿态的旋转修正量（axis-angle），限幅 max_step。"""
+        inv_quat = np.zeros(4, dtype=np.float64)
+        rel_quat = np.zeros(4, dtype=np.float64)
+        mujoco.mju_negQuat(inv_quat, ee_quat)
+        mujoco.mju_mulQuat(rel_quat, target_quat, inv_quat)
+        axis_angle = np.zeros(3, dtype=np.float64)
+        mujoco.mju_quat2Vel(axis_angle, rel_quat, 1.0)
+        angle = np.linalg.norm(axis_angle)
+        if angle > max_step:
+            axis_angle = axis_angle / angle * max_step
+        return axis_angle
