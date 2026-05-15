@@ -1,7 +1,7 @@
 """
 BlockLifting 任务策略实现.
 
-阶段序列: make_gripper_hand_form → approach → descend → adjust → grasp → lift → hold
+阶段序列: make_gripper_hand_form → approach → descend → adjust → grasp → lift
 """
 
 import time
@@ -34,7 +34,6 @@ class BlockLiftingStrategy(TaskStrategy):
       3. adjust    : 如果下降后末端位置在水平面上偏离了预定的抓取位置，进行微调回预定位置
       4. grasp     : 闭合手指抓取
       5. lift      : 垂直提升
-      6. hold      : 保持验证
     """
     
     # PRE_GRASP_HEIGHT 等同于环境中可视化目标高度marker平面的高度
@@ -56,7 +55,7 @@ class BlockLiftingStrategy(TaskStrategy):
 
     @property
     def phases(self) -> list:
-        return ["make_gripper_hand_form", "approach", "descend", "adjust", "grasp", "lift", "hold"]
+        return ["make_gripper_hand_form", "approach", "descend", "adjust", "grasp", "lift"]
 
     def execute_phase(self, phase_idx: int, ctx: PhaseContext) -> Tuple[PhaseResult, ActionContext]:
         phase = self.phases[phase_idx]
@@ -314,16 +313,5 @@ class BlockLiftingStrategy(TaskStrategy):
                 self._hold_target_pos = ee_pos.copy()
                 return PhaseResult.NEXT, act
             return PhaseResult.CONTINUE, act
-
-        elif phase == "hold":
-            # hold 阶段保持末端位置不变，验证是否成功提升方块
-            act.ee_delta_pos = np.zeros(3, dtype=np.float64)
-            act.ee_delta_rot = np.zeros(3, dtype=np.float64)
-            act.hand_target = self.HAND_CLOSE.copy()
-            # 判断提升成功的条件：末端位置接近 lift 阶段目标位置，且方块位置的z坐标明显高于桌面（说明方块被提升离开了桌面）
-            pos_err = distance(ee_pos, self._hold_target_pos)
-            block_lifted = (obj_pos[2] > table_z + 0.05)  # 方块离开桌面至少5cm
-            if ctx.phase_step > self.MIN_PHASE_STEPS and pos_err < 0.02 and block_lifted:
-                return PhaseResult.SUCCESS, act
 
         return PhaseResult.ABORT, act

@@ -65,26 +65,32 @@ class PipelineStateOverlay:
         current_idx = self.strategy.phase_idx
 
         if current_idx != self._last_phase_idx:
-            # 阶段切换
             old_idx = self._last_phase_idx
-            old_name = self._get_phase_name(old_idx) if old_idx >= 0 else "start"
+            old_name = self._get_phase_name(old_idx) if old_idx >= 0 else "START"
             new_name = self._get_phase_name(current_idx)
 
             duration = step - self._phase_enter_step
             self._phase_enter_step = step
             self._last_phase_idx = current_idx
 
-            # 分配颜色
+            # 分配颜色（MuJoCo 用）
             if new_name not in self._phase_color_map:
                 color_idx = len(self._phase_color_map) % len(self.PHASE_COLORS)
                 self._phase_color_map[new_name] = self.PHASE_COLORS[color_idx]
 
-            return (
-                f"[{'='*20}]\n"
-                f"  → 阶段切换: {old_name} → {new_name}\n"
-                f"   上一阶段耗时: {duration} 步\n"
-                f"[{'='*20}]"
+            # --- 美化后的输出格式 ---
+            # \033[1;32m 是绿色，\033[1;34m 是蓝色，\033[0m 是重置
+            C_BLUE = "\033[1;34m"
+            C_GREEN = "\033[1;32m"
+            C_GRAY = "\033[2m"
+            C_RESET = "\033[0m"
+            
+            msg = (
+                f"\n{C_BLUE}⦿ Pipeline Status Change{C_RESET}\n"
+                f"  {old_name} {C_GRAY}➜{C_RESET} {C_GREEN}{new_name.upper()}{C_RESET}\n"
+                f"  {C_GRAY}Step: {step} | Duration: {duration} steps{C_RESET}\n"
             )
+            return msg
 
         return None
 

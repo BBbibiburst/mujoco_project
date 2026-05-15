@@ -540,13 +540,13 @@ def demo_pipeline(
         episode, step = 0, 0
 
         while viewer.is_running() and episode < n_episodes:
-            running, action, terminated, action_context = strategy.tick(obs, info, step, env)
+            action, action_context = strategy.tick(obs, info, step, env)
             ee_target_pos = action_context.ee_target_pos
             ee_target_quat = action_context.ee_target_quat
             ee_delta_pos = action_context.ee_delta_pos
             ee_delta_rot = action_context.ee_delta_rot
 
-            # 反推绝对目标
+            # 反推绝对目标（仅用于可视化）
             if ee_target_pos is None and ee_target_quat is None:
                 if ee_delta_pos is not None and ee_delta_rot is not None:
                     ee_pos, ee_quat = env.get_ee_pose()
@@ -555,16 +555,9 @@ def demo_pipeline(
                     mujoco.mju_euler2Quat(delta_quat, ee_delta_rot, 'xyz')
                     ee_target_quat = np.zeros(4)
                     mujoco.mju_mulQuat(ee_target_quat, delta_quat, ee_quat)
-                else:
-                    raise ValueError("[Error] 策略未提供绝对目标，也没有增量信息，无法构建动作！")
 
-            if not running:
-                terminated = True
-                truncated = False
-                obs, reward, _, success, _, info = env.step(np.zeros(env.action_space.shape))
-            else:
-                obs, reward, terminated, success, truncated, info = env.step(action)
-                step += 1
+            obs, reward, terminated, success, truncated, info = env.step(action)
+            step += 1
 
             switch_msg = overlay.update(step)
             if switch_msg:
@@ -634,25 +627,18 @@ def _run_pipeline_benchmark(
         done = False
 
         while not done:
-            running, action, terminated, action_context = strategy.tick(obs, info, step, env)
-
-            if not running:
-                terminated = True
-                truncated = False
-                obs, _, _, success, _, info = env.step(np.zeros(env.action_space.shape))
-            else:
-                obs, _, terminated, success, truncated, info = env.step(action)
-                step += 1
-
+            action, action_context = strategy.tick(obs, info, step, env)
+            obs, _, terminated, success, truncated, info = env.step(action)
+            step += 1
             done = terminated or truncated
 
         total_steps.append(step)
         if success:
             successes += 1
-        if not strategy.success and not terminated:
+        if truncated:
             timeouts += 1
 
-        status = "SUCCESS" if success else ("TIMEOUT" if not terminated else "FAIL")
+        status = "SUCCESS" if success else ("TIMEOUT" if truncated else "FAIL")
         print(f"  Ep {ep+1:3d}/{n_episodes}: steps={step:4d} | {status}")
 
     elapsed = time.time() - t0
