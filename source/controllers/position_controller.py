@@ -192,15 +192,16 @@ def stiff_ik_gains() -> IKGains:
 # ====================== 预设 OSC 增益（工厂函数） ======================
 
 def stable_osc_gains() -> OSCGains:
-    """稳定增益：保守的阻尼和力矩变化率，适合一般操作任务。"""
     return OSCGains(
-        kp_pos=500, kd_pos=35,
-        kp_rot=120, kd_rot=16,
+        kp_pos=500,  kd_pos=35,
+        kp_rot=300,  kd_rot=35,
         kp_joint=50000.0, kd_joint=450.0,
+        kp_hand=np.full(6, 400000.0),
+        kd_hand=np.full(6, 1300.0),   # ← 接近临界阻尼
         ff_scale=0.95, vel_filter_alpha=0.4,
         singular_thresh=0.02,
         null_kp=3, null_kd=3.5,
-        torque_rate_limit=30.0,
+        torque_rate_limit=80.0,
     )
 
 

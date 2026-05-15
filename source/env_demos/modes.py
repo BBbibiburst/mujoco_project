@@ -480,8 +480,8 @@ def _overlay_camera(obs, action_mode, reward, ep_reward, step, episode, terminat
     cv2.namedWindow("Camera", cv2.WINDOW_NORMAL)
     cv2.imshow("Camera", cam_bgr)
     cv2.resizeWindow("Camera", 640, 480)
-    
-    
+
+
 # ====================== 模式 5：流程化任务执行 ======================
 
 def demo_pipeline(
@@ -492,13 +492,14 @@ def demo_pipeline(
     controller_type: str = "osc",
     show_ee_traj: bool = True,
     show_fingertip_midpoint: bool = True,
+    summary_interval: int = 10,
 ) -> None:
     """
     流程化任务执行：按任务类型自动编排行为序列完成目标。
-    
+
     两种运行模式：
-      - render=True  : 可视化单回合演示（原有体验）
-      - render=False : 无渲染批量测试，统计通关率
+      - render=True  : 可视化演示，每轮实时渲染 + 统计成功率，定期输出阶段性总结
+      - render=False : 无渲染批量测试，统计通关率，定期输出阶段性总结
     """
     from .registry import load_strategy
     from .pipeline_overlay import PipelineStateOverlay
@@ -520,12 +521,54 @@ def demo_pipeline(
     env = load_task(task_name, robot_cfg)
     strategy = load_strategy(task_name)
 
+    # 统一统计信息（渲染/无渲染共用）
+    total_steps = []
+    successes = 0
+    timeouts = 0
+    t0 = time.time()
+
     if not render:
-        _run_pipeline_benchmark(env, strategy, task_name, n_episodes)
+        # ===== 无渲染模式 =====
+        for ep in range(n_episodes):
+            obs, info = env.reset(seed=ep)
+            strategy.reset()
+            step = 0
+            done = False
+
+            while not done:
+                action, action_context = strategy.tick(obs, info, step, env)
+                obs, _, terminated, success, truncated, info = env.step(action)
+                step += 1
+                done = terminated or truncated
+
+            total_steps.append(step)
+            if success:
+                successes += 1
+            if truncated:
+                timeouts += 1
+
+            status = "SUCCESS" if success else ("TIMEOUT" if truncated else "FAIL")
+            print(f"  Ep {ep+1:3d}/{n_episodes}: steps={step:4d} | {status}")
+
+            # 每 summary_interval 轮输出一次阶段性总结
+            if (ep + 1) % summary_interval == 0 and (ep + 1) < n_episodes:
+                _print_pipeline_summary(
+                    task_name, ep + 1, total_steps, successes, timeouts,
+                    elapsed=time.time() - t0, is_interim=True
+                )
+
+        # 最终总结
+        elapsed = time.time() - t0
+        _print_pipeline_summary(
+            task_name, n_episodes, total_steps, successes, timeouts,
+            elapsed=elapsed, is_interim=False
+        )
+        env.close()
         return
 
-    # ===== 渲染模式：单回合可视化演示 =====
-    obs, info = env.reset(seed=42)
+    # ===== 渲染模式：每轮都实时渲染 + 统计 =====
+    # 先 reset 初始化环境，再启动 viewer
+    obs, info = env.reset(seed=0)
     strategy.reset()
 
     overlay = PipelineStateOverlay(strategy)
@@ -538,68 +581,93 @@ def demo_pipeline(
         viewer.cam.elevation = -30
         viewer.cam.azimuth = 120
 
-        episode, step = 0, 0
-
+        episode = 0
         while viewer.is_running() and episode < n_episodes:
-            action, action_context = strategy.tick(obs, info, step, env)
-            ee_target_pos = action_context.ee_target_pos
-            ee_target_quat = action_context.ee_target_quat
-            ee_delta_pos = action_context.ee_delta_pos
-            ee_delta_rot = action_context.ee_delta_rot
-
-            # 反推绝对目标（仅用于可视化）
-            if ee_target_pos is None and ee_target_quat is None:
-                if ee_delta_pos is not None and ee_delta_rot is not None:
-                    ee_pos, ee_quat = env.get_ee_pose()
-                    ee_target_pos = ee_pos + ee_delta_pos
-                    delta_quat = np.zeros(4)
-                    mujoco.mju_euler2Quat(delta_quat, ee_delta_rot, 'xyz')
-                    ee_target_quat = np.zeros(4)
-                    mujoco.mju_mulQuat(ee_target_quat, delta_quat, ee_quat)
-
-            obs, reward, terminated, success, truncated, info = env.step(action)
-            step += 1
-
-            switch_msg = overlay.update(step)
-            if switch_msg:
-                print(switch_msg)
-
-            # ---- 可视化 ----
-            viewer.user_scn.ngeom = 0
-            if traj_vis:
-                actual = env.get_ee_pose()[0]
-                traj_vis.update(actual, target_pos=ee_target_pos, target_quat=ee_target_quat)
-                traj_vis.draw(viewer)
-            if ft_vis:
-                ft_vis.update(env)
-                ft_vis.draw(viewer)
-
-            overlay.draw_viewer_indicator(viewer)
-            _show_cv_windows_pipeline(obs, overlay, reward, env)
-            viewer.sync()
-
-            if terminated or truncated:
-                status = "✓ 成功" if success else "✗ 失败/超时"
-                print(f"\n  [回合 {episode+1} 结束] {status}")
-                print(f"   总步数: {step} | 最终阶段: {overlay._get_phase_name(strategy.phase_idx)}")
-
-                status_dict = strategy.get_status_dict()
-                print("   策略内部状态：")
-                for k, v in status_dict.items():
-                    print(f"   {k}: {v}")
-
-                print(f"  {'='*40}")
-
-                episode += 1
-                step = 0
+            # 每轮开始时 reset（第一轮已在 viewer 启动前 reset）
+            if episode > 0:
+                obs, info = env.reset(seed=episode)
+                strategy.reset()
+                overlay.reset()
                 if traj_vis:
                     traj_vis.reset()
                 if ft_vis:
                     ft_vis.reset()
-                overlay.reset()
-                if episode < n_episodes:
-                    obs, info = env.reset()
-                    strategy.reset()
+
+            step = 0
+            done = False
+
+            while viewer.is_running() and not done:
+                action, action_context = strategy.tick(obs, info, step, env)
+                ee_target_pos = action_context.ee_target_pos
+                ee_target_quat = action_context.ee_target_quat
+                ee_delta_pos = action_context.ee_delta_pos
+                ee_delta_rot = action_context.ee_delta_rot
+
+                # 反推绝对目标（仅用于可视化）
+                if ee_target_pos is None and ee_target_quat is None:
+                    if ee_delta_pos is not None and ee_delta_rot is not None:
+                        ee_pos, ee_quat = env.get_ee_pose()
+                        ee_target_pos = ee_pos + ee_delta_pos
+                        delta_quat = np.zeros(4)
+                        mujoco.mju_euler2Quat(delta_quat, ee_delta_rot, 'xyz')
+                        ee_target_quat = np.zeros(4)
+                        mujoco.mju_mulQuat(ee_target_quat, delta_quat, ee_quat)
+
+                obs, reward, terminated, success, truncated, info = env.step(action)
+                step += 1
+                done = terminated or truncated
+
+                switch_msg = overlay.update(step)
+                if switch_msg:
+                    print(switch_msg)
+
+                # ---- 可视化 ----
+                viewer.user_scn.ngeom = 0
+                if traj_vis:
+                    actual = env.get_ee_pose()[0]
+                    traj_vis.update(actual, target_pos=ee_target_pos, target_quat=ee_target_quat)
+                    traj_vis.draw(viewer)
+                if ft_vis:
+                    ft_vis.update(env)
+                    ft_vis.draw(viewer)
+
+                overlay.draw_viewer_indicator(viewer)
+                _show_cv_windows_pipeline(obs, overlay, reward, env)
+                viewer.sync()
+
+            # 回合结束统计
+            total_steps.append(step)
+            if success:
+                successes += 1
+            if truncated:
+                timeouts += 1
+
+            status = "✓ 成功" if success else "✗ 失败/超时"
+            print(f"\n  [回合 {episode+1} 结束] {status}")
+            print(f"   总步数: {step} | 最终阶段: {overlay._get_phase_name(strategy.phase_idx)}")
+
+            status_dict = strategy.get_status_dict()
+            print("   策略内部状态：")
+            for k, v in status_dict.items():
+                print(f"   {k}: {v}")
+
+            # 每 summary_interval 轮输出阶段性总结
+            completed = episode + 1
+            if completed % summary_interval == 0 and completed < n_episodes:
+                _print_pipeline_summary(
+                    task_name, completed, total_steps, successes, timeouts,
+                    elapsed=time.time() - t0, is_interim=True
+                )
+
+            print(f"  {'='*40}")
+            episode += 1
+
+        # 最终总结
+        elapsed = time.time() - t0
+        _print_pipeline_summary(
+            task_name, n_episodes, total_steps, successes, timeouts,
+            elapsed=elapsed, is_interim=False
+        )
 
     finally:
         # 严格保证析构顺序：viewer 先关闭释放 OpenGL/渲染资源，
@@ -609,60 +677,29 @@ def demo_pipeline(
         env.close()
 
 
-def _run_pipeline_benchmark(
-    env: RobotArmEnvBase,
-    strategy,
+def _print_pipeline_summary(
     task_name: str,
-    n_episodes: int,
+    n_completed: int,
+    total_steps: list,
+    successes: int,
+    timeouts: int,
+    elapsed: float,
+    is_interim: bool = False,
 ) -> None:
-    """
-    无渲染批量基准测试：统计通关率、平均步数、耗时。
-    """
-    print(f"\n[Pipeline Benchmark] 开始 {n_episodes} 回合无渲染测试...\n")
-
-    t0 = time.time()
-    total_steps = []
-    successes = 0
-    timeouts = 0
-
-    for ep in range(n_episodes):
-        obs, info = env.reset(seed=ep)
-        strategy.reset()
-        step = 0
-        done = False
-
-        while not done:
-            action, action_context = strategy.tick(obs, info, step, env)
-            obs, _, terminated, success, truncated, info = env.step(action)
-            step += 1
-            done = terminated or truncated
-
-        total_steps.append(step)
-        if success:
-            successes += 1
-        if truncated:
-            timeouts += 1
-
-        status = "SUCCESS" if success else ("TIMEOUT" if truncated else "FAIL")
-        print(f"  Ep {ep+1:3d}/{n_episodes}: steps={step:4d} | {status}")
-
-    elapsed = time.time() - t0
-
-    print(f"\n{'='*50}")
-    print(f"  Pipeline Benchmark 结果 ({task_name})")
-    print(f"{'='*50}")
-    print(f"  总回合数:   {n_episodes}")
+    """输出 pipeline 统计总结（阶段性或最终）."""
+    label = "阶段性总结" if is_interim else "最终总结"
+    header = f"\n{'='*50}\n  Pipeline {label} ({task_name})\n{'='*50}"
+    print(header)
+    print(f"  已完成回合: {n_completed}")
     print(f"  成功数:     {successes}")
     print(f"  超时数:     {timeouts}")
-    print(f"  失败数:     {n_episodes - successes - timeouts}")
-    print(f"  通关率:     {successes / n_episodes * 100:.1f}%")
+    print(f"  失败数:     {n_completed - successes - timeouts}")
+    print(f"  通关率:     {successes / n_completed * 100:.1f}%")
     print(f"  平均步数:   {np.mean(total_steps):.1f} ± {np.std(total_steps):.1f}")
     print(f"  总耗时:     {elapsed:.1f}s")
-    print(f"  回合/秒:    {n_episodes / elapsed:.2f}")
+    print(f"  回合/秒:    {n_completed / elapsed:.2f}")
     print(f"  步/秒:      {sum(total_steps) / elapsed:.0f}")
     print(f"{'='*50}")
-
-    env.close()
 
 
 def _show_cv_windows_pipeline(obs: dict, overlay: PipelineStateOverlay,
