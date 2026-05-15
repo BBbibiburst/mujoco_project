@@ -67,6 +67,7 @@ def main():
     parser.add_argument("--hand-step", type=float, default=0.0005, help="键盘模式手步长(m)")
     parser.add_argument("--pos-step", type=float, default=0.01, help="键盘模式位置步长(m)")
     parser.add_argument("--rot-step", type=float, default=0.05, help="键盘模式旋转步长(rad)")
+    parser.add_argument("--seed", type=int, default=42, help="随机种子")
 
     args = parser.parse_args()
 
@@ -116,6 +117,7 @@ def main():
             pos_step=args.pos_step,
             rot_step=args.rot_step,
             show_fingertip_midpoint=show_ft_mid,
+            seed=args.seed,
         )
     elif args.mode == "pipeline":
         demo_pipeline(
@@ -126,6 +128,7 @@ def main():
             controller_type=args.controller,
             show_ee_traj=show_traj,
             show_fingertip_midpoint=show_ft_mid,
+            seed=args.seed,
         )
 
 
