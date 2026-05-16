@@ -170,7 +170,7 @@ class PipelineStateOverlay:
         """获取阶段名称."""
         if 0 <= idx < len(self.strategy.phases):
             return self.strategy.phases[idx]
-        return "done" if self.strategy.finished else "unknown"
+        return "done" if self.strategy.all_phases_done else "unknown"
 
     def _get_bgr_color(self, phase_name: str) -> tuple:
         """获取阶段对应的 BGR 颜色（用于 OpenCV）."""

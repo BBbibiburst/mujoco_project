@@ -22,12 +22,14 @@ class PhaseResult(Enum):
     CONTINUE : 当前阶段继续执行。
     NEXT     : 当前阶段完成，推进到下一阶段。
     RETRY    : 重置当前阶段的步数计数器并重试（阶段不变）。
+    RESTART  : 阶段完成，但策略需要回到第一个阶段重新开始（例如判定失败后重试）。
     ABORT    : 策略放弃执行，后续步骤输出零动作。
 
     """
     CONTINUE = auto()
     NEXT = auto()
     RETRY = auto()
+    RESTART = auto()
     ABORT = auto()
 
 
@@ -122,6 +124,10 @@ class TaskStrategy(ABC):
             self.phase_step = 0
         elif result == PhaseResult.RETRY:
             self.phase_step = 0
+        elif result == PhaseResult.RESTART:
+            # 回到第一个阶段，步数清零，触发子类的重计算逻辑
+            self.phase_idx = 0
+            self.phase_step = 0
         elif result == PhaseResult.ABORT:
             self.aborted = True
 
@@ -181,7 +187,7 @@ class TaskStrategy(ABC):
             raise ValueError(f"Unknown action_mode: {cfg.action_mode}")
 
         return np.clip(action, -1.0, 1.0)
-    
+
     def get_status_dict(self) -> dict:
         """
         返回通用状态字典，供外部显示使用.

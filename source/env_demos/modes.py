@@ -652,7 +652,7 @@ def demo_pipeline(
     robot_cfg = _make_robot_cfg(
         action_mode=action_mode,
         controller_type=controller_type,
-        max_episode_steps=1500,
+        max_episode_steps=2000,
         action_scale=0.05,
         action_scale_rot=0.1,
         action_scale_hand=0.005,
