@@ -1,8 +1,8 @@
 """
 Episode 统计工具 - 方块初始位置 × 成功/失败/超时 散点图
 用法:
-    python -m source.env_demos.episode_stats <log_dir>
-    python -m source.env_demos.episode_stats source/env_demos/log
+    python -m source.env_demos.strategy_stat.block_lifting.episode_stats <log_dir>
+    python -m source.env_demos.strategy_stat.block_lifting.episode_stats source/env_demos/log
 """
 
 import json

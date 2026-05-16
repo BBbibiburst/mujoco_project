@@ -1,7 +1,7 @@
 """
 机械臂抓取演示 - Matplotlib 3D 动画（真实 FK，RM75B + InspireHand）
 用法:
-    python -m source.env_demos.log_visualizer <data.jsonl>
+    python -m source.env_demos.strategy_stat.block_lifting.log_visualizer <data.jsonl>
 
 两个 XML 均不需要 mesh/STL 文件，脚本自动剥离 geom/asset。
 """
