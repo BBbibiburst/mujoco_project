@@ -290,7 +290,7 @@ def main():
     all_pts = np.vstack([ee_pos_all, block_pos_all, [target_pos]])
     margin  = 0.20
     xc, yc  = all_pts[:, 0].mean(), all_pts[:, 1].mean()
-    span    = max(all_pts.ptp(axis=0)[:2]) / 2 + margin
+    span = max(np.ptp(all_pts, axis=0)[:2]) / 2 + margin
     ax3d.set_xlim(xc - span, xc + span)
     ax3d.set_ylim(yc - span, yc + span)
     ax3d.set_zlim(floor_z, all_pts[:, 2].max() + 0.12)
