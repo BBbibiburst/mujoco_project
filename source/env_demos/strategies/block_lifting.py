@@ -283,7 +283,7 @@ class BlockLiftingStrategy(TaskStrategy):
             # ========== 收敛判断 ==========
             pos_err  = distance(ee_pos, target_ee_pos)
             quat_err = quat_distance(ee_quat, target_quat)
-            if ctx.phase_step > self.MIN_PHASE_STEPS and pos_err < 0.02 and quat_err < 0.15:
+            if ctx.phase_step > self.MIN_PHASE_STEPS and pos_err < 0.01 and quat_err < 0.05:
 
                 # 缓存approach阶段末端位置用于 descend 阶段使用
                 self._descend_target_pos = ee_pos.copy()
@@ -296,7 +296,7 @@ class BlockLiftingStrategy(TaskStrategy):
             # 只在第一次进入时计算目标位置
             if not hasattr(self, '_descend_target_computed'):
                 target_pos = self._descend_target_pos.copy()
-                target_pos -= env.get_mid_point_position() - obj_pos
+                target_pos[2] -= env.get_mid_point_position()[2] - obj_pos[2]
                 self._descend_target_pos = target_pos  # 覆盖为修正后的固定值
                 self._descend_target_computed = True
             
@@ -397,9 +397,6 @@ class BlockLiftingStrategy(TaskStrategy):
             target_pos = self._lift_target_pos.copy()
             target_pos[2] += self.LIFT_HEIGHT + self.PRE_GRASP_HEIGHT
 
-            # ========== 目标姿态 ==========
-            target_quat = self._approach_quat_target
-
             # ========== 位置控制 ==========
             delta_pos = target_pos - ee_pos
             dist_pos = np.linalg.norm(delta_pos)
@@ -407,29 +404,14 @@ class BlockLiftingStrategy(TaskStrategy):
                 delta_pos = delta_pos / dist_pos * self.LIFT_SPEED
             act.ee_delta_pos = delta_pos
 
-            # ========== 姿态控制（与 approach 阶段相同逻辑）==========
-            inv_quat = np.zeros(4, dtype=np.float64)
-            rel_quat = np.zeros(4, dtype=np.float64)
-            mujoco.mju_negQuat(inv_quat, ee_quat)
-            mujoco.mju_mulQuat(rel_quat, target_quat, inv_quat)
-
-            axis_angle = np.zeros(3, dtype=np.float64)
-            mujoco.mju_quat2Vel(axis_angle, rel_quat, 1.0)
-            angle = np.linalg.norm(axis_angle)
-            if angle > 0.1:
-                axis_angle = axis_angle / angle * 0.1
-            act.ee_delta_rot = axis_angle
-
             # 可视化目标
             act.ee_target_pos = target_pos.copy()
-            act.ee_target_quat = target_quat.copy()
 
             act.hand_target = self.HAND_CLOSE.copy()
 
-            # ========== 收敛判断（位置 + 姿态）==========
+            # ========== 收敛判断（位置）==========
             pos_err = np.linalg.norm(ee_pos - target_pos)
-            quat_err = quat_distance(ee_quat, target_quat)
-            if (ctx.phase_step > self.MIN_PHASE_STEPS and pos_err < 0.02 and quat_err < 0.15) or ctx.phase_step > 100:
+            if (ctx.phase_step > self.MIN_PHASE_STEPS and pos_err < 0.02) or ctx.phase_step > 300:
                 self._hold_target_pos = ee_pos.copy()
                 return PhaseResult.NEXT, act
             return PhaseResult.CONTINUE, act

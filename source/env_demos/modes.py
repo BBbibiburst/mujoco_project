@@ -4,10 +4,14 @@
 每个函数对应一种演示模式，通过 __main__.py 调用。
 """
 
+import json
+import os
 import queue
 import threading
 import time
-from typing import Optional
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 import cv2
 import mujoco
@@ -57,6 +61,71 @@ def _quat_to_euler_deg(quat: np.ndarray) -> np.ndarray:
     pitch = np.arcsin(np.clip(2 * (w * y - z * x), -1.0, 1.0))
     yaw = np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
     return np.degrees(np.array([roll, pitch, yaw]))
+
+
+# ====================== 日志记录辅助 ======================
+
+
+def _get_log_dir() -> Path:
+    """获取日志目录（代码同级目录下的 log/ 文件夹）."""
+    # 当前文件所在目录
+    current_dir = Path(__file__).parent.resolve()
+    log_dir = current_dir / "log"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir
+
+
+class InfoLogger:
+    """每 episode 一个 JSONL 文件，记录每一步的 info."""
+
+    def __init__(self, task_name: str, mode_name: str, episode: int):
+        self.task_name = task_name
+        self.mode_name = mode_name
+        self.episode = episode
+        self.log_dir = _get_log_dir()
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.file_path = (
+            self.log_dir
+            / f"{task_name}_{mode_name}_ep{episode:04d}_{timestamp}.jsonl"
+        )
+        self._file = open(self.file_path, "w", encoding="utf-8")
+        self.step_count = 0
+
+    def log_step(self, step: int, info: Dict[str, Any], extra: Optional[Dict[str, Any]] = None) -> None:
+        """记录单步 info."""
+        record = {
+            "step": step,
+            "timestamp": datetime.now().isoformat(),
+            "info": info,
+        }
+        if extra:
+            record["extra"] = extra
+        self._file.write(json.dumps(record, ensure_ascii=False, default=_json_default) + "\n")
+        self._file.flush()
+        self.step_count += 1
+
+    def close(self) -> None:
+        """关闭文件."""
+        if self._file:
+            self._file.close()
+            self._file = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+
+def _json_default(obj: Any) -> Any:
+    """JSON 序列化默认值处理（numpy 类型等）."""
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, (np.integer, np.floating)):
+        return obj.item()
+    if isinstance(obj, bytes):
+        return obj.decode("utf-8", errors="replace")
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
 # ====================== 模式 1：随机策略 ======================
@@ -274,6 +343,7 @@ _GRIPPER_OPEN = np.array(
 
 def demo_keyboard_control(
     task_name: str = "pick_and_place",
+    n_episodes: int = 999_999,  # 新增：支持限制最大回合数
     action_mode: str = "joint",
     controller_type: str = "osc",
     arm_step: float = 0.05,
@@ -282,6 +352,7 @@ def demo_keyboard_control(
     rot_step: float = 0.05,
     show_fingertip_midpoint: bool = True,
     seed: Optional[int] = 42,
+    log_info: bool = False,
 ) -> None:
     """
     键盘控制模式（joint / ee 双模式，禁用超时，仅手动 R 重置）.
@@ -295,6 +366,8 @@ def demo_keyboard_control(
         f"\n{'='*65}\n [Demo] 键盘控制 | 任务={reg['display_name']}  模式={action_mode}"
     )
     print(f" controller={controller_type}  超时=禁用（手动R重置）\n{'='*65}")
+    if log_info:
+        print(f" [Info 记录] 已启用，日志目录: {_get_log_dir()}")
 
     env = load_task(
         task_name,
@@ -326,7 +399,7 @@ def demo_keyboard_control(
     traj_vis = EETrajectoryVisualizer(TrajectoryVisualStyle(), max_history=40)
     ft_vis = FingertipMidpointVisualizer() if show_fingertip_midpoint else None
 
-    obs, _ = env.reset(seed=seed)
+    obs, info = env.reset(seed=seed)
 
     # 控制目标
     ee_target_pos = ee_target_quat = joint_target = hand_target = None
@@ -351,12 +424,17 @@ def demo_keyboard_control(
     terminated = False
     running = True
 
+    # 初始化 info logger
+    info_logger: Optional[InfoLogger] = None
+    if log_info:
+        info_logger = InfoLogger(task_name, "keyboard", episode)
+
     with mujoco.viewer.launch_passive(env.model, env.data) as viewer:
         viewer.cam.distance = 1.8
         viewer.cam.elevation = -25
         viewer.cam.azimuth = 135
 
-        while viewer.is_running() and running:
+        while viewer.is_running() and running and episode <= n_episodes:
 
             # ---- 消费命令队列 ----
             pending_reset = False
@@ -418,7 +496,11 @@ def demo_keyboard_control(
                 print(
                     f"[回合 {episode}] {label}  累积奖励={ep_reward:.4f}  步数={step}"
                 )
-                obs, _ = env.reset()
+                # 关闭当前 episode 的 logger
+                if info_logger:
+                    info_logger.close()
+
+                obs, info = env.reset()
                 traj_vis.reset()
                 if ft_vis:
                     ft_vis.reset()
@@ -429,14 +511,30 @@ def demo_keyboard_control(
                 reward = 0.0
                 terminated = False
 
+                # 开启新 episode 的 logger
+                if log_info and episode <= n_episodes:
+                    info_logger = InfoLogger(task_name, "keyboard", episode)
+                continue
+
             # ---- 仿真步进 ----
             if not terminated:
                 action = _build_action(
                     is_ee, env, ee_target_pos, ee_target_quat, hand_target, joint_target
                 )
-                obs, reward, terminated, success, _, _ = env.step(action)
+                obs, reward, terminated, success, _, info = env.step(action)
                 step += 1
                 ep_reward += reward
+
+                # 记录 info
+                if info_logger:
+                    info_logger.log_step(step, info, extra={
+                        "reward": float(reward),
+                        "ep_reward": float(ep_reward),
+                        "terminated": bool(terminated),
+                        "success": bool(success),
+                        "action_mode": action_mode,
+                    })
+
                 if terminated:
                     print(
                         f"[回合 {episode}] 终止，success={success}  步数={step}  累积奖励={ep_reward:.4f}  → 按 R 重置"
@@ -484,6 +582,10 @@ def demo_keyboard_control(
                 obs, action_mode, reward, ep_reward, step, episode, terminated
             )
             viewer.sync()
+
+    # 清理 logger
+    if info_logger:
+        info_logger.close()
 
     cv2.destroyAllWindows()
     env.close()
@@ -632,6 +734,7 @@ def demo_pipeline(
     show_fingertip_midpoint: bool = True,
     summary_interval: int = 10,
     seed: Optional[int] = 42,
+    log_info: bool = False,
 ) -> None:
     """
     流程化任务执行：按任务类型自动编排行为序列完成目标。
@@ -647,6 +750,8 @@ def demo_pipeline(
     print(f"\n{'='*65}\n [Demo] 流程化执行 | 任务={reg['display_name']}")
     print(f" action_mode={action_mode}, controller={controller_type}")
     print(f" 渲染模式: {'可视化' if render else '无渲染批量测试'}")
+    if log_info:
+        print(f" [Info 记录] 已启用，日志目录: {_get_log_dir()}")
     print(f"{'='*65}")
 
     robot_cfg = _make_robot_cfg(
@@ -676,11 +781,23 @@ def demo_pipeline(
             step = 0
             done = False
 
+            # 每 episode 一个 logger
+            info_logger = InfoLogger(task_name, "pipeline", ep + 1) if log_info else None
+
             while not done:
                 action, action_context = strategy.tick(obs, info, step, env)
                 obs, _, terminated, success, truncated, info = env.step(action)
                 step += 1
                 done = terminated or truncated
+
+                # 记录 info
+                if info_logger:
+                    info_logger.log_step(step, info, extra={
+                        "terminated": bool(terminated),
+                        "success": bool(success),
+                        "truncated": bool(truncated),
+                        "phase_idx": getattr(strategy, "phase_idx", None),
+                    })
 
             total_steps.append(step)
             if success:
@@ -690,6 +807,10 @@ def demo_pipeline(
 
             status = "SUCCESS" if success else ("TIMEOUT" if truncated else "FAIL")
             print(f"  Ep {ep+1:3d}/{n_episodes}: steps={step:4d} | {status}")
+
+            # 关闭 logger
+            if info_logger:
+                info_logger.close()
 
             # 每 summary_interval 轮输出一次阶段性总结
             if (ep + 1) % summary_interval == 0 and (ep + 1) < n_episodes:
@@ -731,6 +852,10 @@ def demo_pipeline(
     ft_vis = FingertipMidpointVisualizer() if show_fingertip_midpoint else None
 
     viewer = mujoco.viewer.launch_passive(env.model, env.data)
+
+    # 当前 episode 的 logger
+    info_logger: Optional[InfoLogger] = InfoLogger(task_name, "pipeline", 1) if log_info else None
+
     try:
         viewer.cam.distance = 1.5
         viewer.cam.elevation = -30
@@ -748,6 +873,12 @@ def demo_pipeline(
                     traj_vis.reset()
                 if ft_vis:
                     ft_vis.reset()
+
+                # 新 episode 的 logger
+                if log_info:
+                    if info_logger:
+                        info_logger.close()
+                    info_logger = InfoLogger(task_name, "pipeline", episode + 1)
 
             step = 0
             done = False
@@ -772,6 +903,16 @@ def demo_pipeline(
                 obs, reward, terminated, success, truncated, info = env.step(action)
                 step += 1
                 done = terminated or truncated
+
+                # 记录 info
+                if info_logger:
+                    info_logger.log_step(step, info, extra={
+                        "reward": float(reward),
+                        "terminated": bool(terminated),
+                        "success": bool(success),
+                        "truncated": bool(truncated),
+                        "phase_idx": getattr(strategy, "phase_idx", None),
+                    })
 
                 switch_msg = overlay.update(step)
                 if switch_msg:
@@ -842,6 +983,8 @@ def demo_pipeline(
     finally:
         # 严格保证析构顺序：viewer 先关闭释放 OpenGL/渲染资源，
         # cv2 窗口次之，env 最后清理 MuJoCo 数据——顺序错误会导致 segfault。
+        if info_logger:
+            info_logger.close()
         viewer.close()
         cv2.destroyAllWindows()
         env.close()

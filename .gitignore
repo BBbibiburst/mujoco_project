@@ -24,6 +24,7 @@ test.ipynb
 
 # 日志文件
 logs/
+source/env_demos/log
 
 # 训练检查点
 rl_models/

@@ -73,6 +73,10 @@ class BlockLiftingConfig:
         ]
     )
 
+    # 调试：方块生成区域示意（仅 MuJoCo 可视化可见，相机不可见）
+    spawn_area_debug: bool = True
+    spawn_area_color: Tuple = (0.0, 0.6, 1.0, 0.15)  # 半透明蓝色
+
     # 终止判断
     drop_threshold_offset: float = -0.025  # 物体底部触桌即失败
 
@@ -122,6 +126,8 @@ class BlockLiftingEnv(RobotArmEnvBase):
         self._obj_body_id: int = -1
         self._obj_free_jnt_qposadr: int = -1
         self._target_marker_body_id: int = -1
+        self._spawn_area_geom_id: int = -1
+        self._spawn_area_border_ids: List[int] = []
 
         # 回合辅助指标
         self._max_height: float = 0.0
@@ -187,6 +193,58 @@ class BlockLiftingEnv(RobotArmEnvBase):
         for cam in tc.cameras:
             spec.worldbody.add_camera(
                 name=cam.name, mode=0, pos=list(cam.pos), quat=list(cam.quat)
+            )
+
+        # 调试：方块生成区域示意（仅 MuJoCo 可视化可见，相机不可见）
+        # 显示整个 obj_spawn_range 定义的大区域，而非单个方块位置
+        if tc.spawn_area_debug:
+            half_x, half_y = tc.obj_spawn_range
+            cx, cy = tc.obj_spawn_center
+            # 使用 group=3 使其不在默认相机渲染组中（默认 group=0,1,2）
+            wb.add_geom(
+                name="spawn_area_debug",
+                type=mujoco.mjtGeom.mjGEOM_BOX,
+                size=[half_x, half_y, 0.001],
+                pos=[cx, cy, self._table_height + 0.002],
+                rgba=list(tc.spawn_area_color),
+                contype=0,
+                conaffinity=0,
+                group=3,  # 仅 MuJoCo 可视化可见，相机不可见
+            )
+            # 边界线框（更清楚地显示区域范围）
+            border_color = (0.0, 0.6, 1.0, 0.4)
+            # 四条边线
+            wb.add_geom(
+                name="spawn_area_border_x1",
+                type=mujoco.mjtGeom.mjGEOM_BOX,
+                size=[half_x, 0.002, 0.0015],
+                pos=[cx, cy - half_y, self._table_height + 0.003],
+                rgba=list(border_color),
+                contype=0, conaffinity=0, group=3,
+            )
+            wb.add_geom(
+                name="spawn_area_border_x2",
+                type=mujoco.mjtGeom.mjGEOM_BOX,
+                size=[half_x, 0.002, 0.0015],
+                pos=[cx, cy + half_y, self._table_height + 0.003],
+                rgba=list(border_color),
+                contype=0, conaffinity=0, group=3,
+            )
+            wb.add_geom(
+                name="spawn_area_border_y1",
+                type=mujoco.mjtGeom.mjGEOM_BOX,
+                size=[0.002, half_y, 0.0015],
+                pos=[cx - half_x, cy, self._table_height + 0.003],
+                rgba=list(border_color),
+                contype=0, conaffinity=0, group=3,
+            )
+            wb.add_geom(
+                name="spawn_area_border_y2",
+                type=mujoco.mjtGeom.mjGEOM_BOX,
+                size=[0.002, half_y, 0.0015],
+                pos=[cx + half_x, cy, self._table_height + 0.003],
+                rgba=list(border_color),
+                contype=0, conaffinity=0, group=3,
             )
 
     def _get_obs(self) -> Dict[str, Any]:
@@ -320,10 +378,96 @@ class BlockLiftingEnv(RobotArmEnvBase):
                     self._table_height + tc.target_lift_height,
                 ]
 
+        # 记录方块初始位置（供 _get_info 使用）
+        self._obj_initial_pos = obj_pos.copy()
+
         # 重置辅助指标
         self._max_height = 0.0
         self._is_dropped = False
         self._grasp_success = False
+
+        # ====================== 重写基类 _get_info ======================
+
+    def _get_info(self) -> Dict[str, Any]:
+        """
+        返回包含方块位置、高度等任务信息的调试字典。
+        继承基类默认的回合统计数据，并追加任务特定信息。
+        """
+        # 获取基类提供的回合统计信息
+        info = super()._get_info()
+
+        tc = self.task_cfg
+        current_pos = self.get_block_position()
+        current_height = self._get_obj_height()
+
+        # 方块相关信息
+        info["block"] = {
+            "initial_position": self._obj_initial_pos.tolist() if hasattr(self, '_obj_initial_pos') else None,
+            "current_position": current_pos.tolist(),
+            "current_height": float(current_height),
+            "target_height": float(tc.target_lift_height),
+            "max_height": float(self._max_height),
+            "is_lifted": bool(current_height >= tc.target_lift_height),
+            "was_lifted": bool(self._was_lifted),
+            "is_dropped": bool(self._is_dropped),
+            "grasp_success": bool(self._grasp_success),
+            "obj_size": float(tc.obj_size),
+            "obj_mass": float(tc.obj_mass),
+        }
+
+        # 末端执行器信息
+        try:
+            ee_pos, ee_quat = self.get_ee_pose()
+            info["end_effector"] = {
+                "position": ee_pos.tolist(),
+                "quaternion": ee_quat.tolist(),
+            }
+        except Exception:
+            info["end_effector"] = None
+
+        # 目标 marker 位置
+        try:
+            target_marker_pos = self.get_body_pos("target_marker")
+            info["target_marker"] = {
+                "position": target_marker_pos.tolist(),
+            }
+        except Exception:
+            info["target_marker"] = None
+
+        return info
+
+# {
+#     # 基类原有信息
+#     "episode_steps": 42,
+#     "episode_reward": 3.5,
+#     "episode_count": 10,
+#     "arm_qpos":       self.get_arm_qpos(),
+#     "hand_qpos":      self.get_hand_qpos(),
+#     "arm_qpos_range":   arm_qpos_range,
+#     "hand_qpos_range":  hand_qpos_range,
+    
+#     # 新增任务信息
+#     "block": {
+#         "initial_position": [0.45, 0.05, 0.825],
+#         "current_position": [0.452, 0.048, 0.95],
+#         "current_height": 0.125,
+#         "target_height": 0.15,
+#         "max_height": 0.13,
+#         "is_lifted": False,
+#         "was_lifted": True,
+#         "is_dropped": False,
+#         "grasp_success": True,
+#         "obj_size": 0.025,
+#         "obj_mass": 0.1,
+#     },
+#     "end_effector": {
+#         "position": [0.46, 0.05, 0.98],
+#         "quaternion": [0.98, 0.0, 0.0, 0.17],
+#     },
+#     "target_marker": {
+#         "position": [0.45, 0.05, 0.975],
+#     },
+# }
 
     # ====================== 公开辅助方法 ======================
 
@@ -395,3 +539,16 @@ class BlockLiftingEnv(RobotArmEnvBase):
         self._target_marker_body_id = mujoco.mj_name2id(
             self.model, mujoco.mjtObj.mjOBJ_BODY, "target_marker"
         )
+
+        # 缓存生成区域 geom ID（大区域固定位置，不跟随单个方块）
+        self._spawn_area_geom_id = mujoco.mj_name2id(
+            self.model, mujoco.mjtObj.mjOBJ_GEOM, "spawn_area_debug"
+        )
+        self._spawn_area_border_ids: List[int] = []
+        for border_name in [
+            "spawn_area_border_x1", "spawn_area_border_x2",
+            "spawn_area_border_y1", "spawn_area_border_y2",
+        ]:
+            bid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, border_name)
+            if bid >= 0:
+                self._spawn_area_border_ids.append(bid)

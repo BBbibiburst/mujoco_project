@@ -141,11 +141,27 @@ class RobotArmEnvBase(gym.Env, ABC):
         return self.stats.episode_steps >= self.cfg.max_episode_steps
 
     def _get_info(self) -> Dict[str, Any]:
-        """额外调试信息（默认：回合统计数据）."""
+        """额外调试信息（默认：回合统计数据 + 机械臂/灵巧手位置及范围）."""
+        # 机械臂关节范围 (7, 2)
+        arm_jnt_ids = self.controller.arm_qpos_ids
+        arm_qpos_range = np.array([
+            [self.model.jnt_range[jid][0], self.model.jnt_range[jid][1]]
+            for jid in arm_jnt_ids
+        ])
+        # 灵巧手关节范围 (6, 2)
+        hand_jnt_ids = self.controller.hand_qpos_ids
+        hand_qpos_range = np.array([
+            [self.model.jnt_range[jid][0], self.model.jnt_range[jid][1]]
+            for jid in hand_jnt_ids
+        ])
         return {
-            "episode_steps":  self.stats.episode_steps,
-            "episode_reward": self.stats.episode_reward,
-            "episode_count":  self.stats.episode_count,
+            "episode_steps":    self.stats.episode_steps,
+            "episode_reward":   self.stats.episode_reward,
+            "episode_count":    self.stats.episode_count,
+            "arm_qpos":         self.get_arm_qpos(),
+            "hand_qpos":        self.get_hand_qpos(),
+            "arm_qpos_range":   arm_qpos_range,
+            "hand_qpos_range":  hand_qpos_range,
         }
 
     @property

@@ -68,6 +68,7 @@ def main():
     parser.add_argument("--pos-step", type=float, default=0.01, help="键盘模式位置步长(m)")
     parser.add_argument("--rot-step", type=float, default=0.05, help="键盘模式旋转步长(rad)")
     parser.add_argument("--seed", type=int, default=42, help="随机种子")
+    parser.add_argument("--log_info", action="store_true", help="记录回合信息")
 
     args = parser.parse_args()
 
@@ -118,6 +119,7 @@ def main():
             rot_step=args.rot_step,
             show_fingertip_midpoint=show_ft_mid,
             seed=args.seed,
+            log_info=args.log_info,
         )
     elif args.mode == "pipeline":
         demo_pipeline(
@@ -129,6 +131,7 @@ def main():
             show_ee_traj=show_traj,
             show_fingertip_midpoint=show_ft_mid,
             seed=args.seed,
+            log_info=args.log_info,
         )
 
 
