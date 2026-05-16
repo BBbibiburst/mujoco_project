@@ -62,8 +62,7 @@ class BlockLiftingStrategy(TaskStrategy):
         env = ctx.env
         act = ActionContext()
 
-        # 获取方块位置和桌面高度
-        obj_pos = env.get_block_position()  # [x, y, z]
+        obj_pos = env.get_block_position()
         table_z = env._table_height
         ee_pos, ee_quat = env.get_ee_pose()
         hand_qpos = env.get_hand_qpos()
@@ -95,35 +94,115 @@ class BlockLiftingStrategy(TaskStrategy):
                     finger_vec_local = R_ee_cal.T @ finger_vec_world
                     self._finger_in_local = finger_vec_local / np.linalg.norm(finger_vec_local)
 
-                    # print(f"标定 _d_hand: {self._d_hand}")
-                    # print(f"标定 _finger_in_local: {self._finger_in_local}")
+                    # ===== 优化目标旋转矩阵：直接最小化 IK 残差 =====
+                    # 优化变量：yaw ∈ [-π/2, π/2]（target_f 的 x 分量 ≥ 0）
+                    # 目标函数：min IK_residual(yaw)
+                    # IK 残差直接衡量该姿态对机械臂的可达性，残差越小越好
+                    from scipy.optimize import minimize_scalar
 
-                    # ===== 预计算固定目标旋转矩阵（只算一次）=====
-                    # 目标姿态：手指连线（_finger_in_local 方向）在世界中平行于 X 轴，
-                    #           同时手心尽量朝下（在手指连线水平的几何约束下能达到的最低）。
-                    #
-                    # palm 在 ee 局部方向 = [0, 0, -1]（-ee_z_local，由诊断确认）
-                    # 构造正交基 {f, p_perp_hat, h}（ee 局部）并映射到目标世界方向：
-                    #   f           → [1, 0, 0]   手指连线平行世界 X
-                    #   p_perp_hat  → [0, 0, -1]  手心法线在 f 正交补内尽量朝 -Z
-                    #   h = f×p_perp_hat → 由右手系唯一确定
-                    f_local  = self._finger_in_local
-                    p_local  = np.array([0.0, 0.0, -1.0])   # palm 方向在 ee 局部
+                    obj_pos_cal = env.get_block_position()
+                    approach_mid = np.array([
+                        obj_pos_cal[0],
+                        obj_pos_cal[1],
+                        env._table_height + self.PRE_GRASP_HEIGHT,
+                    ])
 
-                    p_perp   = p_local - np.dot(p_local, f_local) * f_local
-                    p_perp  /= np.linalg.norm(p_perp)
-                    h_local  = np.cross(f_local, p_perp)
+                    f_local = self._finger_in_local
+                    p_local = np.array([0.0, 0.0, -1.0])
+                    p_perp  = p_local - np.dot(p_local, f_local) * f_local
+                    p_perp /= np.linalg.norm(p_perp)
+                    h_local = np.cross(f_local, p_perp)
                     h_local /= np.linalg.norm(h_local)
-
-                    target_f = np.array([1.0, 0.0, 0.0])
-                    target_p = np.array([0.0, 0.0, -1.0])
-                    target_h = np.cross(target_f, target_p)   # [0, 1, 0]
-
                     src_basis = np.column_stack([f_local, p_perp, h_local])
-                    dst_basis = np.column_stack([target_f, target_p, target_h])
-                    self._approach_R_target = dst_basis @ src_basis.T   # (3×3)
+                    target_p = np.array([0.0, 0.0, -1.0])
 
-                    # 转为四元数（mujoco [w,x,y,z]）
+                    def _R_from_yaw(yaw: float) -> np.ndarray:
+                        tf = np.array([np.cos(yaw), np.sin(yaw), 0.0])
+                        th = np.cross(tf, target_p)
+                        th /= np.linalg.norm(th)
+                        tf = np.cross(target_p, th)
+                        tf /= np.linalg.norm(tf)
+                        return np.column_stack([tf, target_p, th]) @ src_basis.T
+
+                    def _ik_residual(yaw: float) -> float:
+                        """在虚拟副本上跑 DLS IK，返回收敛残差（越小越可达）.
+                        独立实现，不依赖控制器类型（OSC/IK 均可用）。"""
+                        R   = _R_from_yaw(yaw)
+                        pos = approach_mid - R @ self._d_hand
+
+                        quat = np.zeros(4, dtype=np.float64)
+                        mujoco.mju_mat2Quat(quat, R.flatten('C'))
+
+                        ctrl = env.controller
+                        tmp  = mujoco.MjData(env.model)
+                        mujoco.mj_copyData(tmp, env.model, env.data)
+                        tmp.qvel[:] = 0.0
+                        q_try = env.get_arm_qpos().copy()
+                        tmp.qpos[ctrl.arm_qpos_ids] = q_try
+                        mujoco.mj_fwdPosition(env.model, tmp)
+
+                        damping = 0.05
+                        jac_p = np.zeros((3, env.model.nv))
+                        jac_r = np.zeros((3, env.model.nv))
+
+                        for _ in range(50):
+                            err_p = pos - tmp.site_xpos[ctrl.ee_id]
+                            quat_cur = np.zeros(4)
+                            mujoco.mju_mat2Quat(quat_cur, tmp.site_xmat[ctrl.ee_id])
+                            qt = quat.copy()
+                            if np.dot(qt, quat_cur) < 0:
+                                qt = -qt
+                            neg_cur = np.zeros(4)
+                            mujoco.mju_negQuat(neg_cur, quat_cur)
+                            dq4 = np.zeros(4)
+                            mujoco.mju_mulQuat(dq4, qt, neg_cur)
+                            err_r = np.zeros(3)
+                            mujoco.mju_quat2Vel(err_r, dq4, 1.0)
+
+                            err_norm = np.linalg.norm(err_p) + np.linalg.norm(err_r)
+                            if err_norm < 1e-6:
+                                break
+
+                            mujoco.mj_jacSite(env.model, tmp, jac_p, jac_r, ctrl.ee_id)
+                            Jp = jac_p[:, ctrl.arm_qvel_ids]
+                            Jr = jac_r[:, ctrl.arm_qvel_ids]
+                            J  = np.vstack([Jp, Jr])
+                            err = np.concatenate([err_p, err_r])
+
+                            A = J @ J.T + damping**2 * np.eye(6)
+                            try:
+                                dq_j = J.T @ np.linalg.solve(A, err)
+                            except np.linalg.LinAlgError:
+                                dq_j = J.T @ np.linalg.pinv(A) @ err
+
+                            q_try = np.clip(
+                                q_try + dq_j,
+                                ctrl.arm_range[:, 0],
+                                ctrl.arm_range[:, 1],
+                            )
+                            tmp.qpos[ctrl.arm_qpos_ids] = q_try
+                            mujoco.mj_fwdPosition(env.model, tmp)
+
+                        # 最终残差
+                        err_p = np.linalg.norm(pos - tmp.site_xpos[ctrl.ee_id])
+                        quat_cur = np.zeros(4)
+                        mujoco.mju_mat2Quat(quat_cur, tmp.site_xmat[ctrl.ee_id])
+                        qt = quat.copy()
+                        if np.dot(qt, quat_cur) < 0:
+                            qt = -qt
+                        neg_cur = np.zeros(4)
+                        mujoco.mju_negQuat(neg_cur, quat_cur)
+                        dq4 = np.zeros(4)
+                        mujoco.mju_mulQuat(dq4, qt, neg_cur)
+                        vel = np.zeros(3)
+                        mujoco.mju_quat2Vel(vel, dq4, 1.0)
+                        return float(err_p + np.linalg.norm(vel))
+
+                    result   = minimize_scalar(_ik_residual, bounds=(-0.5 * np.pi, 0.5 * np.pi), method='bounded')
+                    best_yaw = result.x
+                    self._approach_R_target = _R_from_yaw(best_yaw)
+                    # print(f"最优 yaw: {np.rad2deg(best_yaw):.1f}°, IK残差: {result.fun:.6f}")
+
                     q = np.zeros(4, dtype=np.float64)
                     mujoco.mju_mat2Quat(q, self._approach_R_target.flatten('C'))
                     self._approach_quat_target = q
@@ -195,7 +274,7 @@ class BlockLiftingStrategy(TaskStrategy):
             if abs(x_delta) > 0.01 or abs(y_delta) > 0.01:
                 # 如果末端在水平面上偏离了预定的下降位置，优先调整回预定位置再下降
                 target_pos = self._descend_target_pos.copy()
-                target_pos[2] = ee_pos[2]  # 保持当前高度不变
+                target_pos[2] = ee_pos[2]
             else: 
                 target_pos = self._descend_target_pos.copy()
                 target_pos[2] -= descend_length
@@ -211,8 +290,8 @@ class BlockLiftingStrategy(TaskStrategy):
                 self._grasp_target_pos = ee_pos.copy()
                 # 记录一个开始时间戳用于 grasp 阶段的时间判断（确保有足够时间进行接触和挤压）
                 self._grasp_start_time = time.time()
-                self._cube_pos_at_descend = obj_pos.copy()  # 记录下降阶段末端位置对应的方块位置，用于后续调整阶段使用
-                self._mid_point_at_descend = env.get_mid_point_position()  # 记录下降阶段末端位置对应的mid-point位置，用于后续调整阶段使用
+                self._cube_pos_at_descend = obj_pos.copy()
+                self._mid_point_at_descend = env.get_mid_point_position()
                 return PhaseResult.NEXT, act
             return PhaseResult.CONTINUE, act
         
@@ -226,7 +305,7 @@ class BlockLiftingStrategy(TaskStrategy):
                 self._adjust_target_mid = np.array([
                     cube_now[0],
                     cube_now[1],
-                    self._mid_point_at_descend[2]  # 保持下降后的指尖高度
+                    self._mid_point_at_descend[2]
                 ])
             
             self._adjust_step += 1
