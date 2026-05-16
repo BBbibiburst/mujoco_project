@@ -83,6 +83,12 @@ class BlockLiftingConfig:
     grasp_stability_weight: float = 1.0
     grasp_stability_threshold: float = 50.0
 
+    # 时间负奖励（每步惩罚）
+    time_penalty: float = -0.01
+
+    # 跌落负奖励（物体掉落时额外惩罚）
+    drop_penalty: float = -5.0
+
 
 # ====================== Block Lifting 环境 ======================
 
@@ -203,6 +209,8 @@ class BlockLiftingEnv(RobotArmEnvBase):
         2. 上升过程奖（线性，随高度增加）
         3. 通关大奖（达到目标高度）
         4. 抓握稳定性奖（触觉有激活且物体离地）
+        5. 时间负奖励（每步惩罚，鼓励快速完成）
+        6. 跌落负奖励（物体掉落时惩罚）
         """
         tc = self.task_cfg
         current_height = self._get_obj_height()
@@ -211,6 +219,10 @@ class BlockLiftingEnv(RobotArmEnvBase):
         lift_threshold = tc.obj_size
         reward = 0.0
 
+        # 1. 时间负奖励（每步都扣）
+        reward += tc.time_penalty
+
+        # 2. 离地基础奖
         if current_height > lift_threshold:
             reward += tc.lift_base_reward
             progress = (current_height - lift_threshold) / max(
@@ -218,15 +230,21 @@ class BlockLiftingEnv(RobotArmEnvBase):
             )
             reward += np.clip(progress, 0.0, 1.0) * tc.lift_progress_reward
 
+        # 3. 通关大奖
         if current_height >= tc.target_lift_height:
             reward += tc.lift_success_reward
 
+        # 4. 抓握稳定性奖
         if (
             self._tactile.is_active(self.data, threshold=tc.grasp_stability_threshold)
             and current_height > lift_threshold
         ):
             reward += tc.grasp_stability_weight
             self._grasp_success = True
+
+        # 5. 跌落负奖励（物体掉落时额外惩罚）
+        if self._is_dropped:
+            reward += tc.drop_penalty
 
         return reward
 

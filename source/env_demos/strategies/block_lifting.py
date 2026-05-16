@@ -189,7 +189,7 @@ class BlockLiftingStrategy(TaskStrategy):
         elif phase == "descend":
             # approach阶段末端位置在方块上方的marker平面处，高度为 table_z + PRE_GRASP_HEIGHT
             # 下降的距离应该为marker平面高度减去一定比例的方块中心高度
-            descend_length = self.PRE_GRASP_HEIGHT + table_z - 0.5 * obj_pos[2]
+            descend_length = self.PRE_GRASP_HEIGHT + table_z - 0.25 * obj_pos[2]
             x_delta = self._descend_target_pos[0] - ee_pos[0]
             y_delta = self._descend_target_pos[1] - ee_pos[1]
             if abs(x_delta) > 0.01 or abs(y_delta) > 0.01:
@@ -271,13 +271,16 @@ class BlockLiftingStrategy(TaskStrategy):
             act.ee_delta_rot = ee_delta_rot
             # close_value 是一个介于 0 和 1 之间的值，表示从完全张开到完全闭合的程度。
             # 需要在成功抓取和避免过大挤压力之间权衡
-            # 0.6 是根据经验调整的一个较合适的抓取程度，可以根据实际情况微调
-            close_value = 0.6
-            close_value = close_value*self._HAND_MAX+(1-close_value)*self._HAND_MIN
-            HAND_GRIPPER_CLOSE = np.array([self._HAND_MAX, self._HAND_MAX, close_value, close_value, close_value, self._HAND_MAX])
+            # 0.4 是根据经验调整的一个较合适的抓取程度，可以根据实际情况微调
+            finger_close_value = 0.6
+            thumb_close_value = 0.2
+            finger_close_value = finger_close_value*self._HAND_MAX+(1-finger_close_value)*self._HAND_MIN
+            thumb_close_value = thumb_close_value*self._HAND_MAX+(1-thumb_close_value)*self._HAND_MIN
+            
+            HAND_GRIPPER_CLOSE = np.array([self._HAND_MAX, self._HAND_MAX, finger_close_value, finger_close_value, thumb_close_value, self._HAND_MAX])
             act.hand_target = HAND_GRIPPER_CLOSE.copy()
             # 增加最小步数限制，确保手指有足够时间闭合、接触并稳定
-            if ctx.phase_step > self.MIN_PHASE_STEPS and ctx.phase_step >= 50:
+            if ctx.phase_step > self.MIN_PHASE_STEPS and ctx.phase_step >= 100:
                 # 存储目前的末端位置用于 lift 阶段使用
                 self._lift_target_pos = ee_pos.copy()
                 return PhaseResult.NEXT, act
