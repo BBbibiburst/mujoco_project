@@ -482,7 +482,7 @@ def main():
 
     ani = animation.FuncAnimation(
         fig, update, frames=N,
-        interval=80, blit=False, repeat=True
+        interval=80, blit=False, repeat=False
     )
 
     plt.show()
