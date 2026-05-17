@@ -41,17 +41,38 @@ def classify(last: dict) -> str:
     return "timeout"   # 默认归入超时
 
 
-def load_log_dir(log_dir: Path):
+def collect_files(log_dir: Path):
     """
-    读取目录下所有 .jsonl 文件，返回记录列表。
-    每条记录: {x, y, z, result, reward, steps, filename}
+    递归收集 log_dir 下所有 .jsonl 文件。
+    如果 log_dir 下直接有文件，则返回这些文件；
+    如果 log_dir 下只有子文件夹，则递归遍历所有子文件夹收集文件。
     """
-    records = []
+    # 先尝试直接收集当前目录下的 .jsonl 文件
     files = sorted(log_dir.glob("*.jsonl"))
     if not files:
         # 也支持无扩展名或 .log
         files = sorted(log_dir.glob("*.log")) + sorted(log_dir.glob("*"))
         files = [f for f in files if f.is_file()]
+
+    if files:
+        return files
+
+    # 当前目录没有文件，递归遍历子目录
+    all_files = []
+    for subdir in sorted(log_dir.iterdir()):
+        if subdir.is_dir():
+            all_files.extend(collect_files(subdir))
+
+    return all_files
+
+
+def load_log_dir(log_dir: Path):
+    """
+    读取目录及其子目录下所有 .jsonl 文件，返回记录列表。
+    每条记录: {x, y, z, result, reward, steps, filename, subdir}
+    """
+    records = []
+    files = collect_files(log_dir)
 
     print(f"找到 {len(files)} 个文件")
 
@@ -74,6 +95,14 @@ def load_log_dir(log_dir: Path):
             steps  = last["info"].get("episode_steps", len(lines))
             max_h  = last["info"]["block"].get("max_height", 0)
 
+            # 记录文件所在的子目录名（用于分类显示）
+            try:
+                subdir = fpath.relative_to(log_dir).parent.as_posix()
+                if subdir == ".":
+                    subdir = ""
+            except ValueError:
+                subdir = ""
+
             records.append({
                 "x":       init_pos[0],
                 "y":       init_pos[1],
@@ -83,6 +112,7 @@ def load_log_dir(log_dir: Path):
                 "steps":   steps,
                 "max_h":   max_h,
                 "file":    fpath.name,
+                "subdir":  subdir,
             })
         except Exception as e:
             print(f"  跳过 {fpath.name}: {e}")

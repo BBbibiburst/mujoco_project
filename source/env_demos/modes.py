@@ -777,12 +777,29 @@ def _overlay_camera(obs, action_mode, reward, ep_reward, step, episode, terminat
 
 # ---------- Worker（必须定义在模块顶层才能被 multiprocessing pickle）----------
 
-def _pipeline_worker(args: dict) -> dict:
+def _pipeline_worker_stream(args: dict, result_q: _mp.Queue) -> None:
     """
-    子进程入口：独立运行若干 episode，返回统计结果列表。
+    子进程入口：独立运行若干 episode，每完成一个立即将结果放入队列。
 
     每个 worker 拥有独立的环境实例和策略实例，互不干扰。
     日志文件以 worker_id 区分，避免写入冲突。
+
+    结果消息格式
+    ------------
+    普通结果::
+
+        {
+            "worker_id": int,
+            "ep": int,           # 全局 episode 编号（0-based）
+            "steps": int,
+            "success": bool,
+            "truncated": bool,
+            "status": "SUCCESS" | "TIMEOUT" | "FAIL",
+        }
+
+    哨兵（worker 全部 episode 跑完后发送一次）::
+
+        {"worker_id": int, "done": True}
     """
     task_name       = args["task_name"]
     ep_indices      = args["ep_indices"]   # 本 worker 负责的全局 episode 编号列表
@@ -806,8 +823,6 @@ def _pipeline_worker(args: dict) -> dict:
     )
     env = load_task(task_name, robot_cfg)
     strategy = load_strategy(task_name)
-
-    results: List[dict] = []
 
     for ep in ep_indices:
         ep_seed = None if seed_base is None else (ep + 1) * seed_base
@@ -847,20 +862,21 @@ def _pipeline_worker(args: dict) -> dict:
             )
             info_logger.close(outcome=_w_outcome)
 
-        results.append(
-            {
-                "ep": ep,
-                "steps": step,
-                "success": bool(success),
-                "truncated": bool(truncated),
-                "status": (
-                    "SUCCESS" if success else ("TIMEOUT" if truncated else "FAIL")
-                ),
-            }
-        )
+        # 每 episode 完成立即上报，不等待整个 worker 批次结束
+        result_q.put({
+            "worker_id": worker_id,
+            "ep": ep,
+            "steps": step,
+            "success": bool(success),
+            "truncated": bool(truncated),
+            "status": (
+                "SUCCESS" if success else ("TIMEOUT" if truncated else "FAIL")
+            ),
+        })
 
     env.close()
-    return {"worker_id": worker_id, "results": results}
+    # 哨兵：通知主进程该 worker 已全部完成
+    result_q.put({"worker_id": worker_id, "done": True})
 
 
 # ---------- 主函数 ----------
@@ -873,7 +889,7 @@ def demo_pipeline(
     controller_type: str = "osc",
     show_ee_traj: bool = True,
     show_fingertip_midpoint: bool = True,
-    summary_interval: int = 10,
+    summary_interval: int = 50,
     seed: Optional[int] = 42,
     log_info: bool = False,
     n_workers: int = 0,
@@ -893,6 +909,7 @@ def demo_pipeline(
         0  → 自动取 os.cpu_count()；
         1  → 单进程模式（与原行为完全一致）；
         N  → N 个子进程并行，每个进程独占一个环境实例。
+        summary_interval 以实际完成的 episode 数计，与 worker 批次无关。
     """
     from source.env_demos.registry import load_strategy
 
@@ -996,10 +1013,16 @@ def demo_pipeline(
             env.close()
             return
 
-        # ---------- 多进程（n_workers > 1）：并行执行 ----------
+        # ---------- 多进程（n_workers > 1）：流式并行执行 ----------
         #
         # 将 n_episodes 个 episode 均匀分配给各 worker，余数轮流补给前几个 worker。
         # 示例：10 episodes, 3 workers → [0,3,6,9], [1,4,7], [2,5,8]
+        #
+        # 与旧实现的核心区别：
+        #   旧：Pool.imap_unordered 按整个 worker 批次返回，一个 worker 全部跑完才
+        #       能拿到结果，summary_interval 实际上近似于批次粒度。
+        #   新：每个子进程每完成一个 episode 就立刻 put 到 Manager Queue，
+        #       主进程实时 get，每累计 summary_interval 个新结果精确触发一次总结。
         ep_indices_all = list(range(n_episodes))
         chunks = [ep_indices_all[i::_n_workers] for i in range(_n_workers)]
 
@@ -1017,35 +1040,72 @@ def demo_pipeline(
             if chunk  # 过滤空分片（n_workers > n_episodes 时出现）
         ]
 
+        actual_workers = len(worker_args)
         print(
-            f"  分配方案: {_n_workers} workers × ~{n_episodes // _n_workers} episodes/worker\n"
+            f"  分配方案: {actual_workers} workers × ~{n_episodes // actual_workers} episodes/worker\n"
         )
 
-        # imap_unordered 流式收取结果，边跑边打印，无需等待全部完成
-        last_reported = 0
-        with _mp.Pool(processes=_n_workers) as pool:
-            for batch in pool.imap_unordered(_pipeline_worker, worker_args):
-                wid = batch["worker_id"]
-                for r in batch["results"]:
-                    total_steps.append(r["steps"])
-                    if r["success"]:
-                        successes += 1
-                    if r["truncated"]:
-                        timeouts += 1
+        # 使用 Manager Queue 实现跨进程流式传递
+        # （普通 multiprocessing.Queue 在某些平台 fork 后也可用，
+        #   但 Manager Queue 更安全，无需担心 fork 时的 fd 继承问题）
+        ctx = _mp.get_context("spawn")  # spawn 避免 fork + OpenGL context 冲突
+        manager = ctx.Manager()
+        result_q = manager.Queue()
 
-                    completed = len(total_steps)
-                    print(
-                        f"  [W{wid:02d}] Ep {r['ep']+1:3d}/{n_episodes}:"
-                        f" steps={r['steps']:4d} | {r['status']}"
-                    )
+        processes = [
+            ctx.Process(
+                target=_pipeline_worker_stream,
+                args=(wa, result_q),
+                daemon=True,
+            )
+            for wa in worker_args
+        ]
+        for p in processes:
+            p.start()
 
-                # 整个批次处理完后检查是否需要阶段性总结
-                if completed - last_reported >= summary_interval and completed < n_episodes:
-                    _print_pipeline_summary(
-                        task_name, completed, total_steps, successes, timeouts,
-                        elapsed=time.time() - t0, is_interim=True,
-                    )
-                    last_reported = completed
+        finished_workers = 0
+        last_summary_at = 0   # 上次打 summary 时已完成的 episode 数
+
+        while finished_workers < actual_workers:
+            try:
+                r = result_q.get(timeout=300)  # 5 分钟超时保护
+            except Exception:
+                print("[警告] 等待结果超时，可能有 worker 异常退出，强制结束收集。")
+                break
+
+            if r.get("done"):
+                # 哨兵：该 worker 全部完成
+                finished_workers += 1
+                continue
+
+            # 普通结果：立即累计并打印
+            wid = r["worker_id"]
+            total_steps.append(r["steps"])
+            if r["success"]:
+                successes += 1
+            if r["truncated"]:
+                timeouts += 1
+
+            completed = len(total_steps)
+            # print(
+            #     f"  [W{wid:02d}] Ep {r['ep']+1:3d}/{n_episodes}:"
+            #     f" steps={r['steps']:4d} | {r['status']}"
+            # )
+
+            # 精确按 summary_interval 触发：每新增满 interval 个就打一次
+            if (
+                completed - last_summary_at >= summary_interval
+                and completed < n_episodes
+            ):
+                _print_pipeline_summary(
+                    task_name, completed, total_steps, successes, timeouts,
+                    elapsed=time.time() - t0, is_interim=True,
+                )
+                last_summary_at = completed
+
+        for p in processes:
+            p.join()
+        manager.shutdown()
 
         _print_pipeline_summary(
             task_name, n_episodes, total_steps, successes, timeouts,
