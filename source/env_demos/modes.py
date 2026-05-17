@@ -1022,6 +1022,7 @@ def demo_pipeline(
         )
 
         # imap_unordered 流式收取结果，边跑边打印，无需等待全部完成
+        last_reported = 0
         with _mp.Pool(processes=_n_workers) as pool:
             for batch in pool.imap_unordered(_pipeline_worker, worker_args):
                 wid = batch["worker_id"]
@@ -1038,12 +1039,13 @@ def demo_pipeline(
                         f" steps={r['steps']:4d} | {r['status']}"
                     )
 
-                    # 阶段性总结（completed 基于已收到的结果数，非严格有序，但足够参考）
-                    if completed % summary_interval == 0 and completed < n_episodes:
-                        _print_pipeline_summary(
-                            task_name, completed, total_steps, successes, timeouts,
-                            elapsed=time.time() - t0, is_interim=True,
-                        )
+                # 整个批次处理完后检查是否需要阶段性总结
+                if completed - last_reported >= summary_interval and completed < n_episodes:
+                    _print_pipeline_summary(
+                        task_name, completed, total_steps, successes, timeouts,
+                        elapsed=time.time() - t0, is_interim=True,
+                    )
+                    last_reported = completed
 
         _print_pipeline_summary(
             task_name, n_episodes, total_steps, successes, timeouts,
