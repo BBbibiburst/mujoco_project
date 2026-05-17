@@ -69,6 +69,7 @@ def main():
     parser.add_argument("--rot-step", type=float, default=0.05, help="键盘模式旋转步长(rad)")
     parser.add_argument("--seed", type=int, default=42, help="随机种子")
     parser.add_argument("--log_info", action="store_true", help="记录回合信息")
+    parser.add_argument("--n_workers", type=int, default=32, help="无渲染模式并行环境数")
 
     args = parser.parse_args()
 

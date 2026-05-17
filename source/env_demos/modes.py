@@ -5,13 +5,14 @@
 """
 
 import json
+import multiprocessing as _mp
 import os
 import queue
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import cv2
 import mujoco
@@ -67,54 +68,125 @@ def _quat_to_euler_deg(quat: np.ndarray) -> np.ndarray:
 
 
 def _get_log_dir() -> Path:
-    """获取日志目录（代码同级目录下的 log/ 文件夹）."""
-    # 当前文件所在目录
+    """获取日志根目录（代码同级目录下的 log/ 文件夹）."""
     current_dir = Path(__file__).parent.resolve()
     log_dir = current_dir / "log"
     log_dir.mkdir(parents=True, exist_ok=True)
     return log_dir
 
 
+# 结果分类目录名映射
+_OUTCOME_DIRS = {
+    "success": "success",
+    "timeout": "timeout",
+    "fail":    "fail",
+}
+
+
 class InfoLogger:
-    """每 episode 一个 JSONL 文件，记录每一步的 info."""
+    """
+    每 episode 一个 JSONL 文件，记录每一步的 info。
+
+    文件在 episode 进行期间写入临时目录（log/pending/），
+    episode 结束后调用 close(outcome) 将文件移动到对应分类子目录：
+
+        log/
+          success/   ← terminated=True  且 success=True
+          timeout/   ← truncated=True
+          fail/      ← terminated=True  且 success=False
+          pending/   ← 未调用 close(outcome) 时的临时位置
+
+    参数
+    ----
+    outcome : str | None
+        传给 close() 的结局，取值 "success" / "timeout" / "fail"。
+        传 None 时文件留在 pending/ 不移动（异常退出等情况）。
+    """
+
+    # 子目录名集合，方便外部查询
+    OUTCOME_SUCCESS = "success"
+    OUTCOME_TIMEOUT = "timeout"
+    OUTCOME_FAIL    = "fail"
 
     def __init__(self, task_name: str, mode_name: str, episode: int):
-        self.task_name = task_name
-        self.mode_name = mode_name
-        self.episode = episode
-        self.log_dir = _get_log_dir()
+        self.task_name  = task_name
+        self.mode_name  = mode_name
+        self.episode    = episode
+        self._root      = _get_log_dir()
+
+        # 写入期间放在 pending/，避免结果未定时出现在分类目录
+        pending_dir = self._root / "pending"
+        pending_dir.mkdir(parents=True, exist_ok=True)
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.file_path = (
-            self.log_dir
-            / f"{task_name}_{mode_name}_ep{episode:04d}_{timestamp}.jsonl"
-        )
-        self._file = open(self.file_path, "w", encoding="utf-8")
+        self._filename = f"{task_name}_{mode_name}_ep{episode:04d}_{timestamp}.jsonl"
+        self.file_path = pending_dir / self._filename
+
+        self._file      = open(self.file_path, "w", encoding="utf-8")
         self.step_count = 0
 
-    def log_step(self, step: int, info: Dict[str, Any], extra: Optional[Dict[str, Any]] = None) -> None:
+    def log_step(
+        self,
+        step: int,
+        info: Dict[str, Any],
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """记录单步 info."""
-        record = {
+        record: Dict[str, Any] = {
             "step": step,
             "timestamp": datetime.now().isoformat(),
             "info": info,
         }
         if extra:
             record["extra"] = extra
-        self._file.write(json.dumps(record, ensure_ascii=False, default=_json_default) + "\n")
+        self._file.write(
+            json.dumps(record, ensure_ascii=False, default=_json_default) + "\n"
+        )
         self._file.flush()
         self.step_count += 1
 
-    def close(self) -> None:
-        """关闭文件."""
+    def close(self, outcome: Optional[str] = None) -> Path:
+        """
+        关闭文件并将其移动到对应分类子目录。
+
+        参数
+        ----
+        outcome : "success" | "timeout" | "fail" | None
+            结局分类；None 表示不移动，文件留在 pending/。
+
+        返回
+        ----
+        最终文件路径。
+        """
         if self._file:
             self._file.close()
             self._file = None
+
+        if outcome is None or outcome not in _OUTCOME_DIRS:
+            # 未知结局或异常退出，保留在 pending/
+            return self.file_path
+
+        dest_dir = self._root / _OUTCOME_DIRS[outcome]
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest_path = dest_dir / self._filename
+
+        try:
+            self.file_path.rename(dest_path)
+            self.file_path = dest_path
+        except OSError:
+            # 跨设备移动时 rename 失败，退化为复制后删除
+            import shutil
+            shutil.move(str(self.file_path), str(dest_path))
+            self.file_path = dest_path
+
+        return self.file_path
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
+        # 异常退出时 outcome=None，文件留在 pending/
+        self.close(outcome=None)
 
 
 def _json_default(obj: Any) -> Any:
@@ -223,7 +295,8 @@ def _run_no_render(env: RobotArmEnvBase, n_episodes: int) -> None:
         if success:
             successes += 1
         print(
-            f"  Ep {ep+1:3d}: steps={ep_steps:4d}, {'TERMINATED' if terminated else 'timeout'}, success={success}"
+            f"  Ep {ep+1:3d}: steps={ep_steps:4d}, "
+            f"{'TERMINATED' if terminated else 'timeout'}, success={success}"
         )
     print(f"\n  平均步数: {np.mean(total_steps):.1f}")
     print(f"  成功率:   {successes / n_episodes * 100:.1f}%")
@@ -251,7 +324,9 @@ def _show_cv_windows(obs: dict) -> None:
 def demo_verify_observation_space(task_name: str = "pick_and_place") -> None:
     """验证所有观测分量的形状与数值范围."""
     reg = TASK_REGISTRY[task_name]
-    print(f"\n{'='*65}\n [Demo] 观测空间验证 | 任务={reg['display_name']}\n{'='*65}")
+    print(
+        f"\n{'='*65}\n [Demo] 观测空间验证 | 任务={reg['display_name']}\n{'='*65}"
+    )
 
     env = load_task(
         task_name,
@@ -343,7 +418,7 @@ _GRIPPER_OPEN = np.array(
 
 def demo_keyboard_control(
     task_name: str = "pick_and_place",
-    n_episodes: int = 999_999,  # 新增：支持限制最大回合数
+    n_episodes: int = 999_999,
     action_mode: str = "joint",
     controller_type: str = "osc",
     arm_step: float = 0.05,
@@ -401,7 +476,6 @@ def demo_keyboard_control(
 
     obs, info = env.reset(seed=seed)
 
-    # 控制目标
     ee_target_pos = ee_target_quat = joint_target = hand_target = None
 
     def _init_targets():
@@ -424,7 +498,6 @@ def demo_keyboard_control(
     terminated = False
     running = True
 
-    # 初始化 info logger
     info_logger: Optional[InfoLogger] = None
     if log_info:
         info_logger = InfoLogger(task_name, "keyboard", episode)
@@ -436,7 +509,6 @@ def demo_keyboard_control(
 
         while viewer.is_running() and running and episode <= n_episodes:
 
-            # ---- 消费命令队列 ----
             pending_reset = False
             while True:
                 try:
@@ -490,15 +562,18 @@ def demo_keyboard_control(
             if not running:
                 break
 
-            # ---- 重置 ----
             if pending_reset:
                 label = "✅ 任务成功！" if terminated else "🔄 手动重置"
                 print(
                     f"[回合 {episode}] {label}  累积奖励={ep_reward:.4f}  步数={step}"
                 )
-                # 关闭当前 episode 的 logger
                 if info_logger:
-                    info_logger.close()
+                    # keyboard 无超时：terminated+success → success，其余 → fail
+                    _kb_outcome = (
+                        InfoLogger.OUTCOME_SUCCESS if (terminated and success)
+                        else InfoLogger.OUTCOME_FAIL
+                    )
+                    info_logger.close(outcome=_kb_outcome)
 
                 obs, info = env.reset()
                 traj_vis.reset()
@@ -511,12 +586,10 @@ def demo_keyboard_control(
                 reward = 0.0
                 terminated = False
 
-                # 开启新 episode 的 logger
                 if log_info and episode <= n_episodes:
                     info_logger = InfoLogger(task_name, "keyboard", episode)
                 continue
 
-            # ---- 仿真步进 ----
             if not terminated:
                 action = _build_action(
                     is_ee, env, ee_target_pos, ee_target_quat, hand_target, joint_target
@@ -525,22 +598,25 @@ def demo_keyboard_control(
                 step += 1
                 ep_reward += reward
 
-                # 记录 info
                 if info_logger:
-                    info_logger.log_step(step, info, extra={
-                        "reward": float(reward),
-                        "ep_reward": float(ep_reward),
-                        "terminated": bool(terminated),
-                        "success": bool(success),
-                        "action_mode": action_mode,
-                    })
+                    info_logger.log_step(
+                        step,
+                        info,
+                        extra={
+                            "reward": float(reward),
+                            "ep_reward": float(ep_reward),
+                            "terminated": bool(terminated),
+                            "success": bool(success),
+                            "action_mode": action_mode,
+                        },
+                    )
 
                 if terminated:
                     print(
-                        f"[回合 {episode}] 终止，success={success}  步数={step}  累积奖励={ep_reward:.4f}  → 按 R 重置"
+                        f"[回合 {episode}] 终止，success={success}  步数={step}"
+                        f"  累积奖励={ep_reward:.4f}  → 按 R 重置"
                     )
 
-            # ---- 可视化 ----
             viewer.user_scn.ngeom = 0
             actual = env.get_ee_pose()[0]
             traj_vis.update(
@@ -551,7 +627,6 @@ def demo_keyboard_control(
                 ft_vis.update(env)
                 ft_vis.draw(viewer)
 
-            # 面板数据
             if is_ee:
                 rpy = _quat_to_euler_deg(ee_target_quat)
                 sync = np.array(
@@ -576,16 +651,15 @@ def demo_keyboard_control(
                 info_extra={},
             )
 
-            # CV 窗口
             _show_cv_windows(obs)
             _overlay_camera(
                 obs, action_mode, reward, ep_reward, step, episode, terminated
             )
             viewer.sync()
 
-    # 清理 logger
     if info_logger:
-        info_logger.close()
+        # Q 退出时 episode 尚未通过 R 重置关闭，outcome 未定，留在 pending/
+        info_logger.close(outcome=None)
 
     cv2.destroyAllWindows()
     env.close()
@@ -643,7 +717,9 @@ def _apply_delta(
                 )
 
 
-def _build_action(is_ee, env, ee_target_pos, ee_target_quat, hand_target, joint_target):
+def _build_action(
+    is_ee, env, ee_target_pos, ee_target_quat, hand_target, joint_target
+):
     """根据控制目标构造动作向量."""
     if is_ee:
         cur_pos, cur_quat = env.get_ee_pose()
@@ -676,83 +752,48 @@ def _overlay_camera(obs, action_mode, reward, ep_reward, step, episode, terminat
     for i, txt in enumerate(texts):
         y = 18 + i * 18
         cv2.putText(
-            cam_bgr,
-            txt,
-            (5, y),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.45,
-            (0, 0, 0),
-            3,
-            cv2.LINE_AA,
+            cam_bgr, txt, (5, y), cv2.FONT_HERSHEY_SIMPLEX,
+            0.45, (0, 0, 0), 3, cv2.LINE_AA,
         )
         cv2.putText(
-            cam_bgr,
-            txt,
-            (5, y),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.45,
-            (255, 255, 255),
-            1,
-            cv2.LINE_AA,
+            cam_bgr, txt, (5, y), cv2.FONT_HERSHEY_SIMPLEX,
+            0.45, (255, 255, 255), 1, cv2.LINE_AA,
         )
     if terminated:
         cv2.putText(
-            cam_bgr,
-            "TASK SUCCESS!",
-            (30, 130),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.9,
-            (0, 0, 0),
-            4,
-            cv2.LINE_AA,
+            cam_bgr, "TASK SUCCESS!", (30, 130), cv2.FONT_HERSHEY_SIMPLEX,
+            0.9, (0, 0, 0), 4, cv2.LINE_AA,
         )
         cv2.putText(
-            cam_bgr,
-            "TASK SUCCESS!",
-            (30, 130),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.9,
-            (0, 255, 80),
-            2,
-            cv2.LINE_AA,
+            cam_bgr, "TASK SUCCESS!", (30, 130), cv2.FONT_HERSHEY_SIMPLEX,
+            0.9, (0, 255, 80), 2, cv2.LINE_AA,
         )
     cv2.namedWindow("Camera", cv2.WINDOW_NORMAL)
     cv2.imshow("Camera", cam_bgr)
     cv2.resizeWindow("Camera", 640, 480)
 
 
-# ====================== 模式 5：流程化任务执行 ======================
+# ====================== 模式 5：流程化任务执行（并行 Worker）======================
 
+# ---------- Worker（必须定义在模块顶层才能被 multiprocessing pickle）----------
 
-def demo_pipeline(
-    task_name: str = "block_lifting",
-    n_episodes: int = 3,
-    render: bool = True,
-    action_mode: str = "ee",
-    controller_type: str = "osc",
-    show_ee_traj: bool = True,
-    show_fingertip_midpoint: bool = True,
-    summary_interval: int = 10,
-    seed: Optional[int] = 42,
-    log_info: bool = False,
-) -> None:
+def _pipeline_worker(args: dict) -> dict:
     """
-    流程化任务执行：按任务类型自动编排行为序列完成目标。
+    子进程入口：独立运行若干 episode，返回统计结果列表。
 
-    两种运行模式：
-      - render=True  : 可视化演示，每轮实时渲染 + 统计成功率，定期输出阶段性总结
-      - render=False : 无渲染批量测试，统计通关率，定期输出阶段性总结
+    每个 worker 拥有独立的环境实例和策略实例，互不干扰。
+    日志文件以 worker_id 区分，避免写入冲突。
     """
-    from .registry import load_strategy
-    from .pipeline_overlay import PipelineStateOverlay
+    task_name       = args["task_name"]
+    ep_indices      = args["ep_indices"]   # 本 worker 负责的全局 episode 编号列表
+    action_mode     = args["action_mode"]
+    controller_type = args["controller_type"]
+    seed_base       = args["seed_base"]
+    log_info        = args["log_info"]
+    worker_id       = args["worker_id"]
 
-    reg = TASK_REGISTRY[task_name]
-    print(f"\n{'='*65}\n [Demo] 流程化执行 | 任务={reg['display_name']}")
-    print(f" action_mode={action_mode}, controller={controller_type}")
-    print(f" 渲染模式: {'可视化' if render else '无渲染批量测试'}")
-    if log_info:
-        print(f" [Info 记录] 已启用，日志目录: {_get_log_dir()}")
-    print(f"{'='*65}")
+    # 子进程内延迟 import，避免主进程 fork 时携带 OpenGL context
+    from source.env_demos.registry import load_task, load_strategy
 
     robot_cfg = _make_robot_cfg(
         action_mode=action_mode,
@@ -766,80 +807,256 @@ def demo_pipeline(
     env = load_task(task_name, robot_cfg)
     strategy = load_strategy(task_name)
 
-    # 统一统计信息（渲染/无渲染共用）
-    total_steps = []
-    successes = 0
-    timeouts = 0
-    t0 = time.time()
+    results: List[dict] = []
 
-    if not render:
-        # ===== 无渲染模式 =====
-        for ep in range(n_episodes):
-            ep_seed = None if seed is None else (ep + 1) * seed
-            obs, info = env.reset(seed=ep_seed)
-            strategy.reset()
-            step = 0
-            done = False
+    for ep in ep_indices:
+        ep_seed = None if seed_base is None else (ep + 1) * seed_base
+        obs, info = env.reset(seed=ep_seed)
+        strategy.reset()
+        step = 0
+        done = False
 
-            # 每 episode 一个 logger
-            info_logger = InfoLogger(task_name, "pipeline", ep + 1) if log_info else None
+        info_logger: Optional[InfoLogger] = (
+            InfoLogger(task_name, f"pipeline_w{worker_id:02d}", ep + 1)
+            if log_info
+            else None
+        )
 
-            while not done:
-                action, action_context = strategy.tick(obs, info, step, env)
-                obs, _, terminated, success, truncated, info = env.step(action)
-                step += 1
-                done = terminated or truncated
+        while not done:
+            action, _ = strategy.tick(obs, info, step, env)
+            obs, _, terminated, success, truncated, info = env.step(action)
+            step += 1
+            done = terminated or truncated
 
-                # 记录 info
-                if info_logger:
-                    info_logger.log_step(step, info, extra={
+            if info_logger:
+                info_logger.log_step(
+                    step,
+                    info,
+                    extra={
                         "terminated": bool(terminated),
                         "success": bool(success),
                         "truncated": bool(truncated),
                         "phase_idx": getattr(strategy, "phase_idx", None),
-                    })
-
-            total_steps.append(step)
-            if success:
-                successes += 1
-            if truncated:
-                timeouts += 1
-
-            status = "SUCCESS" if success else ("TIMEOUT" if truncated else "FAIL")
-            print(f"  Ep {ep+1:3d}/{n_episodes}: steps={step:4d} | {status}")
-
-            # 关闭 logger
-            if info_logger:
-                info_logger.close()
-
-            # 每 summary_interval 轮输出一次阶段性总结
-            if (ep + 1) % summary_interval == 0 and (ep + 1) < n_episodes:
-                _print_pipeline_summary(
-                    task_name,
-                    ep + 1,
-                    total_steps,
-                    successes,
-                    timeouts,
-                    elapsed=time.time() - t0,
-                    is_interim=True,
+                    },
                 )
 
-        # 最终总结
-        elapsed = time.time() - t0
-        _print_pipeline_summary(
-            task_name,
-            n_episodes,
-            total_steps,
-            successes,
-            timeouts,
-            elapsed=elapsed,
-            is_interim=False,
+        if info_logger:
+            _w_outcome = (
+                InfoLogger.OUTCOME_SUCCESS if success
+                else (InfoLogger.OUTCOME_TIMEOUT if truncated else InfoLogger.OUTCOME_FAIL)
+            )
+            info_logger.close(outcome=_w_outcome)
+
+        results.append(
+            {
+                "ep": ep,
+                "steps": step,
+                "success": bool(success),
+                "truncated": bool(truncated),
+                "status": (
+                    "SUCCESS" if success else ("TIMEOUT" if truncated else "FAIL")
+                ),
+            }
         )
-        env.close()
+
+    env.close()
+    return {"worker_id": worker_id, "results": results}
+
+
+# ---------- 主函数 ----------
+
+def demo_pipeline(
+    task_name: str = "block_lifting",
+    n_episodes: int = 3,
+    render: bool = True,
+    action_mode: str = "ee",
+    controller_type: str = "osc",
+    show_ee_traj: bool = True,
+    show_fingertip_midpoint: bool = True,
+    summary_interval: int = 10,
+    seed: Optional[int] = 42,
+    log_info: bool = False,
+    n_workers: int = 0,
+) -> None:
+    """
+    流程化任务执行：按任务类型自动编排行为序列完成目标。
+
+    三种运行模式：
+      - render=True        : 可视化演示，单进程实时渲染 + 统计成功率
+      - render=False, n_workers<=1 : 无渲染单进程批量测试（保留原有行为）
+      - render=False, n_workers>1  : 无渲染多进程并行批量测试（大幅提升吞吐）
+
+    参数
+    ----
+    n_workers : int
+        并行 worker 数量（仅 render=False 时生效）。
+        0  → 自动取 os.cpu_count()；
+        1  → 单进程模式（与原行为完全一致）；
+        N  → N 个子进程并行，每个进程独占一个环境实例。
+    """
+    from source.env_demos.registry import load_strategy
+
+    reg = TASK_REGISTRY[task_name]
+    print(f"\n{'='*65}\n [Demo] 流程化执行 | 任务={reg['display_name']}")
+    print(f" action_mode={action_mode}, controller={controller_type}")
+    print(f" 渲染模式: {'可视化' if render else '无渲染批量测试'}")
+    if not render:
+        _n_workers = n_workers if n_workers > 0 else (_mp.cpu_count() or 1)
+        _n_workers = min(_n_workers, n_episodes)
+        print(f" 并行 Worker 数: {_n_workers}")
+    if log_info:
+        print(f" [Info 记录] 已启用，日志目录: {_get_log_dir()}")
+    print(f"{'='*65}")
+
+    robot_cfg = _make_robot_cfg(
+        action_mode=action_mode,
+        controller_type=controller_type,
+        max_episode_steps=2000,
+        action_scale=0.05,
+        action_scale_rot=0.1,
+        action_scale_hand=0.005,
+        control_freq=20.0,
+    )
+
+    total_steps: List[int] = []
+    successes = 0
+    timeouts = 0
+    t0 = time.time()
+
+    # ===================================================================
+    # 无渲染模式
+    # ===================================================================
+    if not render:
+        _n_workers = n_workers if n_workers > 0 else (_mp.cpu_count() or 1)
+        _n_workers = min(_n_workers, n_episodes)
+
+        # ---------- 单进程（n_workers == 1）：保留原有行为 ----------
+        if _n_workers == 1:
+            env = load_task(task_name, robot_cfg)
+            strategy = load_strategy(task_name)
+
+            for ep in range(n_episodes):
+                ep_seed = None if seed is None else (ep + 1) * seed
+                obs, info = env.reset(seed=ep_seed)
+                strategy.reset()
+                step = 0
+                done = False
+
+                info_logger = (
+                    InfoLogger(task_name, "pipeline", ep + 1) if log_info else None
+                )
+
+                while not done:
+                    action, _ = strategy.tick(obs, info, step, env)
+                    obs, _, terminated, success, truncated, info = env.step(action)
+                    step += 1
+                    done = terminated or truncated
+
+                    if info_logger:
+                        info_logger.log_step(
+                            step,
+                            info,
+                            extra={
+                                "terminated": bool(terminated),
+                                "success": bool(success),
+                                "truncated": bool(truncated),
+                                "phase_idx": getattr(strategy, "phase_idx", None),
+                            },
+                        )
+
+                total_steps.append(step)
+                if success:
+                    successes += 1
+                if truncated:
+                    timeouts += 1
+
+                status = (
+                    "SUCCESS" if success else ("TIMEOUT" if truncated else "FAIL")
+                )
+                print(f"  Ep {ep+1:3d}/{n_episodes}: steps={step:4d} | {status}")
+
+                if info_logger:
+                    _sp_outcome = (
+                        InfoLogger.OUTCOME_SUCCESS if success
+                        else (InfoLogger.OUTCOME_TIMEOUT if truncated else InfoLogger.OUTCOME_FAIL)
+                    )
+                    info_logger.close(outcome=_sp_outcome)
+
+                completed = ep + 1
+                if completed % summary_interval == 0 and completed < n_episodes:
+                    _print_pipeline_summary(
+                        task_name, completed, total_steps, successes, timeouts,
+                        elapsed=time.time() - t0, is_interim=True,
+                    )
+
+            _print_pipeline_summary(
+                task_name, n_episodes, total_steps, successes, timeouts,
+                elapsed=time.time() - t0, is_interim=False,
+            )
+            env.close()
+            return
+
+        # ---------- 多进程（n_workers > 1）：并行执行 ----------
+        #
+        # 将 n_episodes 个 episode 均匀分配给各 worker，余数轮流补给前几个 worker。
+        # 示例：10 episodes, 3 workers → [0,3,6,9], [1,4,7], [2,5,8]
+        ep_indices_all = list(range(n_episodes))
+        chunks = [ep_indices_all[i::_n_workers] for i in range(_n_workers)]
+
+        worker_args = [
+            {
+                "task_name": task_name,
+                "ep_indices": chunk,
+                "action_mode": action_mode,
+                "controller_type": controller_type,
+                "seed_base": seed if seed is not None else 42,
+                "log_info": log_info,
+                "worker_id": i,
+            }
+            for i, chunk in enumerate(chunks)
+            if chunk  # 过滤空分片（n_workers > n_episodes 时出现）
+        ]
+
+        print(
+            f"  分配方案: {_n_workers} workers × ~{n_episodes // _n_workers} episodes/worker\n"
+        )
+
+        # imap_unordered 流式收取结果，边跑边打印，无需等待全部完成
+        with _mp.Pool(processes=_n_workers) as pool:
+            for batch in pool.imap_unordered(_pipeline_worker, worker_args):
+                wid = batch["worker_id"]
+                for r in batch["results"]:
+                    total_steps.append(r["steps"])
+                    if r["success"]:
+                        successes += 1
+                    if r["truncated"]:
+                        timeouts += 1
+
+                    completed = len(total_steps)
+                    print(
+                        f"  [W{wid:02d}] Ep {r['ep']+1:3d}/{n_episodes}:"
+                        f" steps={r['steps']:4d} | {r['status']}"
+                    )
+
+                    # 阶段性总结（completed 基于已收到的结果数，非严格有序，但足够参考）
+                    if completed % summary_interval == 0 and completed < n_episodes:
+                        _print_pipeline_summary(
+                            task_name, completed, total_steps, successes, timeouts,
+                            elapsed=time.time() - t0, is_interim=True,
+                        )
+
+        _print_pipeline_summary(
+            task_name, n_episodes, total_steps, successes, timeouts,
+            elapsed=time.time() - t0, is_interim=False,
+        )
         return
 
-    # ===== 渲染模式：每轮都实时渲染 + 统计 =====
-    # 先 reset 初始化环境，再启动 viewer
+    # ===================================================================
+    # 渲染模式（单进程，与原逻辑完全一致）
+    # ===================================================================
+    env = load_task(task_name, robot_cfg)
+    strategy = load_strategy(task_name)
+
     obs, info = env.reset(seed=seed)
     strategy.reset()
 
@@ -853,8 +1070,9 @@ def demo_pipeline(
 
     viewer = mujoco.viewer.launch_passive(env.model, env.data)
 
-    # 当前 episode 的 logger
-    info_logger: Optional[InfoLogger] = InfoLogger(task_name, "pipeline", 1) if log_info else None
+    info_logger: Optional[InfoLogger] = (
+        InfoLogger(task_name, "pipeline", 1) if log_info else None
+    )
 
     try:
         viewer.cam.distance = 1.5
@@ -863,7 +1081,6 @@ def demo_pipeline(
 
         episode = 0
         while viewer.is_running() and episode < n_episodes:
-            # 每轮开始时 reset（第一轮已在 viewer 启动前 reset）
             if episode > 0:
                 ep_seed = (episode + 1) * seed
                 obs, info = env.reset(seed=ep_seed)
@@ -874,10 +1091,13 @@ def demo_pipeline(
                 if ft_vis:
                     ft_vis.reset()
 
-                # 新 episode 的 logger
                 if log_info:
                     if info_logger:
-                        info_logger.close()
+                        _prev_outcome = (
+                            InfoLogger.OUTCOME_SUCCESS if success
+                            else (InfoLogger.OUTCOME_TIMEOUT if truncated else InfoLogger.OUTCOME_FAIL)
+                        )
+                        info_logger.close(outcome=_prev_outcome)
                     info_logger = InfoLogger(task_name, "pipeline", episode + 1)
 
             step = 0
@@ -890,7 +1110,6 @@ def demo_pipeline(
                 ee_delta_pos = action_context.ee_delta_pos
                 ee_delta_rot = action_context.ee_delta_rot
 
-                # 反推绝对目标（仅用于可视化）
                 if ee_target_pos is None and ee_target_quat is None:
                     if ee_delta_pos is not None and ee_delta_rot is not None:
                         ee_pos, ee_quat = env.get_ee_pose()
@@ -904,21 +1123,23 @@ def demo_pipeline(
                 step += 1
                 done = terminated or truncated
 
-                # 记录 info
                 if info_logger:
-                    info_logger.log_step(step, info, extra={
-                        "reward": float(reward),
-                        "terminated": bool(terminated),
-                        "success": bool(success),
-                        "truncated": bool(truncated),
-                        "phase_idx": getattr(strategy, "phase_idx", None),
-                    })
+                    info_logger.log_step(
+                        step,
+                        info,
+                        extra={
+                            "reward": float(reward),
+                            "terminated": bool(terminated),
+                            "success": bool(success),
+                            "truncated": bool(truncated),
+                            "phase_idx": getattr(strategy, "phase_idx", None),
+                        },
+                    )
 
                 switch_msg = overlay.update(step)
                 if switch_msg:
                     print(switch_msg)
 
-                # ---- 可视化 ----
                 viewer.user_scn.ngeom = 0
                 if traj_vis:
                     actual = env.get_ee_pose()[0]
@@ -934,7 +1155,6 @@ def demo_pipeline(
                 _show_cv_windows_pipeline(obs, overlay, reward, env)
                 viewer.sync()
 
-            # 回合结束统计
             total_steps.append(step)
             if success:
                 successes += 1
@@ -944,7 +1164,8 @@ def demo_pipeline(
             status = "✓ 成功" if success else "✗ 失败/超时"
             print(f"\n  [回合 {episode+1} 结束] {status}")
             print(
-                f"   总步数: {step} | 最终阶段: {overlay._get_phase_name(strategy.phase_idx)}"
+                f"   总步数: {step} | 最终阶段: "
+                f"{overlay._get_phase_name(strategy.phase_idx)}"
             )
 
             status_dict = strategy.get_status_dict()
@@ -952,39 +1173,35 @@ def demo_pipeline(
             for k, v in status_dict.items():
                 print(f"   {k}: {v}")
 
-            # 每 summary_interval 轮输出阶段性总结
             completed = episode + 1
             if completed % summary_interval == 0 and completed < n_episodes:
                 _print_pipeline_summary(
-                    task_name,
-                    completed,
-                    total_steps,
-                    successes,
-                    timeouts,
-                    elapsed=time.time() - t0,
-                    is_interim=True,
+                    task_name, completed, total_steps, successes, timeouts,
+                    elapsed=time.time() - t0, is_interim=True,
                 )
 
             print(f"  {'='*40}")
             episode += 1
 
-        # 最终总结
         elapsed = time.time() - t0
         _print_pipeline_summary(
-            task_name,
-            n_episodes,
-            total_steps,
-            successes,
-            timeouts,
-            elapsed=elapsed,
-            is_interim=False,
+            task_name, n_episodes, total_steps, successes, timeouts,
+            elapsed=elapsed, is_interim=False,
         )
 
     finally:
-        # 严格保证析构顺序：viewer 先关闭释放 OpenGL/渲染资源，
-        # cv2 窗口次之，env 最后清理 MuJoCo 数据——顺序错误会导致 segfault。
+        # 严格保证析构顺序：viewer → cv2 → env，顺序错误会导致 segfault
         if info_logger:
-            info_logger.close()
+            # 最后一个 episode：正常结束时 success/truncated 已赋值；
+            # 若 viewer 被强制关闭则 episode 可能未完成，留 pending。
+            try:
+                _fin_outcome = (
+                    InfoLogger.OUTCOME_SUCCESS if success
+                    else (InfoLogger.OUTCOME_TIMEOUT if truncated else InfoLogger.OUTCOME_FAIL)
+                )
+            except NameError:
+                _fin_outcome = None  # episode 从未执行过
+            info_logger.close(outcome=_fin_outcome)
         viewer.close()
         cv2.destroyAllWindows()
         env.close()
@@ -1018,10 +1235,7 @@ def _print_pipeline_summary(
 def _show_cv_windows_pipeline(
     obs: dict, overlay: PipelineStateOverlay, reward: float, env
 ) -> None:
-    """
-    通用 OpenCV 显示，不依赖具体任务.
-    """
-    # 触觉热力图
+    """通用 OpenCV 显示，不依赖具体任务."""
     from .heatmap import render_tactile_heatmap
 
     heatmap = render_tactile_heatmap(obs)
@@ -1029,11 +1243,9 @@ def _show_cv_windows_pipeline(
     cv2.imshow("Tactile (Top/Mid/Bot)", heatmap)
     cv2.resizeWindow("Tactile (Top/Mid/Bot)", 1000, 480)
 
-    # 相机画面 + 通用状态叠加
     if "camera_rgb" in obs:
         cam_bgr = cv2.cvtColor(obs["camera_rgb"], cv2.COLOR_RGB2BGR)
         cam_bgr = overlay.draw_camera_overlay(cam_bgr, reward)
-
         cv2.namedWindow("Camera", cv2.WINDOW_NORMAL)
         cv2.imshow("Camera", cam_bgr)
         cv2.resizeWindow("Camera", 640, 480)
