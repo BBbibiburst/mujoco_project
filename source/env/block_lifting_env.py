@@ -54,8 +54,8 @@ class BlockLiftingConfig:
     target_color: Tuple = (0.1, 0.8, 0.1, 0.4)
 
     # 物体生成区域（相对于桌面中心）
-    obj_spawn_range: Tuple = (0.30, 0.15)  # (half_x, half_y)
-    obj_spawn_center: Tuple = (0.45, 0.0)  # (x, y)
+    obj_spawn_range: Tuple = (0.30, 0.45)  # (half_x, half_y)
+    obj_spawn_center: Tuple = (0.50, 0.0)  # (x, y)
 
     # 手部开合目标关节角
     hand_open: np.ndarray = field(default_factory=lambda: np.zeros(6))
@@ -338,7 +338,7 @@ class BlockLiftingEnv(RobotArmEnvBase):
         return False, False
 
     def _reset_scene(self) -> None:
-        """随机化物体位置，更新 marker，绑定触觉助手，重置辅助指标."""
+        """随机化物体位置和旋转，更新 marker，绑定触觉助手，重置辅助指标."""
         # 每次 reset 时重新缓存 ID（防止 model 重建后失效）
         self._cache_ids()
         self._was_lifted: bool = False
@@ -356,11 +356,14 @@ class BlockLiftingEnv(RobotArmEnvBase):
         hi = np.array([cx + half_x, cy + half_y, cube_z])
         obj_pos = lo + self.np_random.random(3) * (hi - lo)
 
+        # 随机采样旋转四元数（仅绕 Z 轴，保持底面朝下）
+        rand_quat = self._random_quaternion_z_axis()
+
         # 更新 qpos
         if self._obj_free_jnt_qposadr >= 0:
             adr = self._obj_free_jnt_qposadr
             self.data.qpos[adr : adr + 3] = obj_pos
-            self.data.qpos[adr + 3 : adr + 7] = [1, 0, 0, 0]
+            self.data.qpos[adr + 3 : adr + 7] = rand_quat  # 随机 Z 轴旋转
 
             jnt_id = mujoco.mj_name2id(
                 self.model, mujoco.mjtObj.mjOBJ_JOINT, "obj_free_joint"
@@ -378,15 +381,14 @@ class BlockLiftingEnv(RobotArmEnvBase):
                     self._table_height + tc.target_lift_height,
                 ]
 
-        # 记录方块初始位置（供 _get_info 使用）
+        # 记录方块初始位置和旋转（供 _get_info 使用）
         self._obj_initial_pos = obj_pos.copy()
+        self._obj_initial_quat = rand_quat.copy()
 
         # 重置辅助指标
         self._max_height = 0.0
         self._is_dropped = False
         self._grasp_success = False
-
-        # ====================== 重写基类 _get_info ======================
 
     def _get_info(self) -> Dict[str, Any]:
         """
@@ -403,6 +405,7 @@ class BlockLiftingEnv(RobotArmEnvBase):
         # 方块相关信息
         info["block"] = {
             "initial_position": self._obj_initial_pos.tolist() if hasattr(self, '_obj_initial_pos') else None,
+            "initial_quaternion": self._obj_initial_quat.tolist() if hasattr(self, '_obj_initial_quat') else None,
             "current_position": current_pos.tolist(),
             "current_height": float(current_height),
             "target_height": float(tc.target_lift_height),
@@ -435,39 +438,6 @@ class BlockLiftingEnv(RobotArmEnvBase):
             info["target_marker"] = None
 
         return info
-
-# {
-#     # 基类原有信息
-#     "episode_steps": 42,
-#     "episode_reward": 3.5,
-#     "episode_count": 10,
-#     "arm_qpos":       self.get_arm_qpos(),
-#     "hand_qpos":      self.get_hand_qpos(),
-#     "arm_qpos_range":   arm_qpos_range,
-#     "hand_qpos_range":  hand_qpos_range,
-    
-#     # 新增任务信息
-#     "block": {
-#         "initial_position": [0.45, 0.05, 0.825],
-#         "current_position": [0.452, 0.048, 0.95],
-#         "current_height": 0.125,
-#         "target_height": 0.15,
-#         "max_height": 0.13,
-#         "is_lifted": False,
-#         "was_lifted": True,
-#         "is_dropped": False,
-#         "grasp_success": True,
-#         "obj_size": 0.025,
-#         "obj_mass": 0.1,
-#     },
-#     "end_effector": {
-#         "position": [0.46, 0.05, 0.98],
-#         "quaternion": [0.98, 0.0, 0.0, 0.17],
-#     },
-#     "target_marker": {
-#         "position": [0.45, 0.05, 0.975],
-#     },
-# }
 
     # ====================== 公开辅助方法 ======================
 
@@ -552,3 +522,12 @@ class BlockLiftingEnv(RobotArmEnvBase):
             bid = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_GEOM, border_name)
             if bid >= 0:
                 self._spawn_area_border_ids.append(bid)
+
+    def _random_quaternion_z_axis(self) -> np.ndarray:
+        """
+        生成仅绕 Z 轴的随机单位四元数 [w, x, y, z]。
+        保持物体底面朝下，适合抓取任务。
+        """
+        angle = self.np_random.uniform(0, 2 * np.pi)  # 0~360度均匀分布
+        half_angle = angle / 2.0
+        return np.array([np.cos(half_angle), 0.0, 0.0, np.sin(half_angle)])

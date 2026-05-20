@@ -66,13 +66,20 @@ def _quat_to_euler_deg(quat: np.ndarray) -> np.ndarray:
 
 # ====================== 日志记录辅助 ======================
 
+# 模块顶部，缓存日志目录
+_LOG_DIR: Optional[Path] = None
 
 def _get_log_dir() -> Path:
-    """获取日志根目录（代码同级目录下的 log/ 文件夹）."""
+    """获取日志根目录（按进程启动时间命名，同一会话内固定不变）."""
+    global _LOG_DIR
+    if _LOG_DIR is not None:
+        return _LOG_DIR
+    
     current_dir = Path(__file__).parent.resolve()
-    log_dir = current_dir / "log"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    return log_dir
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _LOG_DIR = current_dir / f"log_{timestamp}"
+    _LOG_DIR.mkdir(parents=True, exist_ok=True)
+    return _LOG_DIR
 
 
 # 结果分类目录名映射

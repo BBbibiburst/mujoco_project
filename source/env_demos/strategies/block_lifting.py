@@ -44,7 +44,7 @@ class BlockLiftingStrategy(TaskStrategy):
     LIFT_HEIGHT: float = 0.20
     APPROACH_SPEED: float = 0.03
     DESCEND_SPEED: float = 0.015
-    LIFT_SPEED: float = 0.02
+    LIFT_SPEED: float = 0.04
     MIN_PHASE_STEPS: int = 5
 
     # 判定阈值：方块与 mid_point 的最大允许距离（单位：米）
@@ -76,7 +76,7 @@ class BlockLiftingStrategy(TaskStrategy):
             '_mid_point_at_descend',
             '_lift_target_pos',
             '_hold_target_pos',
-            '_descend_target_computed',
+            '_lift_target_mid',
         ]
         for attr in attrs_to_clear:
             if hasattr(self, attr):
@@ -226,13 +226,10 @@ class BlockLiftingStrategy(TaskStrategy):
                     result   = minimize_scalar(_ik_residual, bounds=(-0.5 * np.pi, 0.5 * np.pi), method='bounded')
                     best_yaw = result.x
                     self._approach_R_target = _R_from_yaw(best_yaw)
-                    # print(f"最优 yaw: {np.rad2deg(best_yaw):.1f}°, IK残差: {result.fun:.6f}")
 
                     q = np.zeros(4, dtype=np.float64)
                     mujoco.mju_mat2Quat(q, self._approach_R_target.flatten('C'))
                     self._approach_quat_target = q
-                    # print(f"目标旋转矩阵:\n{np.round(self._approach_R_target, 4)}")
-                    # print(f"目标四元数 (wxyz): {self._approach_quat_target}")
 
                 # ===== 缓存 approach 阶段的固定目标 mid-point 位置 =====
                 obj_pos_now = env.get_block_position()
@@ -284,23 +281,17 @@ class BlockLiftingStrategy(TaskStrategy):
             pos_err  = distance(ee_pos, target_ee_pos)
             quat_err = quat_distance(ee_quat, target_quat)
             if ctx.phase_step > self.MIN_PHASE_STEPS and pos_err < 0.01 and quat_err < 0.05:
-
-                # 缓存approach阶段末端位置用于 descend 阶段使用
-                self._descend_target_pos = ee_pos.copy()
+                # ===== 修复：在 approach 收敛时直接用几何关系算出 descend 的完整目标 =====
+                # 不依赖当前 ee_pos，完全由方块位置和固定的 R_target、_d_hand 推算
+                # 目标：mid_point 对准方块中心（obj_pos）
+                # p_mid = p_ee + R_target @ _d_hand  =>  p_ee = obj_pos - R_target @ _d_hand
+                d_world = R_target @ self._d_hand
+                self._descend_target_pos = obj_pos.copy() - d_world
                 return PhaseResult.NEXT, act
             return PhaseResult.CONTINUE, act
 
         elif phase == "descend":
-            # approach阶段末端位置在方块上方的marker平面处，高度为 table_z + PRE_GRASP_HEIGHT
-            # 下降的距离应该为marker平面高度减去一定比例的方块中心高度
-            # 只在第一次进入时计算目标位置
-            if not hasattr(self, '_descend_target_computed'):
-                target_pos = self._descend_target_pos.copy()
-                target_pos[2] -= env.get_mid_point_position()[2] - obj_pos[2]
-                self._descend_target_pos = target_pos  # 覆盖为修正后的固定值
-                self._descend_target_computed = True
-            
-            # 后续直接使用已缓存的固定目标
+            # _descend_target_pos 已在 approach 收敛时完整计算，直接使用
             target_pos = self._descend_target_pos
             delta = target_pos - ee_pos
             dist = np.linalg.norm(delta)
@@ -310,12 +301,10 @@ class BlockLiftingStrategy(TaskStrategy):
             act.ee_delta_rot = self._rot_correction(ee_quat, self._approach_quat_target)
             act.hand_target = self.HAND_GRIPPER.copy()
             # 可视化
-            act.ee_target_pos = target_pos
+            act.ee_target_pos = target_pos.copy()
             act.ee_target_quat = self._approach_quat_target
             if ctx.phase_step > self.MIN_PHASE_STEPS and ee_pos[2] <= target_pos[2] + 0.01:
-                # 存储目前的末端位置用于 grasp 阶段使用
                 self._grasp_target_pos = ee_pos.copy()
-                # 记录一个开始时间戳用于 grasp 阶段的时间判断（确保有足够时间进行接触和挤压）
                 self._grasp_start_time = time.time()
                 self._cube_pos_at_descend = obj_pos.copy()
                 self._mid_point_at_descend = env.get_mid_point_position()
@@ -323,12 +312,11 @@ class BlockLiftingStrategy(TaskStrategy):
             return PhaseResult.CONTINUE, act
 
         elif phase == "adjust":
-        # 初始化：只在进入 adjust 第一步时锁定目标
+            # 初始化：只在进入 adjust 第一步时锁定目标
             if not hasattr(self, '_adjust_step'):
                 self._adjust_step = 0
                 # 锁定目标：当前方块位置 + 当前指尖中点高度（只调水平面，不调高度）
                 cube_now = env.get_block_position()
-                # 关键修复：目标是指尖中点的xy，而不是ee_pos的xy
                 self._adjust_target_mid = np.array([
                     cube_now[0],
                     cube_now[1],
@@ -337,7 +325,7 @@ class BlockLiftingStrategy(TaskStrategy):
 
             self._adjust_step += 1
 
-            # ========== 关键修复：由目标 mid-point 反推目标 ee 位置 ==========
+            # 由目标 mid-point 反推目标 ee 位置
             # 当前姿态下，mid-point = ee_pos + R_ee @ _d_hand
             # 所以 ee_pos = target_mid - R_ee @ _d_hand
             R_ee_flat = np.zeros(9, dtype=np.float64)
@@ -346,7 +334,6 @@ class BlockLiftingStrategy(TaskStrategy):
 
             target_ee_pos = self._adjust_target_mid - R_ee @ self._d_hand
 
-            # 向目标 ee 位置移动
             delta = target_ee_pos - ee_pos
             dist = np.linalg.norm(delta)
             if dist > self.APPROACH_SPEED:
@@ -356,11 +343,10 @@ class BlockLiftingStrategy(TaskStrategy):
             act.ee_delta_rot = self._rot_correction(ee_quat, self._approach_quat_target)
             act.hand_target = self.HAND_GRIPPER.copy()
 
-            # 收敛判断：检查指尖中点是否对准（而不是 ee_pos）
+            # 收敛判断：检查指尖中点是否对准
             current_mid = env.get_mid_point_position()
             mid_err = np.linalg.norm(current_mid[:2] - self._adjust_target_mid[:2])
 
-            # 固定50步或中点对准后进入 grasp
             if self._adjust_step >= 50 or mid_err < 0.005:
                 delattr(self, '_adjust_step')
                 delattr(self, '_adjust_target_mid')
@@ -372,47 +358,119 @@ class BlockLiftingStrategy(TaskStrategy):
         elif phase == "grasp":
             ee_delta_pos = self._grasp_target_pos - ee_pos
             ee_delta_rot = self._rot_correction(ee_quat, self._approach_quat_target)
-            # grasp 阶段保持末端位置不变，逐渐闭合手指到一个合适的程度（不完全闭合以避免过大的抓取力导致方块被挤出）
             act.ee_delta_pos = ee_delta_pos
             act.ee_delta_rot = ee_delta_rot
-            # close_value 是一个介于 0 和 1 之间的值，表示从完全张开到完全闭合的程度。
-            # 需要在成功抓取和避免过大挤压力之间权衡
-            # 0.4 是根据经验调整的一个较合适的抓取程度，可以根据实际情况微调
-            finger_close_value = 0.6
-            thumb_close_value = 0.2
+
+            finger_close_value = 0.7
+            thumb_close_value = 0.3
             finger_close_value = finger_close_value*self._HAND_MAX+(1-finger_close_value)*self._HAND_MIN
             thumb_close_value = thumb_close_value*self._HAND_MAX+(1-thumb_close_value)*self._HAND_MIN
 
             HAND_GRIPPER_CLOSE = np.array([self._HAND_MAX, self._HAND_MAX, finger_close_value, finger_close_value, thumb_close_value, self._HAND_MAX])
             act.hand_target = HAND_GRIPPER_CLOSE.copy()
-            # 增加最小步数限制，确保手指有足够时间闭合、接触并稳定
             if ctx.phase_step > self.MIN_PHASE_STEPS and ctx.phase_step >= 100:
-                # 存储目前的末端位置用于 lift 阶段使用
                 self._lift_target_pos = ee_pos.copy()
                 return PhaseResult.NEXT, act
             return PhaseResult.CONTINUE, act
 
         elif phase == "lift":
-            # ========== 目标位置：上升到 lift 高度 ==========
-            target_pos = self._lift_target_pos.copy()
-            target_pos[2] += self.LIFT_HEIGHT + self.PRE_GRASP_HEIGHT
+            # ========== 保持 grasp 姿态不变 ==========
+            target_quat = self._approach_quat_target.copy()
+
+            # ========== 目标 mid-point：水平位置保持 grasp 时的方块位置，高度提升到目标 ==========
+            if not hasattr(self, '_lift_target_mid'):
+                self._lift_target_mid = np.array([
+                    self._cube_pos_at_descend[0],
+                    self._cube_pos_at_descend[1],
+                    env._table_height + self.LIFT_HEIGHT + self.PRE_GRASP_HEIGHT,
+                ])
+            target_mid = self._lift_target_mid
+
+            # ========== 由目标 mid-point 和固定姿态反推目标 ee 位置 ==========
+            R_target_flat = np.zeros(9, dtype=np.float64)
+            mujoco.mju_quat2Mat(R_target_flat, target_quat)
+            R_target = R_target_flat.reshape(3, 3)
+            target_ee_pos = target_mid - R_target @ self._d_hand
+
+            # ========== IK 可达性检查与修正 ==========
+            ctrl = env.controller
+
+            tmp = mujoco.MjData(env.model)
+            mujoco.mj_copyData(tmp, env.model, env.data)
+            tmp.qvel[:] = 0.0
+            q_try = env.get_arm_qpos().copy()
+            tmp.qpos[ctrl.arm_qpos_ids] = q_try
+            mujoco.mj_fwdPosition(env.model, tmp)
+
+            damping = 0.05
+            jac_p = np.zeros((3, env.model.nv))
+            jac_r = np.zeros((3, env.model.nv))
+
+            for _ in range(100):
+                err_p = target_ee_pos - tmp.site_xpos[ctrl.ee_id]
+
+                quat_cur = np.zeros(4)
+                mujoco.mju_mat2Quat(quat_cur, tmp.site_xmat[ctrl.ee_id])
+                qt = target_quat.copy()
+                if np.dot(qt, quat_cur) < 0:
+                    qt = -qt
+                neg_cur = np.zeros(4)
+                mujoco.mju_negQuat(neg_cur, quat_cur)
+                dq4 = np.zeros(4)
+                mujoco.mju_mulQuat(dq4, qt, neg_cur)
+                err_r = np.zeros(3)
+                mujoco.mju_quat2Vel(err_r, dq4, 1.0)
+
+                err_norm = np.linalg.norm(err_p) + np.linalg.norm(err_r)
+                if err_norm < 1e-6:
+                    break
+
+                mujoco.mj_jacSite(env.model, tmp, jac_p, jac_r, ctrl.ee_id)
+                Jp = jac_p[:, ctrl.arm_qvel_ids]
+                Jr = jac_r[:, ctrl.arm_qvel_ids]
+                J = np.vstack([Jp, Jr])
+                err = np.concatenate([err_p, err_r])
+
+                A = J @ J.T + damping**2 * np.eye(6)
+                try:
+                    dq_j = J.T @ np.linalg.solve(A, err)
+                except np.linalg.LinAlgError:
+                    dq_j = J.T @ np.linalg.pinv(A) @ err
+
+                q_try = np.clip(
+                    q_try + dq_j,
+                    ctrl.arm_range[:, 0],
+                    ctrl.arm_range[:, 1],
+                )
+                tmp.qpos[ctrl.arm_qpos_ids] = q_try
+                mujoco.mj_fwdPosition(env.model, tmp)
+            else:
+                target_ee_pos = tmp.site_xpos[ctrl.ee_id].copy()
+                target_mid = target_ee_pos + R_target @ self._d_hand
+
+            del tmp
 
             # ========== 位置控制 ==========
-            delta_pos = target_pos - ee_pos
+            delta_pos = target_ee_pos - ee_pos
             dist_pos = np.linalg.norm(delta_pos)
             if dist_pos > self.LIFT_SPEED:
                 delta_pos = delta_pos / dist_pos * self.LIFT_SPEED
             act.ee_delta_pos = delta_pos
 
-            # 可视化目标
-            act.ee_target_pos = target_pos.copy()
+            act.ee_delta_rot = self._rot_correction(ee_quat, target_quat)
+
+            act.ee_target_pos = target_ee_pos.copy()
+            act.ee_target_quat = target_quat.copy()
 
             act.hand_target = self.HAND_CLOSE.copy()
 
-            # ========== 收敛判断（位置）==========
-            pos_err = np.linalg.norm(ee_pos - target_pos)
-            if (ctx.phase_step > self.MIN_PHASE_STEPS and pos_err < 0.02) or ctx.phase_step > 300:
+            # ========== 收敛判断 ==========
+            pos_err = np.linalg.norm(ee_pos - target_ee_pos)
+            quat_err = quat_distance(ee_quat, target_quat)
+            if (ctx.phase_step > self.MIN_PHASE_STEPS and pos_err < 0.02 and quat_err < 0.05) or ctx.phase_step > 300:
                 self._hold_target_pos = ee_pos.copy()
+                if hasattr(self, '_lift_target_mid'):
+                    delattr(self, '_lift_target_mid')
                 return PhaseResult.NEXT, act
             return PhaseResult.CONTINUE, act
 
@@ -422,20 +480,15 @@ class BlockLiftingStrategy(TaskStrategy):
             mid_pos = env.get_mid_point_position()
             error = np.linalg.norm(cube_pos - mid_pos)
 
-            # 保持当前姿态不动（继续 hold），等待判定完成
             act.ee_delta_pos = np.zeros(3)
             act.ee_delta_rot = np.zeros(3)
             act.hand_target = self.HAND_CLOSE.copy()
 
-            # 至少运行一定步数后再做判定，让系统稳定
             if ctx.phase_step > self.MIN_PHASE_STEPS:
                 if error > self.CHECK_MAX_DISTANCE:
-                    # 判定为抓取失败：清除所有缓存，从阶段0重新开始
                     self._clear_computed_cache()
-                    # 返回 RESTART，让调度器回到第一个阶段
                     return PhaseResult.RESTART, act
                 else:
-                    # 判定成功，进入下一个阶段（或结束）
                     return PhaseResult.NEXT, act
 
             return PhaseResult.CONTINUE, act
