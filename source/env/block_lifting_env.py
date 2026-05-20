@@ -54,7 +54,7 @@ class BlockLiftingConfig:
     target_color: Tuple = (0.1, 0.8, 0.1, 0.4)
 
     # 物体生成区域（相对于桌面中心）
-    obj_spawn_range: Tuple = (0.30, 0.45)  # (half_x, half_y)
+    obj_spawn_range: Tuple = (0.26, 0.39)  # (half_x, half_y)
     obj_spawn_center: Tuple = (0.50, 0.0)  # (x, y)
 
     # 手部开合目标关节角
@@ -473,6 +473,12 @@ class BlockLiftingEnv(RobotArmEnvBase):
         if self._obj_body_id < 0:
             self._cache_ids()  # 确保 ID 已缓存
         return self.data.xpos[self._obj_body_id].copy()  # .copy() 避免修改原数据
+    
+    def get_block_quaternion(self) -> np.ndarray:
+        """获取方块当前旋转四元数 [w, x, y, z]."""
+        if self._obj_body_id < 0:
+            self._cache_ids()
+        return self.data.xquat[self._obj_body_id].copy()
 
     def get_mid_point_position(self) -> np.ndarray:
         thumb = self.get_site_pos("inspirehand_fingertip_thumb")

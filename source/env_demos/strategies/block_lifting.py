@@ -98,10 +98,8 @@ class BlockLiftingStrategy(TaskStrategy):
             act.ee_delta_rot = np.zeros(3)
             max_error = np.max(np.abs(hand_qpos - act.hand_target))
             if ctx.phase_step > self.MIN_PHASE_STEPS and max_error < 0.001:
-                # ===== 标定：计算 _d_hand 和 _finger_in_local =====
-                # _d_hand       : mid-point 在 ee 局部坐标系下的固定偏移
-                # _finger_in_local : thumb→finger3 连线在 ee 局部坐标系下的单位方向
                 if not hasattr(self, '_d_hand'):
+                    # ===== 标定：计算 _d_hand 和 _finger_in_local =====
                     ee_pos_cal, ee_quat_cal = env.get_ee_pose()
                     mid_cal = env.get_mid_point_position()
 
@@ -109,23 +107,35 @@ class BlockLiftingStrategy(TaskStrategy):
                     mujoco.mju_quat2Mat(R_ee_flat, ee_quat_cal)
                     R_ee_cal = R_ee_flat.reshape(3, 3)
 
-                    # mid-point 在 ee 局部的偏移
                     self._d_hand = R_ee_cal.T @ (mid_cal - ee_pos_cal)
 
-                    # thumb→finger3 在 ee 局部的单位方向
                     thumb_cal   = env.get_site_pos("inspirehand_fingertip_thumb")
                     finger3_cal = env.get_site_pos("inspirehand_fingertip_3")
                     finger_vec_world = finger3_cal - thumb_cal
                     finger_vec_local = R_ee_cal.T @ finger_vec_world
                     self._finger_in_local = finger_vec_local / np.linalg.norm(finger_vec_local)
 
-                    # ===== 优化目标旋转矩阵：直接最小化 IK 残差 =====
-                    # 优化变量：yaw ∈ [-π/2, π/2]（target_f 的 x 分量 ≥ 0）
-                    # 目标函数：min IK_residual(yaw)
-                    # IK 残差直接衡量该姿态对机械臂的可达性，残差越小越好
+                    # ===== 优化目标旋转矩阵：考虑方块旋转，对齐手指与方块边缘 =====
                     from scipy.optimize import minimize_scalar
 
                     obj_pos_cal = env.get_block_position()
+                    obj_quat_cal = env.get_block_quaternion()  # [w, x, y, z]
+                    
+                    # 获取方块的世界旋转矩阵（仅Z轴旋转）
+                    R_obj_flat = np.zeros(9, dtype=np.float64)
+                    mujoco.mju_quat2Mat(R_obj_flat, obj_quat_cal)
+                    R_obj = R_obj_flat.reshape(3, 3)
+                    
+                    # 方块的X轴和Y轴方向（在XY平面内）
+                    obj_x_axis = R_obj[:, 0]  # 方块局部X轴在世界坐标系中的方向
+                    obj_y_axis = R_obj[:, 1]  # 方块局部Y轴在世界坐标系中的方向
+                    
+                    # 投影到XY平面并归一化（忽略Z分量，因为方块只绕Z轴旋转）
+                    obj_x_axis[2] = 0
+                    obj_y_axis[2] = 0
+                    obj_x_axis /= np.linalg.norm(obj_x_axis)
+                    obj_y_axis /= np.linalg.norm(obj_y_axis)
+
                     approach_mid = np.array([
                         obj_pos_cal[0],
                         obj_pos_cal[1],
@@ -150,8 +160,7 @@ class BlockLiftingStrategy(TaskStrategy):
                         return np.column_stack([tf, target_p, th]) @ src_basis.T
 
                     def _ik_residual(yaw: float) -> float:
-                        """在虚拟副本上跑 DLS IK，返回收敛残差（越小越可达）.
-                        独立实现，不依赖控制器类型（OSC/IK 均可用）。"""
+                        """在虚拟副本上跑 DLS IK，返回收敛残差（越小越可达）."""
                         R   = _R_from_yaw(yaw)
                         pos = approach_mid - R @ self._d_hand
 
@@ -223,8 +232,76 @@ class BlockLiftingStrategy(TaskStrategy):
                         mujoco.mju_quat2Vel(vel, dq4, 1.0)
                         return float(err_p + np.linalg.norm(vel))
 
-                    result   = minimize_scalar(_ik_residual, bounds=(-0.5 * np.pi, 0.5 * np.pi), method='bounded')
-                    best_yaw = result.x
+                    def _orientation_alignment_error(yaw: float) -> float:
+                        """计算手指方向与方块边缘的对齐误差（越小越对齐）."""
+                        R = _R_from_yaw(yaw)
+                        # 手指方向在世界坐标系中
+                        finger_world = R @ f_local
+                        finger_world[2] = 0  # 投影到XY平面
+                        norm = np.linalg.norm(finger_world)
+                        if norm > 1e-6:
+                            finger_world /= norm
+                        
+                        # 计算与方块X轴和Y轴的夹角（取最小值，因为可以对齐X或Y）
+                        dot_x = abs(np.dot(finger_world, obj_x_axis))
+                        dot_y = abs(np.dot(finger_world, obj_y_axis))
+                        # 理想情况下 dot_x 或 dot_y 应该接近 1（平行）
+                        # 误差 = 1 - max(|dot_x|, |dot_y|)
+                        alignment_error = 1.0 - max(dot_x, dot_y)
+                        return float(alignment_error)
+
+                    # ===== 多目标优化：IK可达性 + 方向对齐 =====
+                    # 先找出4个候选方向（与方块边缘对齐的yaw值）
+                    # 手指方向 f_local 在yaw=0时的世界方向
+                    R0 = _R_from_yaw(0.0)
+                    finger0_world = R0 @ f_local
+                    finger0_world[2] = 0
+                    finger0_world /= np.linalg.norm(finger0_world)
+                    
+                    # 计算 finger0 与方块X轴的夹角
+                    angle_to_x = np.arctan2(
+                        np.cross(obj_x_axis[:2], finger0_world[:2]),
+                        np.dot(obj_x_axis[:2], finger0_world[:2])
+                    )
+                    # 4个对齐候选：使手指与X轴或Y轴对齐
+                    # 需要旋转的角度偏移
+                    candidates = []
+                    for base_angle in [0, np.pi/2, np.pi, 3*np.pi/2]:
+                        # 对齐到X轴
+                        candidates.append(base_angle - angle_to_x)
+                        # 对齐到Y轴（再加90度）
+                        candidates.append(base_angle - angle_to_x + np.pi/2)
+                    
+                    # 归一化到 [-pi, pi]
+                    candidates = [(a + np.pi) % (2*np.pi) - np.pi for a in candidates]
+                    
+                    # 评估每个候选：组合代价 = IK残差 + 权重 * 对齐误差
+                    best_cost = float('inf')
+                    best_yaw = 0.0
+                    
+                    for cand_yaw in candidates:
+                        # 限制在合理范围内
+                        if abs(cand_yaw) > 0.5 * np.pi:
+                            continue
+                        
+                        ik_err = _ik_residual(cand_yaw)
+                        align_err = _orientation_alignment_error(cand_yaw)
+                        # 组合代价：IK优先，方向对齐次之
+                        cost = ik_err + 0.5 * align_err
+                        
+                        if cost < best_cost:
+                            best_cost = cost
+                            best_yaw = cand_yaw
+
+                    # 如果候选都不理想，回退到原始优化
+                    if best_cost > 0.1:  # 阈值可调
+                        result = minimize_scalar(
+                            lambda y: _ik_residual(y) + 0.3 * _orientation_alignment_error(y),
+                            bounds=(-0.5 * np.pi, 0.5 * np.pi),
+                            method='bounded'
+                        )
+                        best_yaw = result.x
+
                     self._approach_R_target = _R_from_yaw(best_yaw)
 
                     q = np.zeros(4, dtype=np.float64)
@@ -280,7 +357,9 @@ class BlockLiftingStrategy(TaskStrategy):
             # ========== 收敛判断 ==========
             pos_err  = distance(ee_pos, target_ee_pos)
             quat_err = quat_distance(ee_quat, target_quat)
-            if ctx.phase_step > self.MIN_PHASE_STEPS and pos_err < 0.01 and quat_err < 0.05:
+            # print(f"ee pos: {ee_pos}, target pos: {target_ee_pos}")
+            # print(f"ee quat: {ee_quat}, target quat: {target_quat}")
+            if ctx.phase_step > self.MIN_PHASE_STEPS and pos_err < 0.05 and quat_err < 0.05:
                 # ===== 修复：在 approach 收敛时直接用几何关系算出 descend 的完整目标 =====
                 # 不依赖当前 ee_pos，完全由方块位置和固定的 R_target、_d_hand 推算
                 # 目标：mid_point 对准方块中心（obj_pos）
