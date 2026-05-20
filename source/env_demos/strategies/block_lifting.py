@@ -139,9 +139,14 @@ class BlockLiftingStrategy(TaskStrategy):
         ee_pos, ee_quat = env.get_ee_pose()
         hand_qpos = env.get_hand_qpos()
 
-        # ========== 新增：每次执行阶段前检测环境变化，防止提前终止导致缓存泄漏 ==========
-        self._maybe_invalidate_cache(env, obj_pos)
-        # =============================================================================
+        # ========== 仅在抓取前阶段检测环境变化 ==========
+        # grasp/lift/check 阶段方块被夹持移动属于预期行为，不应触发缓存清除；
+        # 只在 make_gripper_hand_form / approach / descend / adjust 阶段做检测，
+        # 防止新回合方块重置或外力干扰导致旧缓存污染决策。
+        _PRE_GRASP_PHASES = {"make_gripper_hand_form", "approach", "descend", "adjust"}
+        if phase in _PRE_GRASP_PHASES:
+            self._maybe_invalidate_cache(env, obj_pos)
+        # ==================================================
 
         if phase == "make_gripper_hand_form":
             act.hand_target = self.HAND_GRIPPER.copy()
@@ -453,6 +458,11 @@ class BlockLiftingStrategy(TaskStrategy):
             return PhaseResult.CONTINUE, act
 
         elif phase == "descend":
+            # ===== 兜底守卫 =====
+            if not hasattr(self, '_approach_quat_target') or not hasattr(self, '_descend_target_pos'):
+                self._clear_computed_cache()
+                return PhaseResult.RESTART, act
+            # ====================
             # ========== 方案四：descend 阶段合并精细姿态对准 ==========
             target_pos = self._descend_target_pos
             
@@ -480,6 +490,11 @@ class BlockLiftingStrategy(TaskStrategy):
             return PhaseResult.CONTINUE, act
 
         elif phase == "adjust":
+            # ===== 兜底守卫 =====
+            if not hasattr(self, '_approach_quat_target') or not hasattr(self, '_mid_point_at_descend'):
+                self._clear_computed_cache()
+                return PhaseResult.RESTART, act
+            # ====================
             if not hasattr(self, '_adjust_step'):
                 self._adjust_step = 0
                 cube_now = env.get_block_position()
@@ -518,6 +533,11 @@ class BlockLiftingStrategy(TaskStrategy):
             return PhaseResult.CONTINUE, act
 
         elif phase == "grasp":
+            # ===== 兜底守卫 =====
+            if not hasattr(self, '_approach_quat_target') or not hasattr(self, '_grasp_target_pos'):
+                self._clear_computed_cache()
+                return PhaseResult.RESTART, act
+            # ====================
             ee_delta_pos = self._grasp_target_pos - ee_pos
             ee_delta_rot = self._rot_correction(ee_quat, self._approach_quat_target)
             act.ee_delta_pos = ee_delta_pos
@@ -536,6 +556,11 @@ class BlockLiftingStrategy(TaskStrategy):
             return PhaseResult.CONTINUE, act
 
         elif phase == "lift":
+            # ===== 兜底守卫：_approach_quat_target 不应在此阶段缺失，若缺失则重置 =====
+            if not hasattr(self, '_approach_quat_target'):
+                self._clear_computed_cache()
+                return PhaseResult.RESTART, act
+            # =========================================================================
             target_quat = self._approach_quat_target.copy()
 
             if not hasattr(self, '_lift_target_mid'):
