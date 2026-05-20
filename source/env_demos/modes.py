@@ -69,16 +69,32 @@ def _quat_to_euler_deg(quat: np.ndarray) -> np.ndarray:
 # 模块顶部，缓存日志目录
 _LOG_DIR: Optional[Path] = None
 
+
 def _get_log_dir() -> Path:
-    """获取日志根目录（按进程启动时间命名，同一会话内固定不变）."""
+    """
+    获取日志根目录（按进程启动时间命名，同一会话内固定不变）.
+
+    主进程首次调用时创建带时间戳的目录，并将路径写入环境变量
+    DEMO_LOG_DIR，以便 spawn 子进程通过 args["log_dir"] 恢复后
+    读取同一目录，保证整个运行只产生一个 log 文件夹。
+    """
     global _LOG_DIR
     if _LOG_DIR is not None:
         return _LOG_DIR
-    
+
+    # spawn 子进程：从环境变量恢复主进程已创建的目录
+    env_val = os.environ.get("DEMO_LOG_DIR")
+    if env_val:
+        _LOG_DIR = Path(env_val)
+        _LOG_DIR.mkdir(parents=True, exist_ok=True)
+        return _LOG_DIR
+
+    # 主进程：首次调用，创建带时间戳目录并写入环境变量
     current_dir = Path(__file__).parent.resolve()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     _LOG_DIR = current_dir / f"log_{timestamp}"
     _LOG_DIR.mkdir(parents=True, exist_ok=True)
+    os.environ["DEMO_LOG_DIR"] = str(_LOG_DIR)  # 供 spawn 子进程读取
     return _LOG_DIR
 
 
@@ -808,6 +824,12 @@ def _pipeline_worker_stream(args: dict, result_q: _mp.Queue) -> None:
 
         {"worker_id": int, "done": True}
     """
+    # spawn 模式下子进程是全新解释器，os.environ 的运行时修改不会自动继承，
+    # 需要从 args 显式恢复，使 _get_log_dir() 复用主进程已创建的目录，
+    # 保证整次运行只产生一个 log_<timestamp> 文件夹。
+    if args.get("log_dir"):
+        os.environ["DEMO_LOG_DIR"] = args["log_dir"]
+
     task_name       = args["task_name"]
     ep_indices      = args["ep_indices"]   # 本 worker 负责的全局 episode 编号列表
     action_mode     = args["action_mode"]
@@ -1025,11 +1047,12 @@ def demo_pipeline(
         # 将 n_episodes 个 episode 均匀分配给各 worker，余数轮流补给前几个 worker。
         # 示例：10 episodes, 3 workers → [0,3,6,9], [1,4,7], [2,5,8]
         #
-        # 与旧实现的核心区别：
-        #   旧：Pool.imap_unordered 按整个 worker 批次返回，一个 worker 全部跑完才
-        #       能拿到结果，summary_interval 实际上近似于批次粒度。
-        #   新：每个子进程每完成一个 episode 就立刻 put 到 Manager Queue，
-        #       主进程实时 get，每累计 summary_interval 个新结果精确触发一次总结。
+        # log_dir 由主进程在构造 worker_args 前统一调用 _get_log_dir() 确定，
+        # 并通过 args["log_dir"] 显式传入每个子进程，子进程启动时写入
+        # os.environ["DEMO_LOG_DIR"]，使 _get_log_dir() 复用同一目录，
+        # 保证整次运行只产生一个 log_<timestamp> 文件夹。
+        log_dir_str = str(_get_log_dir()) if log_info else None
+
         ep_indices_all = list(range(n_episodes))
         chunks = [ep_indices_all[i::_n_workers] for i in range(_n_workers)]
 
@@ -1042,6 +1065,7 @@ def demo_pipeline(
                 "seed_base": seed if seed is not None else 42,
                 "log_info": log_info,
                 "worker_id": i,
+                "log_dir": log_dir_str,  # 主进程确定的统一目录，子进程复用
             }
             for i, chunk in enumerate(chunks)
             if chunk  # 过滤空分片（n_workers > n_episodes 时出现）
@@ -1094,10 +1118,6 @@ def demo_pipeline(
                 timeouts += 1
 
             completed = len(total_steps)
-            # print(
-            #     f"  [W{wid:02d}] Ep {r['ep']+1:3d}/{n_episodes}:"
-            #     f" steps={r['steps']:4d} | {r['status']}"
-            # )
 
             # 精确按 summary_interval 触发：每新增满 interval 个就打一次
             if (
