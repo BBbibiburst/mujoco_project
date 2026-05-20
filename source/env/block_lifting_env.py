@@ -165,7 +165,7 @@ class BlockLiftingEnv(RobotArmEnvBase):
             size=[tc.obj_size] * 3,
             rgba=list(tc.obj_color),
             mass=tc.obj_mass,
-            friction=[1.0, 0.5, 0.05],
+            friction=[0.3, 0.1, 0.01], # 更合理的值,
             condim=4,
             conaffinity=15,
         )
