@@ -19,10 +19,13 @@
     - _create_scene_builder() : 返回自定义 SceneBuilder
 """
 
+import base64
+import io
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, Union
 
+import cv2
 import mujoco
 import numpy as np
 import gymnasium as gym
@@ -49,6 +52,68 @@ class EnvStats:
     episode_steps: int = 0
     episode_reward: float = 0.0
     success_count: int = 0
+
+
+# ====================== 图像编码辅助 ======================
+
+def encode_image_to_base64(
+    img: np.ndarray,
+    quality: int = 85,
+    max_dim: Optional[int] = 320,
+) -> str:
+    """
+    将 numpy 图像数组编码为 base64 JPEG 字符串。
+
+    参数
+    ----
+    img : np.ndarray
+        图像数组。支持 uint8 (H,W,C)、uint8 (H,W) 或 float (归一化到 [0,1])。
+    quality : int
+        JPEG 编码质量 (1-100)。
+    max_dim : int | None
+        如果指定，将图像最长边缩放到此值（保持宽高比）。
+
+    返回
+    ----
+    str
+        "data:image/jpeg;base64,<encoded_data>" 格式字符串。
+    """
+    # 归一化到 uint8
+    if img.dtype == np.float32 or img.dtype == np.float64:
+        img = np.clip(img, 0.0, 1.0)
+        img = (img * 255).astype(np.uint8)
+    elif img.dtype != np.uint8:
+        img = img.astype(np.uint8)
+
+    # 确保至少 2 维
+    if img.ndim == 1:
+        # 一维数组，尝试 reshape 为方形
+        side = int(np.sqrt(len(img)))
+        img = img[: side * side].reshape(side, side)
+    if img.ndim == 2:
+        img = np.expand_dims(img, axis=-1)
+
+    # 可选缩放
+    if max_dim is not None and max_dim > 0:
+        h, w = img.shape[:2]
+        max_side = max(h, w)
+        if max_side > max_dim:
+            scale = max_dim / max_side
+            new_w, new_h = int(w * scale), int(h * scale)
+            img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+    # 颜色空间转换（RGB→BGR for OpenCV JPEG 编码）
+    if img.shape[-1] == 3:
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+
+    # JPEG 编码
+    encode_params = [cv2.IMWRITE_JPEG_QUALITY, quality]
+    ok, buf = cv2.imencode(".jpg", img, encode_params)
+    if not ok:
+        raise RuntimeError("JPEG 编码失败")
+
+    b64 = base64.b64encode(buf.tobytes()).decode("ascii")
+    return f"data:image/jpeg;base64,{b64}"
 
 
 # ====================== 基类 ======================
@@ -103,6 +168,11 @@ class RobotArmEnvBase(gym.Env, ABC):
 
         self._initialized: bool = False
 
+        # 图像日志配置
+        self._log_images: bool = True
+        self._image_quality: int = 85
+        self._image_max_dim: Optional[int] = 320
+
     # ====================== 抽象接口 ======================
 
     @abstractmethod
@@ -141,7 +211,7 @@ class RobotArmEnvBase(gym.Env, ABC):
         return self.stats.episode_steps >= self.cfg.max_episode_steps
 
     def _get_info(self) -> Dict[str, Any]:
-        """额外调试信息（默认：回合统计数据 + 机械臂/灵巧手位置及范围）."""
+        """额外调试信息（默认：回合统计数据 + 机械臂/灵巧手位置及范围 + 触觉图像）."""
         # 机械臂关节范围 (7, 2)
         arm_jnt_ids = self.controller.arm_qpos_ids
         arm_qpos_range = np.array([
@@ -154,7 +224,8 @@ class RobotArmEnvBase(gym.Env, ABC):
             [self.model.jnt_range[jid][0], self.model.jnt_range[jid][1]]
             for jid in hand_jnt_ids
         ])
-        return {
+
+        info = {
             "episode_steps":    self.stats.episode_steps,
             "episode_reward":   self.stats.episode_reward,
             "episode_count":    self.stats.episode_count,
@@ -163,6 +234,22 @@ class RobotArmEnvBase(gym.Env, ABC):
             "arm_qpos_range":   arm_qpos_range,
             "hand_qpos_range":  hand_qpos_range,
         }
+
+        # 触觉图像（uint8 原始数据，base64 编码）
+        tactile = self.get_tactile()
+        if tactile is not None:
+            tactile_encoded = {}
+            for key, img in tactile.items():
+                # img: uint8 ndarray，直接 base64 编码原始字节
+                b64 = base64.b64encode(img.tobytes()).decode("ascii")
+                tactile_encoded[key] = {
+                    "data": f"data:application/octet-stream;base64,{b64}",
+                    "shape": list(img.shape),
+                    "dtype": str(img.dtype),
+                }
+            info["tactile"] = tactile_encoded
+
+        return info
 
     @property
     def observation_space(self) -> spaces.Box:
@@ -200,6 +287,71 @@ class RobotArmEnvBase(gym.Env, ABC):
     @action_space.setter
     def action_space(self, value: spaces.Space) -> None:
         self._action_space = value
+
+    # ====================== 图像日志接口 ======================
+
+    def set_image_logging(
+        self,
+        enabled: bool = True,
+        quality: int = 85,
+        max_dim: Optional[int] = 320,
+    ) -> None:
+        """
+        配置图像日志记录参数。
+
+        参数
+        ----
+        enabled : bool
+            是否启用图像记录。
+        quality : int
+            JPEG 编码质量 (1-100)，越高图像越清晰但文件越大。
+        max_dim : int | None
+            图像最长边限制（像素），None 表示不缩放。
+        """
+        self._log_images = enabled
+        self._image_quality = quality
+        self._image_max_dim = max_dim
+
+    def _encode_obs_images(self, obs: Union[np.ndarray, Dict]) -> Dict[str, Any]:
+        """
+        从观测中提取相机和触觉图像，编码为 base64 字符串。
+
+        返回字典可直接合并到 info 中。
+        """
+        if not self._log_images:
+            return {}
+
+        images = {}
+
+        # 相机图像
+        if isinstance(obs, dict) and "camera_rgb" in obs:
+            try:
+                images["camera_rgb"] = encode_image_to_base64(
+                    obs["camera_rgb"],
+                    quality=self._image_quality,
+                    max_dim=self._image_max_dim,
+                )
+            except Exception:
+                pass  # 编码失败时跳过，不中断流程
+
+        # 触觉图像
+        tactile_keys = ["tactile_bottom", "tactile_middle", "tactile_top"]
+        if isinstance(obs, dict):
+            tactile_imgs = {}
+            for key in tactile_keys:
+                if key in obs:
+                    try:
+                        tactile_imgs[key] = encode_image_to_base64(
+                            obs[key],
+                            quality=self._image_quality,
+                            max_dim=self._image_max_dim,
+                        )
+                    except Exception:
+                        pass
+            if tactile_imgs:
+                images["tactile"] = tactile_imgs
+
+        return images
 
     # ====================== 公开接口 ======================
 
@@ -246,6 +398,11 @@ class RobotArmEnvBase(gym.Env, ABC):
         terminated, success = self._is_terminated()
         truncated  = self._is_truncated()
         info       = self._get_info()
+
+        # 自动附加图像数据到 info
+        image_data = self._encode_obs_images(obs)
+        if image_data:
+            info["images"] = image_data
 
         self.stats.episode_steps  += 1
         self.stats.total_steps    += 1

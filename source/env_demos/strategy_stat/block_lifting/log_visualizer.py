@@ -9,6 +9,8 @@
 import json
 import re
 import sys
+import base64
+import io
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
@@ -260,17 +262,19 @@ def main():
         "font.family": "monospace",
     })
 
-    fig = plt.figure(figsize=(16, 9), facecolor=BG)
+    fig = plt.figure(figsize=(18, 10), facecolor=BG)
     fig.suptitle("■  RM75B + InspireHand  ·  Episode Replay  (real FK)",
                  fontsize=13, color=WHITE, fontweight="bold", y=0.98)
 
-    gs   = GridSpec(3, 3, figure=fig,
-                    left=0.04, right=0.98, top=0.93, bottom=0.07,
-                    wspace=0.38, hspace=0.60)
+    gs   = GridSpec(3, 4, figure=fig,
+                    left=0.02, right=0.99, top=0.93, bottom=0.07,
+                    wspace=0.35, hspace=0.55)
     ax3d   = fig.add_subplot(gs[:, :2], projection="3d")
     ax_rwd = fig.add_subplot(gs[0, 2])
     ax_ht  = fig.add_subplot(gs[1, 2])
     ax_ee  = fig.add_subplot(gs[2, 2])
+    ax_cam = fig.add_subplot(gs[0, 3])
+    ax_tac = fig.add_subplot(gs[1:, 3])
 
     for ax in [ax_rwd, ax_ht, ax_ee]:
         ax.set_facecolor(PANEL)
@@ -336,6 +340,24 @@ def main():
         bbox=dict(boxstyle="round,pad=0.35", fc=BG, ec=GRAY, alpha=0.85)
     )
 
+    # ── 图像解码辅助 ─────────────────────────────────────────────
+    def decode_image(img_data: dict) -> np.ndarray:
+        """从 base64 编码的数据解码图像。"""
+        b64_str = img_data["data"].split(",")[1]
+        raw_bytes = base64.b64decode(b64_str)
+        shape = img_data["shape"]
+        dtype = np.dtype(img_data["dtype"])
+        img = np.frombuffer(raw_bytes, dtype=dtype).reshape(shape)
+        return img
+
+    def decode_camera_jpeg(img_b64: str) -> np.ndarray:
+        """解码 JPEG base64 相机图像。"""
+        from PIL import Image
+        b64_str = img_b64.split(",")[1]
+        raw_bytes = base64.b64decode(b64_str)
+        img = Image.open(io.BytesIO(raw_bytes))
+        return np.array(img)
+
     # ── 右侧小图 ─────────────────────────────────────────────────
     steps_arr = np.arange(N)
 
@@ -366,6 +388,54 @@ def main():
     ax_ee.set_ylabel("Y (m)", color=GRAY, fontsize=7)
     ax_ee.tick_params(labelsize=7)
     ax_ee.set_aspect("equal", "box")
+
+    # ── 相机图像 ─────────────────────────────────────────────────
+    ax_cam.set_facecolor(BG)
+    ax_cam.set_title("Camera RGB", color=WHITE, fontsize=9)
+    ax_cam.axis("off")
+    cam_img = ax_cam.imshow(np.zeros((240, 320, 3), dtype=np.uint8))
+
+    # ── 触觉图像网格 ─────────────────────────────────────────────
+    ax_tac.set_facecolor(BG)
+    ax_tac.set_title("Tactile Sensors", color=WHITE, fontsize=9)
+    ax_tac.axis("off")
+
+    # 触觉传感器名称和布局（5个手指 × 3个部位 = 15个传感器）
+    TACTILE_NAMES = [
+        "finger_0_bottom", "finger_0_middle", "finger_0_top",
+        "finger_1_bottom", "finger_1_middle", "finger_1_top",
+        "finger_2_bottom", "finger_2_middle", "finger_2_top",
+        "finger_3_bottom", "finger_3_middle", "finger_3_top",
+        "thumb_bottom",    "thumb_middle",    "thumb_top",
+    ]
+    TACTILE_COLORS = {
+        "finger_0": GREEN, "finger_1": CYAN, "finger_2": ORANGE,
+        "finger_3": PURPLE, "thumb": YELLOW,
+    }
+
+    # 创建子网格 5行 × 3列
+    tac_axes = {}
+    tac_imgs = {}
+    tac_gs_inner = gs[1:, 3].subgridspec(5, 3, wspace=0.05, hspace=0.15)
+    for i, name in enumerate(TACTILE_NAMES):
+        row = i // 3
+        col = i % 3
+        ax = fig.add_subplot(tac_gs_inner[row, col])
+        ax.set_facecolor(BG)
+        ax.axis("off")
+        # 根据手指类型设置边框颜色
+        finger_type = name.rsplit("_", 1)[0]  # e.g. "finger_0" or "thumb"
+        border_color = TACTILE_COLORS.get(finger_type, GRAY)
+        for spine in ax.spines.values():
+            spine.set_color(border_color)
+            spine.set_linewidth(0.8)
+        # 小标题
+        short_name = name.replace("finger_", "F").replace("thumb", "T").replace("_bottom", "B").replace("_middle", "M").replace("_top", "T")
+        ax.set_title(short_name, color=border_color, fontsize=5, pad=1)
+        # 初始空白图像
+        img = ax.imshow(np.zeros((10, 7), dtype=np.uint8), cmap="gray", vmin=0, vmax=255)
+        tac_axes[name] = ax
+        tac_imgs[name] = img
 
     # ── 进度条 ───────────────────────────────────────────────────
     prog_ax = fig.add_axes([0.04, 0.015, 0.94, 0.012])
@@ -476,9 +546,39 @@ def main():
             f"Reward : {extra.get('reward', 0.0):+.3f}"
         )
 
+        # —— 相机图像更新 ——
+        rec = records[fi]
+        info = rec["info"]
+        if "images" in info and "camera_rgb" in info["images"]:
+            try:
+                cam_arr = decode_camera_jpeg(info["images"]["camera_rgb"])
+                cam_img.set_data(cam_arr)
+            except Exception:
+                pass
+
+        # —— 触觉图像更新 ——
+        if "tactile" in info:
+            tactile_data = info["tactile"]
+            for name, img_data in tactile_data.items():
+                if name in tac_imgs:
+                    try:
+                        tac_arr = decode_image(img_data)
+                        # 根据实际 shape 调整显示
+                        if tac_arr.ndim == 2:
+                            tac_imgs[name].set_data(tac_arr)
+                            tac_imgs[name].set_clim(vmin=0, vmax=255)
+                        elif tac_arr.ndim == 3 and tac_arr.shape[-1] == 1:
+                            tac_imgs[name].set_data(tac_arr.squeeze())
+                            tac_imgs[name].set_clim(vmin=0, vmax=255)
+                        else:
+                            tac_imgs[name].set_data(tac_arr)
+                    except Exception:
+                        pass
+
         return (arm_line, ee_dot, block_cube, trace_ee, trace_blk,
                 rwd_vline, rwd_dot, ht_vline, ht_dot,
-                ee_xy_dot, status_txt, *dynamic_lines)
+                ee_xy_dot, status_txt, cam_img,
+                *tac_imgs.values(), *dynamic_lines)
 
     ani = animation.FuncAnimation(
         fig, update, frames=N,
