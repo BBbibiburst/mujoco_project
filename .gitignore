@@ -29,3 +29,6 @@ source/env_demos/log*/
 # 训练检查点
 rl_models/
 runs/
+
+# data
+data/block_lifting
