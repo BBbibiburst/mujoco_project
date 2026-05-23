@@ -47,7 +47,7 @@ class MultiStageDiffusionPolicyInference:
             self.stats = pickle.load(f)
 
         # 加载模型配置和权重
-        checkpoint = torch.load(model_path, map_location=device)
+        checkpoint = torch.load(model_path, map_location=device, weights_only=False)
         config = checkpoint.get('config', {})
 
         self.model = MultiStageDiffusionPolicy(
@@ -230,30 +230,33 @@ def demo_inference():
         img.save(buffer, format='JPEG')
         img_b64 = base64.b64encode(buffer.getvalue()).decode()
 
-        # 创建模拟触觉数据 (全零表示无接触)
-        tactile_data = "data:application/octet-stream;base64," + base64.b64encode(
-            np.zeros(700, dtype=np.uint8).tobytes()
-        ).decode()
+        # 创建模拟触觉数据 (全零表示无接触) - 每个传感器使用自身shape生成正确大小的buffer
+        def make_tactile(shape):
+            n = shape[0] * shape[1]
+            data = "data:application/octet-stream;base64," + base64.b64encode(
+                np.zeros(n, dtype=np.uint8).tobytes()
+            ).decode()
+            return {'data': data, 'shape': shape, 'dtype': 'uint8'}
 
         return {
             'arm_qpos': np.random.randn(7).astype(np.float32) * 0.1,
             'hand_qpos': np.random.rand(6).astype(np.float32) * 0.01,
             'tactile': {
-                'finger_0_bottom': {'data': tactile_data, 'shape': [10, 7], 'dtype': 'uint8'},
-                'finger_0_middle': {'data': tactile_data, 'shape': [8, 5], 'dtype': 'uint8'},
-                'finger_0_top': {'data': tactile_data, 'shape': [6, 5], 'dtype': 'uint8'},
-                'finger_1_bottom': {'data': tactile_data, 'shape': [10, 7], 'dtype': 'uint8'},
-                'finger_1_middle': {'data': tactile_data, 'shape': [8, 5], 'dtype': 'uint8'},
-                'finger_1_top': {'data': tactile_data, 'shape': [6, 5], 'dtype': 'uint8'},
-                'finger_2_bottom': {'data': tactile_data, 'shape': [10, 7], 'dtype': 'uint8'},
-                'finger_2_middle': {'data': tactile_data, 'shape': [8, 5], 'dtype': 'uint8'},
-                'finger_2_top': {'data': tactile_data, 'shape': [6, 5], 'dtype': 'uint8'},
-                'finger_3_bottom': {'data': tactile_data, 'shape': [10, 7], 'dtype': 'uint8'},
-                'finger_3_middle': {'data': tactile_data, 'shape': [8, 5], 'dtype': 'uint8'},
-                'finger_3_top': {'data': tactile_data, 'shape': [6, 5], 'dtype': 'uint8'},
-                'thumb_bottom': {'data': tactile_data, 'shape': [10, 7], 'dtype': 'uint8'},
-                'thumb_middle': {'data': tactile_data, 'shape': [8, 5], 'dtype': 'uint8'},
-                'thumb_top': {'data': tactile_data, 'shape': [6, 5], 'dtype': 'uint8'},
+                'finger_0_bottom': make_tactile([10, 7]),
+                'finger_0_middle': make_tactile([8, 5]),
+                'finger_0_top':    make_tactile([6, 5]),
+                'finger_1_bottom': make_tactile([10, 7]),
+                'finger_1_middle': make_tactile([8, 5]),
+                'finger_1_top':    make_tactile([6, 5]),
+                'finger_2_bottom': make_tactile([10, 7]),
+                'finger_2_middle': make_tactile([8, 5]),
+                'finger_2_top':    make_tactile([6, 5]),
+                'finger_3_bottom': make_tactile([10, 7]),
+                'finger_3_middle': make_tactile([8, 5]),
+                'finger_3_top':    make_tactile([6, 5]),
+                'thumb_bottom':    make_tactile([10, 7]),
+                'thumb_middle':    make_tactile([8, 5]),
+                'thumb_top':       make_tactile([6, 5]),
             },
             'images': {'camera_rgb': f'data:image/jpeg;base64,{img_b64}'},
         }

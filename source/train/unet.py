@@ -150,8 +150,8 @@ class MultiStageDiffusionUNet1D(nn.Module):
         self.switch_strategy = switch_strategy
         self.switch_timestep = switch_timestep
 
-        all_dims = [input_dim] + list(down_dims)
         start_dim = down_dims[0]
+        all_dims = [start_dim] + list(down_dims)
 
         # 时间步编码
         dsed = diffusion_step_embed_dim
