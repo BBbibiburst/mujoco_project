@@ -8,6 +8,7 @@ LazyMultiModalGraspDataset - 惰性加载多模态抓取数据集
   - 分片缓存: 只缓存最近N个episode在内存
   - 索引预构建: 启动时只构建索引，不加载数据
   - 支持多worker: DataLoader多进程读取
+  - 进度条显示: 使用tqdm显示构建和统计量计算进度
 
 独立运行: python -m source.train.dataset --demo
 """
@@ -30,6 +31,14 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from PIL import Image
 
+# 尝试导入tqdm，如果没有则提供降级方案
+try:
+    from tqdm import tqdm
+    TQDM_AVAILABLE = True
+except ImportError:
+    TQDM_AVAILABLE = False
+    print("[警告] tqdm未安装，进度条功能不可用。安装: pip install tqdm")
+
 
 # ==================== 配置 ====================
 
@@ -39,7 +48,7 @@ DEFAULT_DATA_PATH = PROJECT_ROOT / "data" / "block_lifting"
 DEFAULT_CACHE_PATH = PROJECT_ROOT / "cache" / "block_lifting"
 
 # 缓存控制
-MAX_EPISODE_CACHE = 4      # 内存中最多缓存的episode数
+MAX_EPISODE_CACHE = 1      # 内存中最多缓存的episode数
 ENABLE_DISK_CACHE = True   # 是否启用磁盘缓存预处理后的样本
 
 
@@ -98,6 +107,7 @@ class LazyMultiModalGraspDataset(Dataset):
         max_episode_cache: int = MAX_EPISODE_CACHE,
         enable_disk_cache: bool = ENABLE_DISK_CACHE,
         cache_dir: Optional[str] = None,
+        show_progress: bool = True,  # 新增: 是否显示进度条
     ):
         self.data_dir = Path(data_dir)
         self.pred_horizon = pred_horizon
@@ -107,6 +117,7 @@ class LazyMultiModalGraspDataset(Dataset):
         self.image_size = image_size
         self.max_episode_cache = max_episode_cache
         self.enable_disk_cache = enable_disk_cache
+        self.show_progress = show_progress and TQDM_AVAILABLE
 
         # 磁盘缓存目录
         if enable_disk_cache and cache_dir is None:
@@ -124,7 +135,11 @@ class LazyMultiModalGraspDataset(Dataset):
         ])
 
         # 扫描文件并构建索引
+        print("[LazyDataset] 扫描数据文件...")
         self.episode_files = self._scan_files()
+        print(f"[LazyDataset] 找到 {len(self.episode_files)} 个episode文件")
+
+        print("[LazyDataset] 构建样本索引...")
         self.indices = self._build_indices()
 
         # LRU缓存: OrderedDict实现
@@ -158,7 +173,12 @@ class LazyMultiModalGraspDataset(Dataset):
         """
         indices = []
 
-        for ep_idx, fp in enumerate(self.episode_files):
+        # 使用tqdm显示进度
+        file_iter = self.episode_files
+        if self.show_progress:
+            file_iter = tqdm(self.episode_files, desc="[索引构建] 扫描文件", unit="file")
+
+        for ep_idx, fp in enumerate(file_iter):
             # 快速计数行数
             line_count = 0
             with open(fp, 'r', encoding='utf-8') as f:
@@ -240,8 +260,13 @@ class LazyMultiModalGraspDataset(Dataset):
         tactile_sq_sum = np.zeros(713, dtype=np.float64)
         count = 0
 
+        # 使用tqdm显示进度
+        ep_range = range(len(self.episode_files))
+        if self.show_progress:
+            ep_range = tqdm(ep_range, desc="[统计量] 处理episodes", unit="ep")
+
         # 流式处理每个episode
-        for ep_idx in range(len(self.episode_files)):
+        for ep_idx in ep_range:
             episode = self._load_episode(ep_idx)
 
             for step in episode:
@@ -398,22 +423,28 @@ def demo_dataset(data_dir: str):
         normalize=True,
         max_episode_cache=2,      # 只缓存2个episode
         enable_disk_cache=True,
+        show_progress=True,       # 启用进度条
     )
     init_time = time.time() - start_time
     mem_after_init = process.memory_info().rss / 1024 / 1024
 
-    print(f"初始化时间: {init_time:.2f}s")
+    print(f"\n初始化时间: {init_time:.2f}s")
     print(f"初始化后内存: {mem_after_init:.1f} MB (增加 {mem_after_init-mem_before:.1f} MB)")
     print(f"数据集大小: {len(dataset)} 样本")
     print(f"Episode文件数: {len(dataset.episode_files)}")
 
     # 随机访问测试
-    print(f"随机访问测试 (访问10个样本):")
+    print(f"\n随机访问测试 (访问10个样本):")
     np.random.seed(42)
     sample_indices = np.random.choice(len(dataset), min(10, len(dataset)), replace=False)
 
     access_times = []
-    for i, idx in enumerate(sample_indices):
+    # 使用tqdm显示访问进度
+    iter_range = sample_indices
+    if TQDM_AVAILABLE:
+        iter_range = tqdm(sample_indices, desc="[访问测试] 读取样本", unit="sample")
+
+    for i, idx in enumerate(iter_range):
         t0 = time.time()
         sample = dataset[idx]
         t1 = time.time()
@@ -425,12 +456,12 @@ def demo_dataset(data_dir: str):
                   f"time={t1-t0:.3f}s")
 
     mem_after_access = process.memory_info().rss / 1024 / 1024
-    print(f"访问后内存: {mem_after_access:.1f} MB (增加 {mem_after_access-mem_after_init:.1f} MB)")
+    print(f"\n访问后内存: {mem_after_access:.1f} MB (增加 {mem_after_access-mem_after_init:.1f} MB)")
     print(f"平均访问时间: {np.mean(access_times)*1000:.1f}ms")
     print(f"缓存命中率: 观察访问时间变化判断")
 
     # DataLoader测试 (多worker)
-    print(f"DataLoader测试 (num_workers=2, batch_size=4):")
+    print(f"\nDataLoader测试 (num_workers=2, batch_size=4):")
     dataloader = DataLoader(
         dataset, 
         batch_size=4, 
@@ -448,11 +479,11 @@ def demo_dataset(data_dir: str):
     print(f"  首batch加载时间: {t1-t0:.2f}s")
 
     # 统计信息
-    print(f"统计信息:")
+    print(f"\n统计信息:")
     print(f"  Action mean: {dataset.stats['action_mean']}")
     print(f"  Action std:  {dataset.stats['action_std']}")
 
-    print("" + "=" * 60)
+    print("\n" + "=" * 60)
     print("惰性加载演示完成")
     print("=" * 60)
 
