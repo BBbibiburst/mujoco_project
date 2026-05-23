@@ -27,9 +27,9 @@ from PIL import Image
 from torchvision import transforms
 
 # 导入本地模块
-from dataset import LazyMultiModalGraspDataset, decode_tactile
-from encoders import VisionEncoder, TactileEncoder, ProprioceptionEncoder
-from unet import MultiStageDiffusionUNet1D
+from source.train.dataset import LazyMultiModalGraspDataset, decode_tactile
+from source.train.encoders import VisionEncoder, TactileEncoder, ProprioceptionEncoder
+from source.train.unet import MultiStageDiffusionUNet1D
 
 
 class MultiStageDiffusionPolicy(nn.Module):

@@ -24,11 +24,11 @@ DEFAULT_CACHE_PATH = PROJECT_ROOT / "cache" / "block_lifting"
 sys.path.insert(0, str(PROJECT_ROOT))
 
 # 导入本地模块
-from dataset import LazyMultiModalGraspDataset, demo_dataset
-from encoders import demo_encoders
-from unet import demo_unet
-from model import MultiStageDiffusionPolicy, train, demo_model
-from inference import MultiStageDiffusionPolicyInference, demo_inference
+from source.train.dataset import LazyMultiModalGraspDataset, demo_dataset
+from source.train.encoders import demo_encoders
+from source.train.unet import demo_unet
+from source.train.model import MultiStageDiffusionPolicy, train, demo_model
+from source.train.inference import MultiStageDiffusionPolicyInference, demo_inference
 
 
 def main():

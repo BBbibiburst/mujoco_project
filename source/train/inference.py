@@ -23,8 +23,8 @@ from PIL import Image
 from torchvision import transforms
 
 # 导入本地模块
-from model import MultiStageDiffusionPolicy
-from dataset import decode_tactile
+from source.train.model import MultiStageDiffusionPolicy
+from source.train.dataset import decode_tactile
 
 
 class MultiStageDiffusionPolicyInference:
