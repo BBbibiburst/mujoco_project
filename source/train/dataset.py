@@ -250,6 +250,35 @@ class LazyMultiModalGraspDataset(Dataset):
         while len(self._episode_cache) > self.max_episode_cache:
             self._episode_cache.popitem(last=False)
 
+    def cleanup(self):
+        """删除本次运行生成的磁盘缓存文件（episode缓存 + stats缓存）"""
+        if not self.cache_dir or not self.cache_dir.exists():
+            return
+
+        removed = 0
+        for pkl_file in self.cache_dir.glob("ep_*.pkl"):
+            try:
+                pkl_file.unlink()
+                removed += 1
+            except OSError:
+                pass
+
+        if self._stats_path and self._stats_path.exists():
+            try:
+                self._stats_path.unlink()
+                removed += 1
+            except OSError:
+                pass
+
+        # 目录为空则一并删除
+        try:
+            if not any(self.cache_dir.iterdir()):
+                self.cache_dir.rmdir()
+        except OSError:
+            pass
+
+        print(f"[LazyDataset] 缓存清理完成，删除 {removed} 个文件 ({self.cache_dir})")
+
     def _compute_stats(self) -> Dict[str, np.ndarray]:
         """计算统计量 - 流式处理，不保存所有数据"""
         print("[LazyDataset] 计算统计量 (流式)...")
@@ -427,64 +456,68 @@ def demo_dataset(data_dir: str):
     init_time = time.time() - start_time
     mem_after_init = process.memory_info().rss / 1024 / 1024
 
-    print(f"\n初始化时间: {init_time:.2f}s")
-    print(f"初始化后内存: {mem_after_init:.1f} MB (增加 {mem_after_init-mem_before:.1f} MB)")
-    print(f"数据集大小: {len(dataset)} 样本")
-    print(f"Episode文件数: {len(dataset.episode_files)}")
+    try:
+        print(f"\n初始化时间: {init_time:.2f}s")
+        print(f"初始化后内存: {mem_after_init:.1f} MB (增加 {mem_after_init-mem_before:.1f} MB)")
+        print(f"数据集大小: {len(dataset)} 样本")
+        print(f"Episode文件数: {len(dataset.episode_files)}")
 
-    # 随机访问测试
-    print(f"\n随机访问测试 (访问10个样本):")
-    np.random.seed(42)
-    sample_indices = np.random.choice(len(dataset), min(10, len(dataset)), replace=False)
+        # 随机访问测试
+        print(f"\n随机访问测试 (访问10个样本):")
+        np.random.seed(42)
+        sample_indices = np.random.choice(len(dataset), min(10, len(dataset)), replace=False)
 
-    access_times = []
-    # 使用tqdm显示访问进度
-    iter_range = sample_indices
-    if TQDM_AVAILABLE:
-        iter_range = tqdm(sample_indices, desc="[访问测试] 读取样本", unit="sample")
+        access_times = []
+        # 使用tqdm显示访问进度
+        iter_range = sample_indices
+        if TQDM_AVAILABLE:
+            iter_range = tqdm(sample_indices, desc="[访问测试] 读取样本", unit="sample")
 
-    for i, idx in enumerate(iter_range):
+        for i, idx in enumerate(iter_range):
+            t0 = time.time()
+            sample = dataset[idx]
+            t1 = time.time()
+            access_times.append(t1 - t0)
+
+            if i < 3:  # 只打印前3个
+                print(f"  Sample {idx}: visual={sample['visual_obs'].shape}, "
+                      f"tactile={sample['tactile_obs'].shape}, action={sample['action'].shape}, "
+                      f"time={t1-t0:.3f}s")
+
+        mem_after_access = process.memory_info().rss / 1024 / 1024
+        print(f"\n访问后内存: {mem_after_access:.1f} MB (增加 {mem_after_access-mem_after_init:.1f} MB)")
+        print(f"平均访问时间: {np.mean(access_times)*1000:.1f}ms")
+        print(f"缓存命中率: 观察访问时间变化判断")
+
+        # DataLoader测试 (多worker)
+        print(f"\nDataLoader测试 (num_workers=2, batch_size=4):")
+        dataloader = DataLoader(
+            dataset,
+            batch_size=4,
+            shuffle=True,
+            num_workers=2,      # 多进程加载
+            pin_memory=True,
+        )
+
         t0 = time.time()
-        sample = dataset[idx]
+        batch = next(iter(dataloader))
         t1 = time.time()
-        access_times.append(t1 - t0)
 
-        if i < 3:  # 只打印前3个
-            print(f"  Sample {idx}: visual={sample['visual_obs'].shape}, "
-                  f"tactile={sample['tactile_obs'].shape}, action={sample['action'].shape}, "
-                  f"time={t1-t0:.3f}s")
+        for key, value in batch.items():
+            print(f"  {key}: shape={value.shape}, dtype={value.dtype}")
+        print(f"  首batch加载时间: {t1-t0:.2f}s")
 
-    mem_after_access = process.memory_info().rss / 1024 / 1024
-    print(f"\n访问后内存: {mem_after_access:.1f} MB (增加 {mem_after_access-mem_after_init:.1f} MB)")
-    print(f"平均访问时间: {np.mean(access_times)*1000:.1f}ms")
-    print(f"缓存命中率: 观察访问时间变化判断")
+        # 统计信息
+        print(f"\n统计信息:")
+        print(f"  Action mean: {dataset.stats['action_mean']}")
+        print(f"  Action std:  {dataset.stats['action_std']}")
 
-    # DataLoader测试 (多worker)
-    print(f"\nDataLoader测试 (num_workers=2, batch_size=4):")
-    dataloader = DataLoader(
-        dataset, 
-        batch_size=4, 
-        shuffle=True, 
-        num_workers=2,      # 多进程加载
-        pin_memory=True,
-    )
+        print("\n" + "=" * 60)
+        print("惰性加载演示完成")
+        print("=" * 60)
 
-    t0 = time.time()
-    batch = next(iter(dataloader))
-    t1 = time.time()
-
-    for key, value in batch.items():
-        print(f"  {key}: shape={value.shape}, dtype={value.dtype}")
-    print(f"  首batch加载时间: {t1-t0:.2f}s")
-
-    # 统计信息
-    print(f"\n统计信息:")
-    print(f"  Action mean: {dataset.stats['action_mean']}")
-    print(f"  Action std:  {dataset.stats['action_std']}")
-
-    print("\n" + "=" * 60)
-    print("惰性加载演示完成")
-    print("=" * 60)
+    finally:
+        dataset.cleanup()
 
 
 if __name__ == "__main__":

@@ -232,11 +232,26 @@ class MultiStageDiffusionPolicy(nn.Module):
         return actions
 
 
+def _grad_norm(model: nn.Module) -> float:
+    """计算当前梯度的 L2 范数"""
+    total = 0.0
+    for p in model.parameters():
+        if p.grad is not None:
+            total += p.grad.detach().norm(2).item() ** 2
+    return total ** 0.5
+
+
 def train(data_dir: str, output_dir: str, **kwargs):
     """训练函数"""
+    from tqdm import tqdm
+
     os.makedirs(output_dir, exist_ok=True)
 
-    # 使用惰性加载数据集
+    epochs     = kwargs.get('epochs', 100)
+    batch_size = kwargs.get('batch_size', 32)
+    lr         = kwargs.get('lr', 1e-4)
+
+    # ── 数据集 ──────────────────────────────────────────────────────────────
     dataset = LazyMultiModalGraspDataset(
         data_dir=data_dir,
         pred_horizon=kwargs.get('pred_horizon', 16),
@@ -249,7 +264,7 @@ def train(data_dir: str, output_dir: str, **kwargs):
 
     dataloader = DataLoader(
         dataset,
-        batch_size=kwargs.get('batch_size', 32),
+        batch_size=batch_size,
         shuffle=True,
         num_workers=kwargs.get('num_workers', 4),
         pin_memory=True,
@@ -258,6 +273,7 @@ def train(data_dir: str, output_dir: str, **kwargs):
 
     device = kwargs.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
 
+    # ── 模型 ────────────────────────────────────────────────────────────────
     model = MultiStageDiffusionPolicy(
         action_dim=13,
         pred_horizon=kwargs.get('pred_horizon', 16),
@@ -268,70 +284,143 @@ def train(data_dir: str, output_dir: str, **kwargs):
         switch_strategy=kwargs.get('switch_strategy', 'progressive'),
     ).to(device)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=kwargs.get('lr', 1e-4), weight_decay=1e-6)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=kwargs.get('epochs', 100))
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-    best_loss = float('inf')
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-6)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
 
-    for epoch in range(kwargs.get('epochs', 100)):
-        model.train()
-        epoch_losses = []
+    # ── 训练头部摘要 ────────────────────────────────────────────────────────
+    sep = "=" * 70
+    print(sep)
+    print("  Multi-Stage Diffusion Policy — Training")
+    print(sep)
+    print(f"  Device          : {device}")
+    print(f"  Dataset size    : {len(dataset):,} samples")
+    print(f"  Batch size      : {batch_size}  |  Steps/epoch: {len(dataloader)}")
+    print(f"  Epochs          : {epochs}")
+    print(f"  LR (initial)    : {lr:.2e}  (CosineAnnealing)")
+    print(f"  Trainable params: {total_params:,}")
+    print(f"  Strategy        : {kwargs.get('switch_strategy', 'progressive')}  "
+          f"switch_t={kwargs.get('switch_timestep', 50)}")
+    print(f"  Output dir      : {output_dir}")
+    print(sep)
 
-        for batch_idx, batch in enumerate(dataloader):
-            batch = {k: v.to(device) for k, v in batch.items()}
+    best_loss   = float('inf')
+    global_step = 0
 
-            loss = model.compute_loss(batch)
+    config_dict = {
+        'switch_strategy'    : kwargs.get('switch_strategy', 'progressive'),
+        'switch_timestep'    : kwargs.get('switch_timestep', 50),
+        'num_diffusion_steps': kwargs.get('num_diffusion_steps', 100),
+        'pred_horizon'       : kwargs.get('pred_horizon', 16),
+        'obs_horizon'        : kwargs.get('obs_horizon', 2),
+        'action_horizon'     : kwargs.get('action_horizon', 8),
+    }
 
-            optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
+    # ── Epoch 进度条 ─────────────────────────────────────────────────────────
+    epoch_bar = tqdm(range(epochs), desc="Training", unit="epoch")
 
-            epoch_losses.append(loss.item())
+    try:
+        for epoch in epoch_bar:
+            model.train()
+            epoch_losses = []
+            epoch_gnorms = []
 
-            if batch_idx % 50 == 0:
-                print(f"Epoch {epoch}, Batch {batch_idx}, Loss: {loss.item():.6f}")
+            # ── Batch 进度条 ─────────────────────────────────────────────────
+            batch_bar = tqdm(
+                dataloader,
+                desc=f"Epoch {epoch+1:03d}/{epochs}",
+                unit="batch",
+                leave=False,
+            )
 
-        avg_loss = np.mean(epoch_losses)
-        scheduler.step()
+            for batch in batch_bar:
+                batch = {k: v.to(device) for k, v in batch.items()}
 
-        print(f"Epoch {epoch} completed. Average Loss: {avg_loss:.6f}")
+                loss = model.compute_loss(batch)
 
-        if avg_loss < best_loss:
-            best_loss = avg_loss
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'loss': avg_loss,
-                'stats': dataset.stats,
-                'config': {
-                    'switch_strategy': kwargs.get('switch_strategy', 'progressive'),
-                    'switch_timestep': kwargs.get('switch_timestep', 50),
-                    'num_diffusion_steps': kwargs.get('num_diffusion_steps', 100),
-                    'pred_horizon': kwargs.get('pred_horizon', 16),
-                    'obs_horizon': kwargs.get('obs_horizon', 2),
-                    'action_horizon': kwargs.get('action_horizon', 8),
-                }
-            }, os.path.join(output_dir, 'best_model.pt'))
+                optimizer.zero_grad()
+                loss.backward()
+                gnorm = _grad_norm(model)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
 
-    torch.save({
-        'model_state_dict': model.state_dict(),
-        'stats': dataset.stats,
-        'config': {
-            'switch_strategy': kwargs.get('switch_strategy', 'progressive'),
-            'switch_timestep': kwargs.get('switch_timestep', 50),
-            'num_diffusion_steps': kwargs.get('num_diffusion_steps', 100),
-            'pred_horizon': kwargs.get('pred_horizon', 16),
-            'obs_horizon': kwargs.get('obs_horizon', 2),
-            'action_horizon': kwargs.get('action_horizon', 8),
-        }
-    }, os.path.join(output_dir, 'final_model.pt'))
+                loss_val = loss.item()
+                epoch_losses.append(loss_val)
+                epoch_gnorms.append(gnorm)
+                global_step += 1
 
-    with open(os.path.join(output_dir, 'stats.pkl'), 'wb') as f:
-        pickle.dump(dataset.stats, f)
+                # 实时更新 batch 进度条后缀
+                cur_lr = optimizer.param_groups[0]['lr']
+                batch_bar.set_postfix(
+                    loss=f"{loss_val:.4f}",
+                    gnorm=f"{gnorm:.3f}",
+                    lr=f"{cur_lr:.1e}",
+                    step=global_step,
+                )
 
-    print("Training completed!")
+            batch_bar.close()
+
+            # ── Epoch 汇总 ───────────────────────────────────────────────────
+            avg_loss  = float(np.mean(epoch_losses))
+            avg_gnorm = float(np.mean(epoch_gnorms))
+            min_loss  = float(np.min(epoch_losses))
+            max_loss  = float(np.max(epoch_losses))
+            cur_lr    = optimizer.param_groups[0]['lr']
+            is_best   = avg_loss < best_loss
+
+            scheduler.step()
+
+            # 更新外层 epoch 进度条后缀
+            epoch_bar.set_postfix(
+                avg_loss=f"{avg_loss:.4f}",
+                best=f"{best_loss:.4f}",
+                lr=f"{cur_lr:.1e}",
+            )
+
+            # epoch 汇总固定打印一行（不被进度条覆盖）
+            mark = "★" if is_best else " "
+            tqdm.write(
+                f"  {mark} Epoch {epoch+1:03d}/{epochs}"
+                f"  avg={avg_loss:.6f} [min={min_loss:.6f} max={max_loss:.6f}]"
+                f"  gnorm={avg_gnorm:.3f}"
+                f"  lr={cur_lr:.2e}"
+            )
+
+            # ── 保存最佳模型 ─────────────────────────────────────────────────
+            if is_best:
+                best_loss = avg_loss
+                ckpt_path = os.path.join(output_dir, 'best_model.pt')
+                torch.save({
+                    'epoch'               : epoch,
+                    'global_step'         : global_step,
+                    'model_state_dict'    : model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'loss'                : avg_loss,
+                    'stats'               : dataset.stats,
+                    'config'              : config_dict,
+                }, ckpt_path)
+                tqdm.write(f"    → best model saved [{ckpt_path}]")
+
+        # ── 训练结束 ─────────────────────────────────────────────────────────
+        final_path = os.path.join(output_dir, 'final_model.pt')
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'stats'           : dataset.stats,
+            'config'          : config_dict,
+        }, final_path)
+
+        with open(os.path.join(output_dir, 'stats.pkl'), 'wb') as f:
+            pickle.dump(dataset.stats, f)
+
+        print(sep)
+        print(f"  Training complete!  best_loss={best_loss:.6f}")
+        print(f"  Final model : {final_path}")
+        print(sep)
+
+    finally:
+        dataset.cleanup()
+
     return model, dataset.stats
 
 
