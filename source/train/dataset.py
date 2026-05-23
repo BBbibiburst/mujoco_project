@@ -102,7 +102,7 @@ class LazyMultiModalGraspDataset(Dataset):
         pred_horizon: int = 16,
         obs_horizon: int = 2,
         action_horizon: int = 8,
-        image_size: Tuple[int, int] = (96, 96),
+        image_size: Tuple[int, int] = (240, 320),
         normalize: bool = True,
         max_episode_cache: int = MAX_EPISODE_CACHE,
         enable_disk_cache: bool = ENABLE_DISK_CACHE,
@@ -419,7 +419,6 @@ def demo_dataset(data_dir: str):
         pred_horizon=16,
         obs_horizon=2,
         action_horizon=8,
-        image_size=(96, 96),
         normalize=True,
         max_episode_cache=2,      # 只缓存2个episode
         enable_disk_cache=True,
