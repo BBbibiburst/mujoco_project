@@ -32,9 +32,11 @@ class SinusoidalPosEmb(nn.Module):
 class Conv1dBlock(nn.Module):
     def __init__(self, in_ch, out_ch, kernel_size, n_groups=8):
         super().__init__()
+        # Find largest divisor of out_ch that is <= n_groups
+        safe_groups = max(g for g in range(1, n_groups + 1) if out_ch % g == 0)
         self.block = nn.Sequential(
             nn.Conv1d(in_ch, out_ch, kernel_size, padding=kernel_size//2),
-            nn.GroupNorm(n_groups, out_ch),
+            nn.GroupNorm(safe_groups, out_ch),
             nn.Mish(),
         )
     def forward(self, x):
