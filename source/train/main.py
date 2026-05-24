@@ -47,9 +47,6 @@ def main():
     parser.add_argument('--model_path', type=str,
                        default=str(DEFAULT_OUTPUT_PATH / "best_model.pt"),
                        help='模型路径')
-    parser.add_argument('--stats_path', type=str,
-                       default=str(DEFAULT_OUTPUT_PATH / "stats.pkl"),
-                       help='统计量路径')
 
     # 模型参数
     parser.add_argument('--switch_strategy', type=str, default='progressive',

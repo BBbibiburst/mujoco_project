@@ -4,8 +4,8 @@ preprocess.py - 离线预处理脚本（修复内存泄漏版）
 将原始 JSONL 数据集转换为 HDF5 格式，只需运行一次。
 
 用法:
-  python preprocess.py --data_dir data/block_lifting --output data/block_lifting.h5
-  python preprocess.py --data_dir data/block_lifting --output data/block_lifting.h5 --workers 2
+  python preprocess.py --data_dir data/block_lifting --output models/block_lifting/block_lifting.h5
+  python preprocess.py --data_dir data/block_lifting --output models/block_lifting/block_lifting.h5 --workers 2
 """
 
 import io

@@ -294,11 +294,6 @@ def train(data_dir: str, output_dir: str, **kwargs):
         print("[Train] torch.compile 编译模型中（首 batch 稍慢属正常）...")
         model = torch.compile(model)
 
-    # torch.compile：PyTorch 2.x 自动算子融合，约提速 10~30%
-    # 首个 batch 会有一次编译耗时（约 30~60s），之后正常
-    if hasattr(torch, 'compile'):
-        print("[Train] torch.compile 编译模型中（首 batch 稍慢属正常）...")
-        model = torch.compile(model)
 
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
