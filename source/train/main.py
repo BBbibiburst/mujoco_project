@@ -68,8 +68,12 @@ def main():
                        help='DataLoader worker数量')
     parser.add_argument('--max_episode_cache', type=int, default=4,
                        help='内存中最大缓存episode数')
-    parser.add_argument('--enable_disk_cache', type=bool, default=True,
-                       help='是否启用磁盘缓存')
+    parser.add_argument('--h5_path', type=str,
+                       default=str(PROJECT_ROOT / "data" / "block_lifting.h5"),
+                       help='HDF5 数据文件路径（由 preprocess.py 生成）')
+    parser.add_argument('--stats_path', type=str,
+                       default=str(DEFAULT_OUTPUT_PATH / "stats.pkl"),
+                       help='统计量路径（由 preprocess.py 生成）')
 
     args = parser.parse_args()
 
@@ -84,8 +88,10 @@ def main():
         print("开始训练 Multi-Stage Diffusion Policy")
         print("=" * 60)
         train(
-            data_dir=args.data_dir,
+            data_dir=args.h5_path,     # data_dir 复用为 h5 文件路径
             output_dir=args.output_dir,
+            h5_path=args.h5_path,
+            stats_path=args.stats_path,
             switch_strategy=args.switch_strategy,
             switch_timestep=args.switch_timestep,
             num_diffusion_steps=args.num_diffusion_steps,
@@ -95,7 +101,6 @@ def main():
             pred_horizon=args.pred_horizon,
             obs_horizon=args.obs_horizon,
             action_horizon=args.action_horizon,
-            max_episode_cache=args.max_episode_cache,
             num_workers=args.num_workers,
         )
 
