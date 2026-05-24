@@ -251,19 +251,20 @@ def train(data_dir: str, output_dir: str, **kwargs):
     batch_size = kwargs.get('batch_size', 32)
     lr         = kwargs.get('lr', 1e-4)
 
-    # ── 数据集 ──────────────────────────────────────────────────────────────
+    # ── 数据集（HDF5 版本）──────────────────────────────────────────────────
+    h5_path    = kwargs.get('h5_path',    data_dir)   # data_dir 传入 h5 文件路径
+    stats_path = kwargs.get('stats_path', os.path.join(output_dir, 'stats.pkl'))
+
     dataset = LazyMultiModalGraspDataset(
-        data_dir=data_dir,
+        h5_path=h5_path,
+        stats_path=stats_path,
         pred_horizon=kwargs.get('pred_horizon', 16),
         obs_horizon=kwargs.get('obs_horizon', 2),
         action_horizon=kwargs.get('action_horizon', 8),
         normalize=True,
-        max_episode_cache=kwargs.get('max_episode_cache', 4),
-        enable_disk_cache=kwargs.get('enable_disk_cache', True),
     )
 
     num_workers = kwargs.get('num_workers', 12)
-
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
@@ -271,8 +272,8 @@ def train(data_dir: str, output_dir: str, **kwargs):
         num_workers=num_workers,
         pin_memory=True,
         drop_last=True,
-        prefetch_factor=4 if num_workers > 0 else None,   # 每个 worker 预取 4 个 batch
-        persistent_workers=True if num_workers > 0 else False,  # 避免每 epoch 重建 worker
+        prefetch_factor=4 if num_workers > 0 else None,
+        persistent_workers=True if num_workers > 0 else False,
     )
 
     device = kwargs.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
@@ -287,6 +288,11 @@ def train(data_dir: str, output_dir: str, **kwargs):
         switch_timestep=kwargs.get('switch_timestep', 50),
         switch_strategy=kwargs.get('switch_strategy', 'progressive'),
     ).to(device)
+
+    # torch.compile：首个 batch 会有一次编译耗时（约 30~60s），之后约提速 10~30%
+    if hasattr(torch, 'compile'):
+        print("[Train] torch.compile 编译模型中（首 batch 稍慢属正常）...")
+        model = torch.compile(model)
 
     # torch.compile：PyTorch 2.x 自动算子融合，约提速 10~30%
     # 首个 batch 会有一次编译耗时（约 30~60s），之后正常
@@ -313,6 +319,8 @@ def train(data_dir: str, output_dir: str, **kwargs):
     print(f"  Strategy        : {kwargs.get('switch_strategy', 'progressive')}  "
           f"switch_t={kwargs.get('switch_timestep', 50)}")
     print(f"  num_workers     : {num_workers}  prefetch_factor=4  persistent_workers=True")
+    print(f"  num_workers     : {num_workers}  prefetch=4  persistent=True")
+    print(f"  HDF5            : {h5_path}")
     print(f"  Output dir      : {output_dir}")
     print(sep)
 
