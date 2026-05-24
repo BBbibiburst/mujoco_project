@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-preprocess.py - 离线预处理脚本
+preprocess.py - 离线预处理脚本（修复内存泄漏版）
 将原始 JSONL 数据集转换为 HDF5 格式，只需运行一次。
 
 用法:
-  python -m source.train.preprocess --data_dir data/block_lifting --output data/block_lifting.h5
-  python -m source.train.preprocess --data_dir data/block_lifting --output data/block_lifting.h5 --workers 8
+  python preprocess.py --data_dir data/block_lifting --output data/block_lifting.h5
+  python preprocess.py --data_dir data/block_lifting --output data/block_lifting.h5 --workers 2
 """
 
 import io
@@ -14,6 +14,8 @@ import json
 import base64
 import pickle
 import argparse
+import tempfile
+import shutil
 import numpy as np
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -98,7 +100,10 @@ def process_one_episode(jsonl_path: Path):
         if ',' in b64:
             b64 = b64.split(',')[1]
         img = Image.open(io.BytesIO(base64.b64decode(b64))).convert('RGB')
-        images.append(_transform(img).numpy())          # float32 [C,H,W]
+        img_array = _transform(img).numpy()  # float32 [C,H,W]
+        images.append(img_array)
+        img.close()  # 显式关闭 PIL Image，释放解码缓存
+        del img, img_array
 
         # 本体感知 + 触觉
         arm  = np.array(step['arm_qpos'],  dtype=np.float32)   # [7]
@@ -106,13 +111,48 @@ def process_one_episode(jsonl_path: Path):
         tact = decode_tactile(step['tactile'])                  # [700]
         tactiles.append(np.concatenate([arm, hand, tact]))     # [713]
         actions.append(np.concatenate([arm, hand]))            # [13]
+        del arm, hand, tact
 
-    return (
+    result = (
         np.stack(images),    # [T, C, H, W]
         np.stack(tactiles),  # [T, 713]
         np.stack(actions),   # [T, 13]
         jsonl_path.stem,     # episode 名称
     )
+    
+    # 清理中间列表，减少子进程内存占用
+    del images, tactiles, actions, steps
+    return result
+
+
+def process_one_episode_to_temp(jsonl_path: Path, temp_dir: str):
+    """
+    处理单个 episode，直接写入临时 HDF5 文件。
+    子进程内完成所有 heavy lifting，主进程只接收轻量路径。
+    
+    Returns:
+        temp_file_path: str  or  None（处理失败）
+    """
+    result = process_one_episode(jsonl_path)
+    if result is None:
+        return None
+    
+    images, tactiles, actions, ep_name = result
+    temp_file = Path(temp_dir) / f"{ep_name}.h5"
+    
+    try:
+        with h5py.File(temp_file, 'w') as f:
+            f.create_dataset('images', data=images, compression='lzf', chunks=(1, *images.shape[1:]))
+            f.create_dataset('tactiles', data=tactiles, compression='lzf', chunks=(min(16, len(tactiles)), 713))
+            f.create_dataset('actions', data=actions, compression='lzf', chunks=(min(16, len(actions)), 13))
+    except Exception as e:
+        if temp_file.exists():
+            temp_file.unlink()
+        raise e
+    
+    # 子进程内立即释放大数组
+    del images, tactiles, actions, result
+    return str(temp_file)
 
 
 def compute_stats_from_hdf5(h5_path: str) -> dict:
@@ -147,7 +187,7 @@ def compute_stats_from_hdf5(h5_path: str) -> dict:
     return stats
 
 
-def preprocess(data_dir: str, output_h5: str, num_workers: int = 8,
+def preprocess(data_dir: str, output_h5: str, num_workers: int = 2,
                stats_output: str = None):
     data_dir  = Path(data_dir)
     output_h5 = Path(output_h5)
@@ -163,20 +203,21 @@ def preprocess(data_dir: str, output_h5: str, num_workers: int = 8,
     print(f"[Preprocess] 输出: {output_h5}")
     print(f"[Preprocess] 并行 workers: {num_workers}")
 
-    # ── 多进程处理，结果写入 HDF5 ──────────────────────────────────────────
-    with h5py.File(output_h5, 'w') as h5f:
-        # 保存元信息
-        h5f.attrs['image_size']  = IMAGE_SIZE
-        h5f.attrs['image_mean']  = IMAGE_MEAN
-        h5f.attrs['image_std']   = IMAGE_STD
-        h5f.attrs['num_episodes'] = len(jsonl_files)
+    # ── 创建临时目录存放子进程的中间文件 ───────────────────────────────────
+    temp_dir = tempfile.mkdtemp(prefix="preprocess_")
+    print(f"[Preprocess] 临时目录: {temp_dir}")
 
+    try:
+        # ── 阶段 1：多进程并行处理，每个 episode 写入独立临时 HDF5 ─────────
+        temp_files = []
         success = 0
         failed  = 0
 
         with ProcessPoolExecutor(max_workers=num_workers) as executor:
-            futures = {executor.submit(process_one_episode, fp): fp
-                       for fp in jsonl_files}
+            futures = {
+                executor.submit(process_one_episode_to_temp, fp, temp_dir): fp
+                for fp in jsonl_files
+            }
 
             pbar = tqdm(as_completed(futures), total=len(futures),
                         desc="[Preprocess] 转换进度", unit="ep")
@@ -184,26 +225,55 @@ def preprocess(data_dir: str, output_h5: str, num_workers: int = 8,
             for future in pbar:
                 fp = futures[future]
                 try:
-                    result = future.result()
-                    if result is None:
+                    temp_path = future.result()
+                    if temp_path is None:
                         failed += 1
                         continue
 
-                    images, tactiles, actions, ep_name = result
-                    grp = h5f.create_group(ep_name)
-                    # 图像用 lzf 压缩（速度快，压缩率适中）
-                    grp.create_dataset('images',   data=images,
-                                       compression='lzf', chunks=(1, *images.shape[1:]))
-                    grp.create_dataset('tactiles', data=tactiles,
-                                       compression='lzf', chunks=(min(16, len(tactiles)), 713))
-                    grp.create_dataset('actions',  data=actions,
-                                       compression='lzf', chunks=(min(16, len(actions)), 13))
+                    temp_files.append(temp_path)
                     success += 1
                     pbar.set_postfix(ok=success, fail=failed)
 
                 except Exception as e:
                     failed += 1
                     tqdm.write(f"[警告] {fp.name} 处理失败: {e}")
+
+        print(f"\n[Preprocess] 阶段 1 完成: {success} 成功, {failed} 失败")
+
+        if not temp_files:
+            raise RuntimeError("没有成功处理任何 episode")
+
+        # ── 阶段 2：主进程合并所有临时文件到最终 HDF5 ──────────────────────
+        print(f"[Preprocess] 阶段 2: 合并 {len(temp_files)} 个临时文件...")
+        
+        with h5py.File(output_h5, 'w') as h5f:
+            # 保存元信息
+            h5f.attrs['image_size']  = IMAGE_SIZE
+            h5f.attrs['image_mean']  = IMAGE_MEAN
+            h5f.attrs['image_std']   = IMAGE_STD
+            h5f.attrs['num_episodes'] = len(temp_files)
+
+            for temp_path in tqdm(temp_files, desc="[Preprocess] 合并", unit="ep"):
+                ep_name = Path(temp_path).stem
+                
+                with h5py.File(temp_path, 'r') as tmp:
+                    grp = h5f.create_group(ep_name)
+                    # 逐数据集拷贝，内存友好
+                    h5f.copy(tmp['images'], grp, name='images')
+                    h5f.copy(tmp['tactiles'], grp, name='tactiles')
+                    h5f.copy(tmp['actions'], grp, name='actions')
+                
+                # 合并后立即删除临时文件，释放磁盘和内存
+                Path(temp_path).unlink()
+                del grp
+
+        print(f"[Preprocess] 合并完成，已清理临时文件")
+
+    finally:
+        # 确保临时目录被清理（即使出错）
+        if Path(temp_dir).exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            print(f"[Preprocess] 临时目录已清理")
 
     print(f"\n[Preprocess] 完成: {success} 成功, {failed} 失败")
     print(f"[Preprocess] HDF5 文件: {output_h5}  ({output_h5.stat().st_size/1e9:.2f} GB)")
@@ -222,7 +292,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='离线预处理：JSONL → HDF5')
     parser.add_argument('--data_dir',  type=str, required=True,  help='原始 JSONL 数据目录')
     parser.add_argument('--output',    type=str, required=True,  help='输出 HDF5 文件路径')
-    parser.add_argument('--workers',   type=int, default=8,      help='并行进程数（默认 8）')
+    parser.add_argument('--workers',   type=int, default=2,      help='并行进程数（默认 2，内存敏感建议 1-2）')
     parser.add_argument('--stats_out', type=str, default=None,   help='统计量输出路径（默认与 HDF5 同目录）')
     args = parser.parse_args()
 
