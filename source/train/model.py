@@ -6,6 +6,10 @@ MultiStageDiffusionPolicy - 多阶段条件扩散策略主模型
 独立运行: 
   训练: python -m source.train.model --mode train --data_dir ./grasp_data
   演示: python -m source.train.model --demo
+
+新增功能:
+  - 断点重训 (Resume): 自动从上次保存的检查点恢复训练
+  - 间隔保存 (Periodic Checkpoint): 每 N 个 epoch 保存检查点，保留最近 K 个
 """
 
 import os
@@ -13,6 +17,8 @@ import sys
 import math
 import pickle
 import argparse
+import glob
+import re
 import numpy as np
 from collections import deque
 from typing import Dict, Tuple, Optional
@@ -241,8 +247,149 @@ def _grad_norm(model: nn.Module) -> float:
     return total ** 0.5
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 断点重训与间隔保存工具函数
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _find_latest_checkpoint(output_dir: str) -> Optional[str]:
+    """
+    在 output_dir 中查找最新的检查点文件。
+    优先返回 best_model.pt，其次是 periodic 检查点中 epoch 号最大的。
+    """
+    output_dir = Path(output_dir)
+
+    # 1. 优先尝试 best_model.pt（包含完整训练状态）
+    best_ckpt = output_dir / 'best_model.pt'
+    if best_ckpt.exists():
+        return str(best_ckpt)
+
+    # 2. 查找 periodic 检查点 (checkpoint_epoch_XXX.pt)
+    periodic_files = list(output_dir.glob('checkpoint_epoch_*.pt'))
+    if not periodic_files:
+        return None
+
+    # 按 epoch 号排序，取最大的
+    def _extract_epoch(path: Path) -> int:
+        match = re.search(r'checkpoint_epoch_(\d+)\.pt', path.name)
+        return int(match.group(1)) if match else -1
+
+    periodic_files.sort(key=_extract_epoch, reverse=True)
+    return str(periodic_files[0])
+
+
+def _cleanup_old_checkpoints(output_dir: str, keep_last: int = 3):
+    """
+    清理旧的 periodic 检查点，只保留最近 keep_last 个。
+    best_model.pt 和 final_model.pt 不受影响。
+    """
+    output_dir = Path(output_dir)
+    periodic_files = list(output_dir.glob('checkpoint_epoch_*.pt'))
+
+    if len(periodic_files) <= keep_last:
+        return
+
+    def _extract_epoch(path: Path) -> int:
+        match = re.search(r'checkpoint_epoch_(\d+)\.pt', path.name)
+        return int(match.group(1)) if match else -1
+
+    periodic_files.sort(key=_extract_epoch, reverse=True)
+
+    for old_file in periodic_files[keep_last:]:
+        try:
+            old_file.unlink()
+            print(f"[Checkpoint] 清理旧检查点: {old_file.name}")
+        except Exception as e:
+            print(f"[Checkpoint] 清理失败 {old_file.name}: {e}")
+
+
+def _save_periodic_checkpoint(
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler._LRScheduler,
+    epoch: int,
+    global_step: int,
+    loss: float,
+    output_dir: str,
+    config_dict: dict,
+    stats: dict,
+):
+    """保存周期性检查点（包含完整训练状态）"""
+    ckpt_path = Path(output_dir) / f'checkpoint_epoch_{epoch:03d}.pt'
+    torch.save({
+        'epoch'               : epoch,
+        'global_step'         : global_step,
+        'model_state_dict'    : model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
+        'loss'                : loss,
+        'stats'               : stats,
+        'config'              : config_dict,
+    }, ckpt_path)
+    return str(ckpt_path)
+
+
+def _try_resume_training(
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scheduler: torch.optim.lr_scheduler._LRScheduler,
+    output_dir: str,
+    device: str,
+) -> Tuple[int, int, float]:
+    """
+    尝试从检查点恢复训练状态。
+
+    Returns:
+        (start_epoch, global_step, best_loss)
+        如果没有检查点可恢复，返回 (0, 0, inf)
+    """
+    ckpt_path = _find_latest_checkpoint(output_dir)
+    if ckpt_path is None:
+        print("[Resume] 未找到检查点，从头开始训练")
+        return 0, 0, float('inf')
+
+    print(f"[Resume] 发现检查点: {ckpt_path}")
+
+    try:
+        checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
+
+        # 恢复模型权重
+        model.load_state_dict(checkpoint['model_state_dict'])
+
+        # 恢复优化器状态
+        if 'optimizer_state_dict' in checkpoint:
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            print(f"[Resume] 优化器状态已恢复")
+
+        # 恢复学习率调度器
+        if 'scheduler_state_dict' in checkpoint:
+            scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+            print(f"[Resume] 学习率调度器已恢复")
+
+        # 恢复训练进度
+        start_epoch   = checkpoint.get('epoch', 0) + 1  # 从下一个 epoch 开始
+        global_step   = checkpoint.get('global_step', 0)
+        best_loss     = checkpoint.get('loss', float('inf'))
+
+        print(f"[Resume] 训练进度恢复: epoch={start_epoch}, global_step={global_step}, best_loss={best_loss:.6f}")
+
+        # 如果恢复的是 best_model，打印提示
+        if 'best_model' in ckpt_path:
+            print(f"[Resume] 注意: 从 best_model 恢复，后续训练可能覆盖 best loss={best_loss:.6f}")
+
+        return start_epoch, global_step, best_loss
+
+    except Exception as e:
+        print(f"[Resume] 检查点加载失败: {e}")
+        print(f"[Resume] 将从头开始训练")
+        return 0, 0, float('inf')
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 训练函数（增强版）
+# ═══════════════════════════════════════════════════════════════════════════════
+
 def train(data_dir: str, output_dir: str, **kwargs):
-    """训练函数"""
+    """训练函数（支持断点重训和间隔保存）"""
     from tqdm import tqdm
 
     os.makedirs(output_dir, exist_ok=True)
@@ -250,6 +397,10 @@ def train(data_dir: str, output_dir: str, **kwargs):
     epochs     = kwargs.get('epochs', 100)
     batch_size = kwargs.get('batch_size', 32)
     lr         = kwargs.get('lr', 1e-4)
+
+    # ── 间隔保存参数 ──────────────────────────────────────────────────────
+    save_interval = kwargs.get('save_interval', 10)   # 每 N 个 epoch 保存一次
+    keep_last_ckpt = kwargs.get('keep_last_ckpt', 3)  # 保留最近 K 个 periodic 检查点
 
     # ── 数据集（HDF5 版本）──────────────────────────────────────────────────
     h5_path    = kwargs.get('h5_path',    data_dir)   # data_dir 传入 h5 文件路径
@@ -294,34 +445,12 @@ def train(data_dir: str, output_dir: str, **kwargs):
         print("[Train] torch.compile 编译模型中（首 batch 稍慢属正常）...")
         model = torch.compile(model)
 
-
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-6)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
 
-    # ── 训练头部摘要 ────────────────────────────────────────────────────────
-    sep = "=" * 70
-    print(sep)
-    print("  Multi-Stage Diffusion Policy — Training")
-    print(sep)
-    print(f"  Device          : {device}")
-    print(f"  Dataset size    : {len(dataset):,} samples")
-    print(f"  Batch size      : {batch_size}  |  Steps/epoch: {len(dataloader)}")
-    print(f"  Epochs          : {epochs}")
-    print(f"  LR (initial)    : {lr:.2e}  (CosineAnnealing)")
-    print(f"  Trainable params: {total_params:,}")
-    print(f"  Strategy        : {kwargs.get('switch_strategy', 'progressive')}  "
-          f"switch_t={kwargs.get('switch_timestep', 50)}")
-    print(f"  num_workers     : {num_workers}  prefetch_factor=4  persistent_workers=True")
-    print(f"  num_workers     : {num_workers}  prefetch=4  persistent=True")
-    print(f"  HDF5            : {h5_path}")
-    print(f"  Output dir      : {output_dir}")
-    print(sep)
-
-    best_loss   = float('inf')
-    global_step = 0
-
+    # ── 配置字典 ──────────────────────────────────────────────────────────
     config_dict = {
         'switch_strategy'    : kwargs.get('switch_strategy', 'progressive'),
         'switch_timestep'    : kwargs.get('switch_timestep', 50),
@@ -331,8 +460,34 @@ def train(data_dir: str, output_dir: str, **kwargs):
         'action_horizon'     : kwargs.get('action_horizon', 8),
     }
 
+    # ── 断点重训：尝试恢复训练状态 ─────────────────────────────────────────
+    start_epoch, global_step, best_loss = _try_resume_training(
+        model, optimizer, scheduler, output_dir, device
+    )
+
+    # ── 训练头部摘要 ────────────────────────────────────────────────────────
+    sep = "=" * 70
+    print(sep)
+    print("  Multi-Stage Diffusion Policy — Training")
+    print(sep)
+    print(f"  Device          : {device}")
+    print(f"  Dataset size    : {len(dataset):,} samples")
+    print(f"  Batch size      : {batch_size}  |  Steps/epoch: {len(dataloader)}")
+    print(f"  Epochs          : {epochs}  (从 epoch {start_epoch} 开始)")
+    print(f"  LR (initial)    : {lr:.2e}  (CosineAnnealing)")
+    print(f"  Trainable params: {total_params:,}")
+    print(f"  Strategy        : {kwargs.get('switch_strategy', 'progressive')}  "
+          f"switch_t={kwargs.get('switch_timestep', 50)}")
+    print(f"  num_workers     : {num_workers}  prefetch=4  persistent=True")
+    print(f"  HDF5            : {h5_path}")
+    print(f"  Output dir      : {output_dir}")
+    print(f"  Save interval   : 每 {save_interval} 个 epoch")
+    print(f"  Keep last ckpt  : {keep_last_ckpt} 个 periodic 检查点")
+    print(sep)
+
     # ── Epoch 进度条 ─────────────────────────────────────────────────────────
-    epoch_bar = tqdm(range(epochs), desc="Training", unit="epoch")
+    epoch_bar = tqdm(range(start_epoch, epochs), desc="Training", unit="epoch",
+                     initial=start_epoch, total=epochs)
 
     try:
         for epoch in epoch_bar:
@@ -410,11 +565,31 @@ def train(data_dir: str, output_dir: str, **kwargs):
                     'global_step'         : global_step,
                     'model_state_dict'    : model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
+                    'scheduler_state_dict': scheduler.state_dict(),
                     'loss'                : avg_loss,
                     'stats'               : dataset.stats,
                     'config'              : config_dict,
                 }, ckpt_path)
                 tqdm.write(f"    → best model saved [{ckpt_path}]")
+
+            # ── 间隔保存周期性检查点 ─────────────────────────────────────────
+            is_periodic_save = (epoch + 1) % save_interval == 0
+            is_final_epoch   = (epoch + 1) == epochs
+
+            if is_periodic_save or is_final_epoch:
+                periodic_path = _save_periodic_checkpoint(
+                    model, optimizer, scheduler,
+                    epoch=epoch,
+                    global_step=global_step,
+                    loss=avg_loss,
+                    output_dir=output_dir,
+                    config_dict=config_dict,
+                    stats=dataset.stats,
+                )
+                tqdm.write(f"    → periodic checkpoint saved [{periodic_path}]")
+
+                # 清理旧检查点
+                _cleanup_old_checkpoints(output_dir, keep_last=keep_last_ckpt)
 
         # ── 训练结束 ─────────────────────────────────────────────────────────
         final_path = os.path.join(output_dir, 'final_model.pt')
@@ -535,6 +710,15 @@ if __name__ == "__main__":
     parser.add_argument('--action_horizon', type=int, default=8)
     parser.add_argument('--max_episode_cache', type=int, default=4)
     parser.add_argument('--num_workers', type=int, default=4)
+
+    # 新增参数
+    parser.add_argument('--save_interval', type=int, default=10,
+                       help='每 N 个 epoch 保存一次周期性检查点 (默认: 10)')
+    parser.add_argument('--keep_last_ckpt', type=int, default=3,
+                       help='保留最近 K 个周期性检查点，旧的自动删除 (默认: 3)')
+    parser.add_argument('--resume', action='store_true',
+                       help='启用断点重训：自动从 output_dir 中最新检查点恢复训练')
+
     args = parser.parse_args()
 
     if args.mode == 'demo':
@@ -554,4 +738,6 @@ if __name__ == "__main__":
             action_horizon=args.action_horizon,
             max_episode_cache=args.max_episode_cache,
             num_workers=args.num_workers,
+            save_interval=args.save_interval,
+            keep_last_ckpt=args.keep_last_ckpt,
         )
