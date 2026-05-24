@@ -10,6 +10,7 @@ MultiStageDiffusionPolicy - 多阶段条件扩散策略主模型
 新增功能:
   - 断点重训 (Resume): 自动从上次保存的检查点恢复训练
   - 间隔保存 (Periodic Checkpoint): 每 N 个 epoch 保存检查点，保留最近 K 个
+  - TensorBoard 可视化: 实时记录训练指标
 """
 
 import os
@@ -28,6 +29,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 from einops import rearrange
 from PIL import Image
 from torchvision import transforms
@@ -248,6 +250,44 @@ def _grad_norm(model: nn.Module) -> float:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# TensorBoard 日志工具
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TensorBoardLogger:
+    """封装 TensorBoard 日志记录，支持自动清理"""
+
+    def __init__(self, log_dir: str):
+        self.log_dir = Path(log_dir)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        self.writer = SummaryWriter(str(self.log_dir))
+        print(f"[TensorBoard] 日志目录: {self.log_dir}")
+        print(f"[TensorBoard] 启动命令: tensorboard --logdir={self.log_dir}")
+
+    def log_scalar(self, tag: str, value: float, step: int):
+        self.writer.add_scalar(tag, value, step)
+
+    def log_scalars(self, tag: str, values: Dict[str, float], step: int):
+        self.writer.add_scalars(tag, values, step)
+
+    def log_histogram(self, tag: str, values: torch.Tensor, step: int):
+        self.writer.add_histogram(tag, values, step)
+
+    def log_model_graph(self, model: nn.Module, dummy_input: Tuple):
+        """记录模型计算图（可选）"""
+        try:
+            self.writer.add_graph(model, dummy_input)
+        except Exception as e:
+            print(f"[TensorBoard] 模型图记录失败: {e}")
+
+    def log_hparams(self, hparams: Dict, metrics: Dict):
+        """记录超参数和最终指标"""
+        self.writer.add_hparams(hparams, metrics)
+
+    def close(self):
+        self.writer.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # 断点重训与间隔保存工具函数
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -385,11 +425,11 @@ def _try_resume_training(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 训练函数（增强版）
+# 训练函数（增强版 + TensorBoard）
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def train(data_dir: str, output_dir: str, **kwargs):
-    """训练函数（支持断点重训和间隔保存）"""
+    """训练函数（支持断点重训、间隔保存和 TensorBoard 可视化）"""
     from tqdm import tqdm
 
     os.makedirs(output_dir, exist_ok=True)
@@ -401,6 +441,10 @@ def train(data_dir: str, output_dir: str, **kwargs):
     # ── 间隔保存参数 ──────────────────────────────────────────────────────
     save_interval = kwargs.get('save_interval', 10)   # 每 N 个 epoch 保存一次
     keep_last_ckpt = kwargs.get('keep_last_ckpt', 3)  # 保留最近 K 个 periodic 检查点
+
+    # ── TensorBoard 参数 ────────────────────────────────────────────────
+    use_tensorboard = kwargs.get('use_tensorboard', True)
+    tb_log_dir      = kwargs.get('tb_log_dir', os.path.join(output_dir, 'runs'))
 
     # ── 数据集（HDF5 版本）──────────────────────────────────────────────────
     h5_path    = kwargs.get('h5_path',    data_dir)   # data_dir 传入 h5 文件路径
@@ -465,6 +509,28 @@ def train(data_dir: str, output_dir: str, **kwargs):
         model, optimizer, scheduler, output_dir, device
     )
 
+    # ── TensorBoard 日志器 ────────────────────────────────────────────────
+    tb_logger = None
+    if use_tensorboard:
+        tb_logger = TensorBoardLogger(tb_log_dir)
+        # 记录超参数
+        tb_logger.log_hparams(
+            hparams={
+                'lr': lr,
+                'batch_size': batch_size,
+                'epochs': epochs,
+                'pred_horizon': kwargs.get('pred_horizon', 16),
+                'obs_horizon': kwargs.get('obs_horizon', 2),
+                'action_horizon': kwargs.get('action_horizon', 8),
+                'switch_strategy': kwargs.get('switch_strategy', 'progressive'),
+                'switch_timestep': kwargs.get('switch_timestep', 50),
+                'num_diffusion_steps': kwargs.get('num_diffusion_steps', 100),
+                'num_workers': num_workers,
+                'total_params': total_params,
+            },
+            metrics={'best_loss': best_loss if best_loss != float('inf') else 0.0}
+        )
+
     # ── 训练头部摘要 ────────────────────────────────────────────────────────
     sep = "=" * 70
     print(sep)
@@ -483,6 +549,8 @@ def train(data_dir: str, output_dir: str, **kwargs):
     print(f"  Output dir      : {output_dir}")
     print(f"  Save interval   : 每 {save_interval} 个 epoch")
     print(f"  Keep last ckpt  : {keep_last_ckpt} 个 periodic 检查点")
+    if use_tensorboard:
+        print(f"  TensorBoard     : {tb_log_dir}")
     print(sep)
 
     # ── Epoch 进度条 ─────────────────────────────────────────────────────────
@@ -519,6 +587,12 @@ def train(data_dir: str, output_dir: str, **kwargs):
                 epoch_gnorms.append(gnorm)
                 global_step += 1
 
+                # ── TensorBoard: 每步记录 ──────────────────────────────────
+                if tb_logger is not None:
+                    tb_logger.log_scalar('train/loss_step', loss_val, global_step)
+                    tb_logger.log_scalar('train/grad_norm', gnorm, global_step)
+                    tb_logger.log_scalar('train/lr', optimizer.param_groups[0]['lr'], global_step)
+
                 # 实时更新 batch 进度条后缀
                 cur_lr = optimizer.param_groups[0]['lr']
                 batch_bar.set_postfix(
@@ -535,10 +609,25 @@ def train(data_dir: str, output_dir: str, **kwargs):
             avg_gnorm = float(np.mean(epoch_gnorms))
             min_loss  = float(np.min(epoch_losses))
             max_loss  = float(np.max(epoch_losses))
+            std_loss  = float(np.std(epoch_losses))
             cur_lr    = optimizer.param_groups[0]['lr']
             is_best   = avg_loss < best_loss
 
             scheduler.step()
+
+            # ── TensorBoard: 每 epoch 记录 ───────────────────────────────
+            if tb_logger is not None:
+                tb_logger.log_scalar('train/loss_epoch', avg_loss, epoch + 1)
+                tb_logger.log_scalar('train/loss_min', min_loss, epoch + 1)
+                tb_logger.log_scalar('train/loss_max', max_loss, epoch + 1)
+                tb_logger.log_scalar('train/loss_std', std_loss, epoch + 1)
+                tb_logger.log_scalar('train/grad_norm_epoch', avg_gnorm, epoch + 1)
+                tb_logger.log_scalar('train/lr_epoch', cur_lr, epoch + 1)
+                tb_logger.log_scalar('train/best_loss', best_loss if not is_best else avg_loss, epoch + 1)
+
+                # 记录损失分布直方图（每 5 个 epoch）
+                if (epoch + 1) % 5 == 0:
+                    tb_logger.log_histogram('train/loss_distribution', torch.tensor(epoch_losses), epoch + 1)
 
             # 更新外层 epoch 进度条后缀
             epoch_bar.set_postfix(
@@ -602,13 +691,37 @@ def train(data_dir: str, output_dir: str, **kwargs):
         with open(os.path.join(output_dir, 'stats.pkl'), 'wb') as f:
             pickle.dump(dataset.stats, f)
 
+        # ── TensorBoard: 记录最终指标 ────────────────────────────────────
+        if tb_logger is not None:
+            tb_logger.log_hparams(
+                hparams={
+                    'lr': lr,
+                    'batch_size': batch_size,
+                    'epochs': epochs,
+                    'pred_horizon': kwargs.get('pred_horizon', 16),
+                    'obs_horizon': kwargs.get('obs_horizon', 2),
+                    'action_horizon': kwargs.get('action_horizon', 8),
+                    'switch_strategy': kwargs.get('switch_strategy', 'progressive'),
+                    'switch_timestep': kwargs.get('switch_timestep', 50),
+                    'num_diffusion_steps': kwargs.get('num_diffusion_steps', 100),
+                },
+                metrics={
+                    'final_loss': avg_loss,
+                    'best_loss': best_loss,
+                }
+            )
+
         print(sep)
         print(f"  Training complete!  best_loss={best_loss:.6f}")
         print(f"  Final model : {final_path}")
+        if use_tensorboard:
+            print(f"  TensorBoard : tensorboard --logdir={tb_log_dir}")
         print(sep)
 
     finally:
         dataset.cleanup()
+        if tb_logger is not None:
+            tb_logger.close()
 
     return model, dataset.stats
 
@@ -719,6 +832,12 @@ if __name__ == "__main__":
     parser.add_argument('--resume', action='store_true',
                        help='启用断点重训：自动从 output_dir 中最新检查点恢复训练')
 
+    # TensorBoard 参数
+    parser.add_argument('--use_tensorboard', action='store_true', default=True,
+                       help='启用 TensorBoard 可视化 (默认: True)')
+    parser.add_argument('--tb_log_dir', type=str, default=None,
+                       help='TensorBoard 日志目录 (默认: output_dir/runs)')
+
     args = parser.parse_args()
 
     if args.mode == 'demo':
@@ -740,4 +859,6 @@ if __name__ == "__main__":
             num_workers=args.num_workers,
             save_interval=args.save_interval,
             keep_last_ckpt=args.keep_last_ckpt,
+            use_tensorboard=args.use_tensorboard,
+            tb_log_dir=args.tb_log_dir,
         )
