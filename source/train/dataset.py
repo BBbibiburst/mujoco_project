@@ -299,66 +299,54 @@ class LazyMultiModalGraspDataset(Dataset):
 
         print(f"[LazyDataset] 缓存清理完成，删除 {removed} 个文件 ({self.cache_dir})")
 
-    def _compute_stats(self) -> Dict[str, np.ndarray]:
-        """计算统计量 - 流式处理，不保存所有数据"""
-        print("[LazyDataset] 计算统计量 (流式)...")
+    def _compute_stats(self, sample_episodes: int = 500, steps_per_episode: int = 10) -> Dict[str, np.ndarray]:
+        """
+        随机采样估算统计量，避免全量扫描。
+        默认采样 500 个 episode，每个取前 10 步，约数千步即可估出稳定的 mean/std。
+        """
+        total_eps = len(self.episode_files)
+        n_sample  = min(sample_episodes, total_eps)
+        print(f"[LazyDataset] 采样估算统计量 (随机 {n_sample}/{total_eps} episodes × {steps_per_episode} steps)...")
 
-        action_sum = np.zeros(13, dtype=np.float64)
-        action_sq_sum = np.zeros(13, dtype=np.float64)
-        tactile_sum = np.zeros(713, dtype=np.float64)
-        tactile_sq_sum = np.zeros(713, dtype=np.float64)
-        count = 0
+        rng = np.random.default_rng(seed=42)
+        sampled_ep_ids = rng.choice(total_eps, size=n_sample, replace=False)
 
-        # 使用tqdm显示进度
-        ep_range = range(len(self.episode_files))
+        actions: List[np.ndarray] = []
+        tactile_obs_list: List[np.ndarray] = []
+
+        ep_iter = sampled_ep_ids
         if self.show_progress:
-            ep_range = tqdm(ep_range, desc="[统计量] 处理episodes", unit="ep")
+            ep_iter = tqdm(sampled_ep_ids, desc="[统计量] 采样估算", unit="ep")
 
-        # 流式处理每个episode（episode 已是预处理后的 numpy 格式）
-        for ep_idx in ep_range:
-            episode = self._load_episode(ep_idx)
-
-            for step in episode:
+        for ep_idx in ep_iter:
+            episode = self._load_episode(int(ep_idx))
+            for step in episode[:steps_per_episode]:
                 arm  = step['arm_qpos']   # float32 [7]
                 hand = step['hand_qpos']  # float32 [6]
                 tact = step['tactile']    # float32 [700]
+                actions.append(np.concatenate([arm, hand]))
+                tactile_obs_list.append(np.concatenate([arm, hand, tact]))
 
-                # Action
-                action = np.concatenate([arm, hand])
-                action_sum    += action
-                action_sq_sum += action ** 2
+            # 采样完立刻清出内存缓存，避免占用
+            if int(ep_idx) in self._episode_cache:
+                del self._episode_cache[int(ep_idx)]
 
-                # Tactile obs
-                tactile_obs = np.concatenate([arm, hand, tact])
-                tactile_sum    += tactile_obs
-                tactile_sq_sum += tactile_obs ** 2
-
-                count += 1
-
-            # 清理缓存控制内存
-            if ep_idx in self._episode_cache:
-                del self._episode_cache[ep_idx]
-
-        # 计算mean和std
-        action_mean = action_sum / count
-        action_std = np.sqrt(action_sq_sum / count - action_mean ** 2) + 1e-8
-
-        tactile_mean = tactile_sum / count
-        tactile_std = np.sqrt(tactile_sq_sum / count - tactile_mean ** 2) + 1e-8
+        actions_arr     = np.stack(actions)          # [N, 13]
+        tactile_obs_arr = np.stack(tactile_obs_list) # [N, 713]
 
         stats = {
-            'action_mean': action_mean.astype(np.float32),
-            'action_std': action_std.astype(np.float32),
-            'tactile_obs_mean': tactile_mean.astype(np.float32),
-            'tactile_obs_std': tactile_std.astype(np.float32),
+            'action_mean':      actions_arr.mean(0).astype(np.float32),
+            'action_std':       (actions_arr.std(0) + 1e-8).astype(np.float32),
+            'tactile_obs_mean': tactile_obs_arr.mean(0).astype(np.float32),
+            'tactile_obs_std':  (tactile_obs_arr.std(0) + 1e-8).astype(np.float32),
         }
 
-        # 保存统计量缓存
+        # 保存统计量缓存，下次直接加载
         if self._stats_path:
             with open(self._stats_path, 'wb') as f:
                 pickle.dump(stats, f)
 
-        print(f"[LazyDataset] 统计量计算完成 (处理{count}步)")
+        print(f"[LazyDataset] 统计量估算完成 (共采样 {len(actions)} 步)")
         return stats
 
     def _load_or_compute_stats(self) -> Dict[str, np.ndarray]:
