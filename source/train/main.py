@@ -7,6 +7,25 @@ Multi-Stage Diffusion Policy - 主入口
   训练: python -m source.train.main --mode train
   演示: python -m source.train.main --mode demo
   推理: python -m source.train.main --mode infer --model_path <model_path> --stats_path <stats_path>
+  1. 首次训练 + 每 5 epoch 保存 + 保留最近 2 个检查点
+    python -m source.train.main --mode train \
+        --h5_path data/block_lifting.h5 \
+        --output_dir models/block_lifting \
+        --save_interval 5 \
+        --keep_last_ckpt 2
+
+  2. 断点重训（自动检测 output_dir 中的检查点）
+    python -m source.train.main --mode train \
+        --h5_path data/block_lifting.h5 \
+        --output_dir models/block_lifting \
+        --save_interval 5 \
+        --keep_last_ckpt 2 \
+        --resume
+
+  3. 训练中断后，直接重新运行相同命令即可自动恢复
+    python -m source.train.main --mode train \
+        --h5_path data/block_lifting.h5 \
+        --output_dir models/block_lifting
 """
 
 import os
@@ -72,6 +91,14 @@ def main():
                        default=str(DEFAULT_OUTPUT_PATH / "stats.pkl"),
                        help='统计量路径（由 preprocess.py 生成）')
 
+    # 断点重训与间隔保存参数
+    parser.add_argument('--save_interval', type=int, default=10,
+                       help='每 N 个 epoch 保存一次周期性检查点 (默认: 10)')
+    parser.add_argument('--keep_last_ckpt', type=int, default=3,
+                       help='保留最近 K 个周期性检查点，旧的自动删除 (默认: 3)')
+    parser.add_argument('--resume', action='store_true',
+                       help='启用断点重训：自动从 output_dir 中最新检查点恢复训练')
+
     args = parser.parse_args()
 
     # 打印项目路径信息
@@ -99,6 +126,8 @@ def main():
             obs_horizon=args.obs_horizon,
             action_horizon=args.action_horizon,
             num_workers=args.num_workers,
+            save_interval=args.save_interval,
+            keep_last_ckpt=args.keep_last_ckpt,
         )
 
     elif args.mode == 'demo':
@@ -106,22 +135,22 @@ def main():
         print("运行完整演示")
         print("=" * 60)
 
-        print("\n[1/5] Dataset 演示")
+        print("[1/5] Dataset 演示")
         if os.path.exists(args.data_dir):
             demo_dataset(args.data_dir)
         else:
             print(f"数据目录 {args.data_dir} 不存在，跳过数据集演示")
 
-        print("\n[2/5] Encoders 演示")
+        print("[2/5] Encoders 演示")
         demo_encoders()
 
-        print("\n[3/5] U-Net 演示")
+        print("[3/5] U-Net 演示")
         demo_unet()
 
-        print("\n[4/5] Model 演示")
+        print("[4/5] Model 演示")
         demo_model()
 
-        print("\n[5/5] Inference 演示")
+        print("[5/5] Inference 演示")
         demo_inference()
 
     elif args.mode == 'infer':
@@ -144,7 +173,7 @@ def main():
         print(f"  模型: {args.model_path}")
         print(f"  策略: {inferencer.model.switch_strategy}")
         print(f"  切换时间步: {inferencer.model.switch_timestep}")
-        print(f"\n在你的仿真循环中使用:")
+        print(f"在你的仿真循环中使用:")
         print(f"  inferencer.update_obs(step_info)")
         print(f"  action = inferencer.get_action()")
 
