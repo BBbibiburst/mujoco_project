@@ -201,20 +201,20 @@ class LazyMultiModalGraspDataset(Dataset):
 
     def _load_episode(self, episode_idx: int) -> List[Dict]:
         """
-        加载单个episode，带LRU缓存
+        加载单个episode，带LRU缓存。
+        磁盘缓存存储预处理后的 numpy 数组（图像已解码+归一化），
+        避免 __getitem__ 中重复做 base64 解码和 PIL 变换。
         """
         # 检查内存缓存
         if episode_idx in self._episode_cache:
-            # 移到末尾(最近使用)
             self._episode_cache.move_to_end(episode_idx)
             return self._episode_cache[episode_idx]
 
-        # 检查磁盘缓存
+        # 检查磁盘缓存（存的是预处理后数据）
         cache_key = self._get_cache_key(episode_idx)
         disk_cache_path = self.cache_dir / f"ep_{cache_key}.pkl" if self.cache_dir else None
 
         if disk_cache_path and disk_cache_path.exists():
-            # 从磁盘加载预处理后的episode
             with open(disk_cache_path, 'rb') as f:
                 episode = pickle.load(f)
             self._add_to_cache(episode_idx, episode)
@@ -222,18 +222,38 @@ class LazyMultiModalGraspDataset(Dataset):
 
         # 从原始文件解析
         fp = self.episode_files[episode_idx]
-        episode = []
+        raw_steps = []
         with open(fp, 'r', encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
                 if not line:
                     continue
                 try:
-                    episode.append(json.loads(line)['info'])
+                    raw_steps.append(json.loads(line)['info'])
                 except:
                     continue
 
-        # 保存到磁盘缓存
+        # ── 关键改动：在这里做完所有预处理，缓存 numpy 数组 ──────────────
+        # 这样 __getitem__ 里就不需要再做 base64 解码 / PIL 变换了
+        episode = []
+        for step in raw_steps:
+            # 图像：base64 → PIL → resize → ToTensor → numpy float32
+            img_tensor = self._decode_image(step)          # torch.Tensor [C,H,W]
+            image_np = img_tensor.numpy()                  # float32 [C,H,W]，已归一化
+
+            # 触觉 / 本体感知：解码为 numpy
+            arm  = np.array(step['arm_qpos'],  dtype=np.float32)
+            hand = np.array(step['hand_qpos'], dtype=np.float32)
+            tact = decode_tactile(step['tactile'])         # float32 [700]
+
+            episode.append({
+                'image_np': image_np,   # float32 [C,H,W]
+                'arm_qpos': arm,        # float32 [7]
+                'hand_qpos': hand,      # float32 [6]
+                'tactile': tact,        # float32 [700]
+            })
+
+        # 保存预处理后的 episode 到磁盘缓存
         if disk_cache_path:
             with open(disk_cache_path, 'wb') as f:
                 pickle.dump(episode, f)
@@ -294,25 +314,23 @@ class LazyMultiModalGraspDataset(Dataset):
         if self.show_progress:
             ep_range = tqdm(ep_range, desc="[统计量] 处理episodes", unit="ep")
 
-        # 流式处理每个episode
+        # 流式处理每个episode（episode 已是预处理后的 numpy 格式）
         for ep_idx in ep_range:
             episode = self._load_episode(ep_idx)
 
             for step in episode:
+                arm  = step['arm_qpos']   # float32 [7]
+                hand = step['hand_qpos']  # float32 [6]
+                tact = step['tactile']    # float32 [700]
+
                 # Action
-                action = np.concatenate([
-                    np.array(step['arm_qpos'], dtype=np.float32),
-                    np.array(step['hand_qpos'], dtype=np.float32)
-                ])
-                action_sum += action
+                action = np.concatenate([arm, hand])
+                action_sum    += action
                 action_sq_sum += action ** 2
 
                 # Tactile obs
-                arm = np.array(step['arm_qpos'], dtype=np.float32)
-                hand = np.array(step['hand_qpos'], dtype=np.float32)
-                tactile = decode_tactile(step['tactile'])
-                tactile_obs = np.concatenate([arm, hand, tactile])
-                tactile_sum += tactile_obs
+                tactile_obs = np.concatenate([arm, hand, tact])
+                tactile_sum    += tactile_obs
                 tactile_sq_sum += tactile_obs ** 2
 
                 count += 1
@@ -378,53 +396,47 @@ class LazyMultiModalGraspDataset(Dataset):
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         ep_idx, start = self.indices[idx]
 
-        # 按需加载episode
+        # 按需加载episode（已是预处理后的 numpy 格式）
         episode = self._load_episode(ep_idx)
 
         # 边界检查
         if start + self.pred_horizon > len(episode):
-            # 回退到有效范围
             start = max(0, len(episode) - self.pred_horizon)
 
-        # 构建视觉观测序列
+        # ── 视觉观测序列：直接 numpy → Tensor，无需再解码 ──────────────────
         visual_list = []
         for t in range(start, min(start + self.obs_horizon, len(episode))):
-            visual_list.append(self._decode_image(episode[t]))
+            visual_list.append(torch.from_numpy(episode[t]['image_np']))
         while len(visual_list) < self.obs_horizon:
             visual_list.append(visual_list[-1])
-        visual_seq = torch.stack(visual_list)
+        visual_seq = torch.stack(visual_list)   # [T, C, H, W]
 
-        # 构建触觉观测序列
+        # ── 触觉观测序列 ──────────────────────────────────────────────────────
         tactile_list = []
         for t in range(start, min(start + self.obs_horizon, len(episode))):
-            tactile_obs = self._build_tactile_obs(episode[t])
+            step = episode[t]
+            tactile_obs = np.concatenate([step['arm_qpos'], step['hand_qpos'], step['tactile']])
             tactile_obs = self._normalize(tactile_obs, 'tactile_obs')
             tactile_list.append(tactile_obs)
         while len(tactile_list) < self.obs_horizon:
             tactile_list.append(tactile_list[-1])
-        tactile_seq = torch.from_numpy(np.stack(tactile_list)).float()
+        tactile_seq = torch.from_numpy(np.stack(tactile_list)).float()  # [T, 713]
 
-        # 构建动作序列
+        # ── 动作序列 ──────────────────────────────────────────────────────────
         action_list = []
-        end_idx = min(start + self.pred_horizon, len(episode))
-        for t in range(start, end_idx):
-            action = np.concatenate([
-                np.array(episode[t]['arm_qpos'], dtype=np.float32),
-                np.array(episode[t]['hand_qpos'], dtype=np.float32)
-            ])
+        for t in range(start, min(start + self.pred_horizon, len(episode))):
+            step = episode[t]
+            action = np.concatenate([step['arm_qpos'], step['hand_qpos']])
             action = self._normalize(action, 'action')
             action_list.append(action)
-
-        # 如果不足pred_horizon，用最后一个动作填充
         while len(action_list) < self.pred_horizon:
             action_list.append(action_list[-1] if action_list else np.zeros(13, dtype=np.float32))
-
-        action_seq = torch.from_numpy(np.stack(action_list)).float()
+        action_seq = torch.from_numpy(np.stack(action_list)).float()    # [T, 13]
 
         return {
-            'visual_obs': visual_seq,      # [T, C, H, W]
-            'tactile_obs': tactile_seq,    # [T, 713]
-            'action': action_seq,          # [T, 13]
+            'visual_obs':  visual_seq,   # [T, C, H, W]
+            'tactile_obs': tactile_seq,  # [T, 713]
+            'action':      action_seq,   # [T, 13]
         }
 
 

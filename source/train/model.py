@@ -262,13 +262,17 @@ def train(data_dir: str, output_dir: str, **kwargs):
         enable_disk_cache=kwargs.get('enable_disk_cache', True),
     )
 
+    num_workers = kwargs.get('num_workers', 12)
+
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=kwargs.get('num_workers', 4),
+        num_workers=num_workers,
         pin_memory=True,
         drop_last=True,
+        prefetch_factor=4 if num_workers > 0 else None,   # 每个 worker 预取 4 个 batch
+        persistent_workers=True if num_workers > 0 else False,  # 避免每 epoch 重建 worker
     )
 
     device = kwargs.get('device', 'cuda' if torch.cuda.is_available() else 'cpu')
@@ -283,6 +287,12 @@ def train(data_dir: str, output_dir: str, **kwargs):
         switch_timestep=kwargs.get('switch_timestep', 50),
         switch_strategy=kwargs.get('switch_strategy', 'progressive'),
     ).to(device)
+
+    # torch.compile：PyTorch 2.x 自动算子融合，约提速 10~30%
+    # 首个 batch 会有一次编译耗时（约 30~60s），之后正常
+    if hasattr(torch, 'compile'):
+        print("[Train] torch.compile 编译模型中（首 batch 稍慢属正常）...")
+        model = torch.compile(model)
 
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
@@ -302,6 +312,7 @@ def train(data_dir: str, output_dir: str, **kwargs):
     print(f"  Trainable params: {total_params:,}")
     print(f"  Strategy        : {kwargs.get('switch_strategy', 'progressive')}  "
           f"switch_t={kwargs.get('switch_timestep', 50)}")
+    print(f"  num_workers     : {num_workers}  prefetch_factor=4  persistent_workers=True")
     print(f"  Output dir      : {output_dir}")
     print(sep)
 
