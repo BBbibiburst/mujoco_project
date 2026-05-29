@@ -23,7 +23,8 @@ import base64
 import io
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple, Union
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import cv2
 import mujoco
@@ -40,6 +41,7 @@ from source.sensors.tactile_sensor import TactileReader
 
 from .env_config import RobotConfig
 from .scene_builder import BaseSceneBuilder
+from .object_factory import ObjectFactory, MeshRegistry  # <-- 新增导入
 
 
 # ====================== 回合统计 ======================
@@ -135,6 +137,19 @@ class RobotArmEnvBase(gym.Env, ABC):
     ARM_DOF: int = 7
     HAND_DOF: int = 6
     TOTAL_DOF: int = 13
+
+    # ====================== 默认网格注册表（全局共享）======================
+    #: 基类统一注册的外部网格，所有继承环境自动可用。
+    #: key 为 mesh 标识符，value 为 STL/OBJ 文件绝对路径。
+    #: 子类可覆盖以扩展或替换。
+    _DEFAULT_MESHES: Dict[str, str] = {
+        "bottle": "assets/objects/meshes/bottle.stl",
+        "bread": "assets/objects/meshes/bread.stl",
+        "can":    "assets/objects/meshes/can.stl",
+        "cereal": "assets/objects/meshes/cereal.stl",
+        "lemon":  "assets/objects/meshes/lemon.stl",
+        "milk":   "assets/objects/meshes/milk.stl",
+    }
 
     def __init__(self, config: Optional[RobotConfig] = None):
         super().__init__()
@@ -494,9 +509,26 @@ class RobotArmEnvBase(gym.Env, ABC):
         renderer.update_scene(self.data, camera=camera_name)
         return renderer.render()
 
+    # ====================== 网格注册（类方法）======================
+
+    @classmethod
+    def _register_default_meshes(cls) -> None:
+        """
+        将 _DEFAULT_MESHES 注册到全局 MeshRegistry。
+        幂等调用：已注册或文件不存在时静默跳过，不阻断流程。
+        """
+        for key, path in cls._DEFAULT_MESHES.items():
+            try:
+                MeshRegistry.register(key, path)
+            except (ValueError, FileNotFoundError):
+                pass  # 已注册或路径不存在时忽略
+
     # ====================== 私有实现 ======================
 
     def _init_simulation(self) -> None:
+        # 场景构建前自动注册默认网格（基类统一注册，所有子类共享）
+        self.__class__._register_default_meshes()
+
         spec, reader = get_combined_spec(
             rot_xyz_deg=self.cfg.rot_xyz_deg,
             attach_point_name=self.cfg.attach_point_name,

@@ -27,13 +27,15 @@ TASK_REGISTRY: Dict[str, Dict[str, Any]] = {
 
 # ====================== 环境加载 ======================
 
-def load_task(task_name: str, robot_cfg: RobotConfig) -> RobotArmEnvBase:
+def load_task(task_name: str, robot_cfg: RobotConfig, task_config: Optional[Any] = None) -> RobotArmEnvBase:
     """
     按名称动态加载并实例化任务环境.
 
     Args:
         task_name: TASK_REGISTRY 中的键名。
         robot_cfg: 机器人配置。
+        task_config: 任务配置（可选），如 BlockLiftingConfig 实例。
+                    传入时会覆盖默认配置。
 
     Returns:
         初始化完成的环境实例（未调用 reset）。
@@ -45,6 +47,9 @@ def load_task(task_name: str, robot_cfg: RobotConfig) -> RobotArmEnvBase:
     reg = TASK_REGISTRY[task_name]
     mod      = importlib.import_module(reg["module"])
     EnvClass = getattr(mod, reg["env_class"])
+    
+    if task_config is not None:
+        return EnvClass(robot_config=robot_cfg, task_config=task_config)
     return EnvClass(robot_config=robot_cfg)
 
 

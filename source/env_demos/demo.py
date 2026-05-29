@@ -11,6 +11,9 @@
     python -m source.env_demos.demo --task block_lifting --mode pipeline
     # 无渲染批量测试 pipeline 100次
     python -m source.env_demos.demo --task block_lifting --mode pipeline --no-render --episodes 100
+    # 使用不同物体
+    python -m source.env_demos.demo --task block_lifting --mode random --obj sphere_blue_small
+    python -m source.env_demos.demo --task block_lifting --mode pipeline --obj cylinder_green_medium
 
 模式说明：
     random    : 随机策略回合演示（仿真窗口 + 触觉热力图 + 相机画面 + 可视化）
@@ -57,6 +60,20 @@ def main():
             "  pipeline  流程化任务执行（自动策略）\n"
         ),
     )
+    # ---- 新增：物体描述符参数 ----
+    parser.add_argument(
+        "--obj",
+        type=str,
+        default=None,
+        help=(
+            "物体描述符，格式: <shape>_<color>_<size>\n"
+            "  形状: box, sphere, cylinder, capsule\n"
+            "  颜色: red, green, blue, yellow, purple, orange, cyan\n"
+            "  尺寸: small, medium, large\n"
+            "  示例: box_red_large, sphere_blue_small, cylinder_green_medium"
+        ),
+    )
+    # -----------------------------
     parser.add_argument("--no-render", action="store_true", help="禁用可视化（random模式）")
     parser.add_argument("--no-traj", action="store_true", help="禁用末端轨迹可视化")
     parser.add_argument("--no-ft-mid", action="store_true", help="禁用指尖中点可视化")
@@ -77,9 +94,13 @@ def main():
     show_traj = not args.no_traj
     show_ft_mid = not args.no_ft_mid
 
+    # ---- 构建物体配置提示 ----
+    obj_hint = f"  物体:       {args.obj}" if args.obj else "  物体:       默认 (box_red_large)"
+    
     print(f"\n{'='*65}")
     print(f"  任务:       {TASK_REGISTRY[args.task]['display_name']}")
     print(f"  模式:       {args.mode}")
+    print(obj_hint)
     if args.mode == "random":
         print(f"  渲染:       {'是' if render else '否'}")
         print(f"  轨迹可视化: {'是' if show_traj else '否'}")
@@ -90,6 +111,11 @@ def main():
         print(f"  指尖中点:   {'是' if show_ft_mid else '否'}")
     print(f"{'='*65}\n")
 
+    # ---- 构建 task_config 覆盖（如果指定了物体）----
+    task_config_overrides = {}
+    if args.obj is not None:
+        task_config_overrides["obj_descriptor"] = args.obj
+
     if args.mode == "random":
         demo_random_policy(
             task_name=args.task,
@@ -99,15 +125,20 @@ def main():
             controller_type=args.controller,
             show_ee_traj=show_traj,
             show_fingertip_midpoint=show_ft_mid,
+            task_config_overrides=task_config_overrides,
         )
     elif args.mode == "verify":
-        demo_verify_observation_space(task_name=args.task)
+        demo_verify_observation_space(
+            task_name=args.task,
+            task_config_overrides=task_config_overrides,
+        )
     elif args.mode == "benchmark":
         demo_benchmark(
             task_name=args.task,
             n_episodes=args.episodes if args.episodes != 3 else 100,
             action_mode=args.action_mode,
             controller_type=args.controller,
+            task_config_overrides=task_config_overrides,
         )
     elif args.mode == "keyboard":
         demo_keyboard_control(
@@ -121,6 +152,7 @@ def main():
             show_fingertip_midpoint=show_ft_mid,
             seed=args.seed,
             log_info=args.log_info,
+            task_config_overrides=task_config_overrides,
         )
     elif args.mode == "pipeline":
         demo_pipeline(
@@ -133,6 +165,7 @@ def main():
             show_fingertip_midpoint=show_ft_mid,
             seed=args.seed,
             log_info=args.log_info,
+            task_config_overrides=task_config_overrides,
         )
 
 

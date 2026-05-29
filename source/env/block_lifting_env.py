@@ -2,7 +2,7 @@
 Block Lifting 任务环境.
 
 任务描述：
-    机械臂+灵巧手从桌面抓取立方体，将其提升到指定高度以上。
+    机械臂+灵巧手从桌面抓取物体，将其提升到指定高度以上。
 
 观测空间（扁平化 Dict，SB3 兼容）：
     - camera_rgb:      (240, 320, 3)
@@ -22,6 +22,7 @@ from gymnasium import spaces
 from .base_env import RobotArmEnvBase
 from .env_config import RobotConfig
 from .tactile_obs import TactileObsHelper
+from .object_factory import ObjectFactory  # <-- 新增导入
 
 # ====================== 相机配置 ======================
 
@@ -44,10 +45,15 @@ class BlockLiftingConfig:
 
     obs_camera_name: str = "frontview"
 
-    # 物体配置（obj_size 为 MuJoCo half-size，实际边长 = 2 × obj_size）
-    obj_size: float = 0.025
+    # 物体描述符（通过 ObjectFactory 解析，支持多种形状/颜色/尺寸）
+    # 例如: "box_red_large", "sphere_blue_small", "cylinder_green_medium"
+    obj_descriptor: str = "box_red_large"
+
+    # 物体质量（可覆盖 ObjectFactory 默认值）
     obj_mass: float = 0.1
-    obj_color: Tuple = (0.9, 0.2, 0.1, 1.0)
+    obj_friction: Tuple = (0.3, 0.1, 0.01)
+    obj_condim: int = 4
+    obj_conaffinity: int = 15
 
     # 目标高度（相对于桌面）
     target_lift_height: float = 0.15
@@ -100,7 +106,7 @@ class BlockLiftingConfig:
 class BlockLiftingEnv(RobotArmEnvBase):
     """
     Block Lifting 任务强化学习环境.
-    任务：从桌面抓取立方体，将其提升到目标高度以上。
+    任务：从桌面抓取物体，将其提升到目标高度以上。
     """
 
     def __init__(
@@ -149,27 +155,34 @@ class BlockLiftingEnv(RobotArmEnvBase):
     # ====================== 必须实现的抽象方法 ======================
 
     def _build_scene(self, spec: mujoco.MjSpec) -> None:
-        """添加立方体、目标高度 marker 和相机."""
+        """添加物体（通过 ObjectFactory）、目标高度 marker 和相机."""
         wb = spec.worldbody
         tc = self.task_cfg
-        cube_z = self._table_height + tc.obj_size
 
-        # 立方体
-        obj = wb.add_body(
-            name="target_object",
-            pos=[tc.obj_spawn_center[0], tc.obj_spawn_center[1], cube_z],
-        )
-        obj.add_geom(
-            name="obj_geom",
-            type=mujoco.mjtGeom.mjGEOM_BOX,
-            size=[tc.obj_size] * 3,
-            rgba=list(tc.obj_color),
+        # 使用 ObjectFactory 创建物体，支持任意形状/颜色/尺寸
+        obj_pos = [
+            tc.obj_spawn_center[0],
+            tc.obj_spawn_center[1],
+            self._table_height,  # bottom_half_z 会在 create 中自动加上
+        ]
+        
+        body, self._obj_desc = ObjectFactory.create(
+            spec,
+            tc.obj_descriptor,
+            pos=obj_pos,
+            name="target_object",  # 名称固定，_cache_ids() 继续有效
             mass=tc.obj_mass,
-            friction=[0.3, 0.1, 0.01], # 更合理的值,
-            condim=4,
-            conaffinity=15,
+            friction=tc.obj_friction,
+            condim=tc.obj_condim,
+            conaffinity=tc.obj_conaffinity,
         )
-        obj.add_joint(type=mujoco.mjtJoint.mjJNT_FREE, name="obj_free_joint")
+        
+        # 物体放置高度 = 桌面高度 + 几何中心到底面的距离
+        # ObjectFactory.create 已经设置了 body 的 pos，这里需要修正 z 坐标
+        # 实际上 ObjectFactory.create 的 pos 参数就是 body 的原点位置
+        # 对于自由物体，重心在几何中心，所以 pos_z 应该 = table_height + bottom_half_z
+        # 但上面传的是 table_height，需要修正：
+        body.pos[2] = self._table_height + self._obj_desc.bottom_half_z
 
         # 目标高度 marker（mocap body，无碰撞）
         target_marker = wb.add_body(
@@ -274,7 +287,8 @@ class BlockLiftingEnv(RobotArmEnvBase):
         current_height = self._get_obj_height()
         self._max_height = max(self._max_height, current_height)
 
-        lift_threshold = tc.obj_size
+        # 离地阈值：物体几何中心到底面的距离
+        lift_threshold = self._obj_desc.bottom_half_z
         reward = 0.0
 
         # 1. 时间负奖励（每步都扣）
@@ -314,10 +328,10 @@ class BlockLiftingEnv(RobotArmEnvBase):
         # 更新历史最高高度
         self._max_height = max(self._max_height, height)
 
-        # 缓冲高度 = 方块边长（2 * half_size）
-        buffer_height = 2.0 * tc.obj_size
+        # 缓冲高度 = 2 × 几何中心到底面的距离（物体边长/直径的近似）
+        buffer_height = 2.0 * self._obj_desc.bottom_half_z
 
-        # 判断是否曾经被提升离开桌面（超过一个边长高度）
+        # 判断是否曾经被提升离开桌面
         if not self._was_lifted and self._max_height > buffer_height:
             self._was_lifted = True
 
@@ -325,14 +339,14 @@ class BlockLiftingEnv(RobotArmEnvBase):
         if height >= tc.target_lift_height:
             return True, True
 
-        # 失败1：掉落到桌面以下（原有逻辑）
+        # 失败1：掉落到桌面以下
         if height < tc.drop_threshold_offset:
             self._is_dropped = True
             return True, False
 
-        # 失败2：曾经被提升后又落回桌面（低于一个边长高度）
+        # 失败2：曾经被提升后又落回桌面
         if self._was_lifted and height <= buffer_height:
-            self._is_dropped = True  # 复用 _is_dropped 标记表示失败
+            self._is_dropped = True
             return True, False
 
         return False, False
@@ -347,13 +361,15 @@ class BlockLiftingEnv(RobotArmEnvBase):
         self._tactile.bind(self.reader)
 
         tc = self.task_cfg
-        cube_z = self._table_height + tc.obj_size
+        
+        # 物体放置高度 = 桌面高度 + 几何中心到底面的距离
+        obj_z = self._table_height + self._obj_desc.bottom_half_z
 
         # 随机采样物体位置
         half_x, half_y = tc.obj_spawn_range
         cx, cy = tc.obj_spawn_center
-        lo = np.array([cx - half_x, cy - half_y, cube_z])
-        hi = np.array([cx + half_x, cy + half_y, cube_z])
+        lo = np.array([cx - half_x, cy - half_y, obj_z])
+        hi = np.array([cx + half_x, cy + half_y, obj_z])
         obj_pos = lo + self.np_random.random(3) * (hi - lo)
 
         # 随机采样旋转四元数（仅绕 Z 轴，保持底面朝下）
@@ -363,13 +379,16 @@ class BlockLiftingEnv(RobotArmEnvBase):
         if self._obj_free_jnt_qposadr >= 0:
             adr = self._obj_free_jnt_qposadr
             self.data.qpos[adr : adr + 3] = obj_pos
-            self.data.qpos[adr + 3 : adr + 7] = rand_quat  # 随机 Z 轴旋转
+            self.data.qpos[adr + 3 : adr + 7] = rand_quat
 
             jnt_id = mujoco.mj_name2id(
-                self.model, mujoco.mjtObj.mjOBJ_JOINT, "obj_free_joint"
+                self.model, mujoco.mjtObj.mjOBJ_JOINT, "target_object_free_joint"
             )
-            dof_adr = self.model.jnt_dofadr[jnt_id]
-            self.data.qvel[dof_adr : dof_adr + 6] = 0.0
+            # 注意：ObjectFactory 自动生成的 joint 名是 "{body_name}_free_joint"
+            # 即 "target_object_free_joint"
+            if jnt_id >= 0:
+                dof_adr = self.model.jnt_dofadr[jnt_id]
+                self.data.qvel[dof_adr : dof_adr + 6] = 0.0
 
         # 更新 target_marker XY 跟随物体
         if self._target_marker_body_id >= 0:
@@ -381,7 +400,7 @@ class BlockLiftingEnv(RobotArmEnvBase):
                     self._table_height + tc.target_lift_height,
                 ]
 
-        # 记录方块初始位置和旋转（供 _get_info 使用）
+        # 记录物体初始位置和旋转（供 _get_info 使用）
         self._obj_initial_pos = obj_pos.copy()
         self._obj_initial_quat = rand_quat.copy()
 
@@ -392,8 +411,8 @@ class BlockLiftingEnv(RobotArmEnvBase):
 
     def _get_info(self) -> Dict[str, Any]:
         """
-        返回包含方块位置、高度等任务信息的调试字典。
-        继承基类默认的回合统计数据，并追加任务特定信息。
+        返回包含物体位置、高度等任务信息的调试字典。
+        继承基类默认的回合统计信息，并追加任务特定信息。
         """
         # 获取基类提供的回合统计信息
         info = super()._get_info()
@@ -402,8 +421,12 @@ class BlockLiftingEnv(RobotArmEnvBase):
         current_pos = self.get_block_position()
         current_height = self._get_obj_height()
 
-        # 方块相关信息
+        # 物体相关信息
         info["block"] = {
+            "descriptor": tc.obj_descriptor,
+            "shape_type": self._obj_desc.shape_type if hasattr(self, '_obj_desc') else None,
+            "color": self._obj_desc.color if hasattr(self, '_obj_desc') else None,
+            "size": self._obj_desc.size if hasattr(self, '_obj_desc') else None,
             "initial_position": self._obj_initial_pos.tolist() if hasattr(self, '_obj_initial_pos') else None,
             "initial_quaternion": self._obj_initial_quat.tolist() if hasattr(self, '_obj_initial_quat') else None,
             "current_position": current_pos.tolist(),
@@ -414,7 +437,7 @@ class BlockLiftingEnv(RobotArmEnvBase):
             "was_lifted": bool(self._was_lifted),
             "is_dropped": bool(self._is_dropped),
             "grasp_success": bool(self._grasp_success),
-            "obj_size": float(tc.obj_size),
+            "bottom_half_z": float(self._obj_desc.bottom_half_z) if hasattr(self, '_obj_desc') else None,
             "obj_mass": float(tc.obj_mass),
         }
 
@@ -467,15 +490,15 @@ class BlockLiftingEnv(RobotArmEnvBase):
 
     def get_block_position(self) -> np.ndarray:
         """
-        获取方块当前的三维位置 [x, y, z]（相对于世界坐标系）。
+        获取物体当前的三维位置 [x, y, z]（相对于世界坐标系）。
         注意：z 值包含桌面高度。
         """
         if self._obj_body_id < 0:
-            self._cache_ids()  # 确保 ID 已缓存
-        return self.data.xpos[self._obj_body_id].copy()  # .copy() 避免修改原数据
+            self._cache_ids()
+        return self.data.xpos[self._obj_body_id].copy()
     
     def get_block_quaternion(self) -> np.ndarray:
-        """获取方块当前旋转四元数 [w, x, y, z]."""
+        """获取物体当前旋转四元数 [w, x, y, z]."""
         if self._obj_body_id < 0:
             self._cache_ids()
         return self.data.xquat[self._obj_body_id].copy()
@@ -505,8 +528,9 @@ class BlockLiftingEnv(RobotArmEnvBase):
             "Make sure _build_scene() adds a body named 'target_object'."
         )
 
+        # ObjectFactory 自动生成的 joint 名是 "target_object_free_joint"
         jnt_id = mujoco.mj_name2id(
-            self.model, mujoco.mjtObj.mjOBJ_JOINT, "obj_free_joint"
+            self.model, mujoco.mjtObj.mjOBJ_JOINT, "target_object_free_joint"
         )
         self._obj_free_jnt_qposadr = (
             self.model.jnt_qposadr[jnt_id] if jnt_id >= 0 else -1
@@ -516,7 +540,7 @@ class BlockLiftingEnv(RobotArmEnvBase):
             self.model, mujoco.mjtObj.mjOBJ_BODY, "target_marker"
         )
 
-        # 缓存生成区域 geom ID（大区域固定位置，不跟随单个方块）
+        # 缓存生成区域 geom ID
         self._spawn_area_geom_id = mujoco.mj_name2id(
             self.model, mujoco.mjtObj.mjOBJ_GEOM, "spawn_area_debug"
         )
@@ -534,6 +558,6 @@ class BlockLiftingEnv(RobotArmEnvBase):
         生成仅绕 Z 轴的随机单位四元数 [w, x, y, z]。
         保持物体底面朝下，适合抓取任务。
         """
-        angle = self.np_random.uniform(0, 2 * np.pi)  # 0~360度均匀分布
+        angle = self.np_random.uniform(0, 2 * np.pi)
         half_angle = angle / 2.0
         return np.array([np.cos(half_angle), 0.0, 0.0, np.sin(half_angle)])
