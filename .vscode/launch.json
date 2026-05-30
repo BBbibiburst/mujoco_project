@@ -12,9 +12,13 @@
         "--task",
         "block_lifting",
         "--mode",
-        "pipeline",
-        "--action-mode",
-        "ee"
+        "learned",
+        "--model-path",
+        "rl_models/block_lifting/best_model.pt",
+        "--stats-path",
+        "rl_models/block_lifting/stats.pkl",
+        "--episodes",
+        "3"
       ],
       "console": "integratedTerminal", // 在VS Code自带的终端中运行并查看输出
       "justMyCode": true, // 调试时只进入自己写的代码，跳过第三方库

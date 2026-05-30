@@ -172,15 +172,6 @@ class LearnedDiffusionPolicy(TaskStrategy):
         return tactile
 
     def _action_to_context(self, raw_action: np.ndarray, env: Any) -> ActionContext:
-        """
-        将扩散策略输出的原始动作 [13] 转换为 ActionContext。
-
-        raw_action: [arm_qpos_target[7], hand_qpos_target[6]] （去归一化后的绝对关节位置）
-
-        根据 env.cfg.action_mode 决定如何构造动作上下文：
-          - "ee": 需要计算 delta_pos/delta_rot（从当前 ee 到目标 ee 的差）
-          - "joint": 直接设置 hand_target 为绝对目标，由 _build_action 计算 delta
-        """
         cfg = env.cfg
         act = ActionContext()
 
@@ -188,36 +179,41 @@ class LearnedDiffusionPolicy(TaskStrategy):
         hand_target = raw_action[env.ARM_DOF : env.ARM_DOF + env.HAND_DOF]
 
         if cfg.action_mode == "joint":
-            # joint 模式：直接设置目标关节角
-            # _build_action 会计算 target - current 并归一化
-            act.hand_target = np.concatenate([arm_target, hand_target]).astype(np.float64)
+            act.hand_target = hand_target.astype(np.float64)   # 只存手部 (6,)
+            self._arm_target = arm_target.astype(np.float64)   # 手臂单独存
 
         elif cfg.action_mode == "ee":
-            # ee 模式：需要将关节目标通过正运动学转换为 ee 目标
-            # 但扩散策略直接输出关节空间动作，这里有两种处理方式：
-
-            # 方案 A：将关节目标差作为近似 ee delta（简化，推荐）
-            current_arm = env.get_arm_qpos()
-            current_hand = env.get_hand_qpos()
-
-            # 使用 FK 计算目标 ee 位姿（需要临时设置关节角）
-            # 注意：这里不修改真实环境，只用于计算
-            act.hand_target = hand_target.astype(np.float64)
-
-            # 计算关节角度差作为近似的动作
-            arm_delta = arm_target - current_arm
-            # 这里我们没法直接得到 ee_delta，需要依赖 env 的 _build_action 处理
-            # 但 ee 模式下 _build_action 期望 ee_delta_pos/rot
-            # 所以这里采用方案 B：直接输出关节目标，让环境自己处理
-
-            # 实际上，对于 ee 模式，扩散策略应该训练时就用 ee 动作
-            # 如果模型输出的是关节角，建议在训练时 action_mode="joint"
-            # 这里做兼容处理：将关节差作为 hand_target，ee_delta 设为零
             act.ee_delta_pos = np.zeros(3)
             act.ee_delta_rot = np.zeros(3)
             act.hand_target = hand_target.astype(np.float64)
+            self._arm_target = arm_target.astype(np.float64)
 
         return act
+    
+    def _build_action(self, act_ctx: ActionContext, env) -> np.ndarray:
+        cfg = env.cfg
+
+        if cfg.action_mode == "joint":
+            current_arm = env.get_arm_qpos()
+            current_hand = env.get_hand_qpos()
+            current = np.concatenate([current_arm, current_hand])
+            target = current.copy()
+
+            arm_target = getattr(self, "_arm_target", None)
+            if arm_target is not None:
+                target[: env.ARM_DOF] = arm_target
+            if act_ctx.hand_target is not None:
+                target[env.ARM_DOF :] = act_ctx.hand_target
+
+            delta = target - current
+            scale_hand = cfg.action_scale_hand or cfg.action_scale
+            delta[: env.ARM_DOF] /= cfg.action_scale
+            delta[env.ARM_DOF :] /= scale_hand
+
+            return np.clip(delta.astype(np.float32), -1.0, 1.0)
+
+        # ee 模式沿用父类逻辑
+        return super()._build_action(act_ctx, env)
 
     def get_status_dict(self) -> dict:
         """返回策略状态信息."""

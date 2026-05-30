@@ -60,7 +60,14 @@ class MultiStageDiffusionPolicyInference:
             switch_strategy=config.get('switch_strategy', 'progressive'),
         ).to(device)
 
-        self.model.load_state_dict(checkpoint['model_state_dict'])
+        state_dict = checkpoint['model_state_dict']
+
+        # 处理 torch.compile 产生的 _orig_mod. 前缀
+        if any(k.startswith('_orig_mod.') for k in state_dict.keys()):
+            print("[Inference] 检测到 torch.compile 前缀，自动剥离 _orig_mod.")
+            state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
+
+        self.model.load_state_dict(state_dict)
         self.model.eval()
 
         # 观测队列
