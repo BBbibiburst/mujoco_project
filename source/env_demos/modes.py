@@ -2718,3 +2718,244 @@ def _show_cv_windows_pipeline(
         cv2.resizeWindow("Camera", 640, 480)
 
     cv2.waitKey(1)
+    
+# ====================== 模式 6：模仿学习策略 ======================
+
+
+def demo_learned_policy(
+    task_name: str = "block_lifting",
+    model_path: Optional[str] = None,
+    stats_path: Optional[str] = None,
+    n_episodes: int = 3,
+    render: bool = True,
+    action_mode: str = "joint",  # ← 建议用 joint，因为模型输出关节角
+    controller_type: str = "osc",
+    show_ee_traj: bool = True,
+    show_fingertip_midpoint: bool = True,
+    seed: Optional[int] = 42,
+    log_info: bool = False,
+    task_config_overrides: Optional[Dict[str, Any]] = None,
+) -> None:
+    """
+    使用训练好的模仿学习模型执行策略。
+
+    与 pipeline 模式类似，但策略由神经网络生成。
+    建议 action_mode="joint"，因为扩散策略直接输出关节空间动作。
+    """
+    from source.env_demos.strategies.learned_policy import LearnedDiffusionPolicy
+
+    reg = TASK_REGISTRY[task_name]
+    print(f"\n{'='*65}\n [Demo] 模仿学习策略 | 任务={reg['display_name']}")
+    print(f" action_mode={action_mode}, controller={controller_type}")
+    print(f"{'='*65}")
+
+    # 自动推断模型路径
+    _model_path = model_path or f"models/{task_name}/best_model.pt"
+    _stats_path = stats_path or f"models/{task_name}/stats.pkl"
+
+    # 检查文件存在性
+    import os
+    if not os.path.exists(_model_path):
+        raise FileNotFoundError(
+            f"模型文件不存在: {_model_path}\n"
+            f"请先训练模型，或使用 --model-path 指定正确路径。"
+        )
+    if not os.path.exists(_stats_path):
+        raise FileNotFoundError(f"统计量文件不存在: {_stats_path}")
+
+    print(f"  模型: {_model_path}")
+    print(f"  统计量: {_stats_path}")
+
+    robot_cfg = _make_robot_cfg(
+        action_mode=action_mode,
+        controller_type=controller_type,
+        max_episode_steps=2000,
+        action_scale=0.05,
+        action_scale_rot=0.1,
+        action_scale_hand=0.005,
+        control_freq=20.0,
+    )
+    task_cfg = _make_task_cfg(task_name, task_config_overrides)
+    env = load_task(task_name, robot_cfg, task_config=task_cfg)
+
+    # 加载学习策略
+    strategy = LearnedDiffusionPolicy(
+        model_path=_model_path,
+        stats_path=_stats_path,
+    )
+
+    if not render:
+        # 无渲染批量测试
+        _run_learned_no_render(env, strategy, n_episodes, task_name, log_info)
+        return
+
+    # ========== 渲染模式 ==========
+    obs, info = env.reset(seed=seed)
+    strategy.reset()
+
+    traj_vis = (
+        EETrajectoryVisualizer(TrajectoryVisualStyle(), max_history=100)
+        if show_ee_traj else None
+    )
+    ft_vis = FingertipMidpointVisualizer() if show_fingertip_midpoint else None
+
+    viewer = mujoco.viewer.launch_passive(env.model, env.data)
+
+    info_logger = InfoLogger(task_name, "learned", 1) if log_info else None
+
+    try:
+        viewer.cam.distance = 1.5
+        viewer.cam.elevation = -30
+        viewer.cam.azimuth = 120
+
+        episode = 0
+        total_steps = []
+        successes = 0
+        timeouts = 0
+        t0 = time.time()
+
+        while viewer.is_running() and episode < n_episodes:
+            if episode > 0:
+                ep_seed = (episode + 1) * seed if seed else None
+                obs, info = env.reset(seed=ep_seed)
+                strategy.reset()
+                if traj_vis:
+                    traj_vis.reset()
+                if ft_vis:
+                    ft_vis.reset()
+
+                if log_info and info_logger:
+                    _prev_outcome = (
+                        InfoLogger.OUTCOME_SUCCESS if (success and not truncated)
+                        else (InfoLogger.OUTCOME_TIMEOUT if truncated else InfoLogger.OUTCOME_FAIL)
+                    )
+                    info_logger.close(outcome=_prev_outcome)
+                    info_logger = InfoLogger(task_name, "learned", episode + 1)
+
+            step = 0
+            done = False
+
+            while viewer.is_running() and not done:
+                # 使用与 pipeline 相同的接口
+                action, action_context = strategy.tick(obs, info, step, env)
+
+                obs, reward, terminated, success, truncated, info = env.step(action)
+                step += 1
+                done = terminated or truncated
+
+                if info_logger:
+                    info_logger.log_step(
+                        step,
+                        info,
+                        extra={
+                            "reward": float(reward),
+                            "terminated": bool(terminated),
+                            "success": bool(success),
+                            "truncated": bool(truncated),
+                        },
+                    )
+
+                # 可视化
+                viewer.user_scn.ngeom = 0
+                if traj_vis:
+                    actual = env.get_ee_pose()[0]
+                    traj_vis.update(actual)
+                    traj_vis.draw(viewer)
+                if ft_vis:
+                    ft_vis.update(env)
+                    ft_vis.draw(viewer)
+
+                _show_cv_windows(obs)
+                viewer.sync()
+
+            total_steps.append(step)
+            if success:
+                successes += 1
+            if truncated:
+                timeouts += 1
+
+            status = "✓ 成功" if success else "✗ 失败/超时"
+            print(f"\n  [回合 {episode+1} 结束] {status} | 步数: {step}")
+
+            status_dict = strategy.get_status_dict()
+            print("   策略状态：")
+            for k, v in status_dict.items():
+                print(f"   {k}: {v}")
+
+            print(f"  {'='*40}")
+            episode += 1
+
+        elapsed = time.time() - t0
+        print(f"\n{'='*50}")
+        print(f"  模仿学习策略测试完成")
+        print(f"  成功率:   {successes}/{n_episodes} ({successes/n_episodes*100:.1f}%)")
+        print(f"  超时数:   {timeouts}")
+        print(f"  平均步数: {np.mean(total_steps):.1f} ± {np.std(total_steps):.1f}")
+        print(f"  总耗时:   {elapsed:.1f}s")
+        print(f"{'='*50}")
+
+    finally:
+        if info_logger:
+            try:
+                _fin_outcome = (
+                    InfoLogger.OUTCOME_SUCCESS if success
+                    else (InfoLogger.OUTCOME_TIMEOUT if truncated else InfoLogger.OUTCOME_FAIL)
+                )
+            except NameError:
+                _fin_outcome = None
+            info_logger.close(outcome=_fin_outcome)
+        viewer.close()
+        cv2.destroyAllWindows()
+        env.close()
+
+
+def _run_learned_no_render(
+    env, strategy, n_episodes: int, task_name: str, log_info: bool
+) -> None:
+    """无渲染批量测试学习策略."""
+    total_steps, successes, timeouts = [], 0, 0
+    t0 = time.time()
+
+    for ep in range(n_episodes):
+        obs, info = env.reset(seed=ep if ep > 0 else None)
+        strategy.reset()
+        step = 0
+        done = False
+
+        info_logger = InfoLogger(task_name, "learned", ep + 1) if log_info else None
+
+        while not done:
+            action, _ = strategy.tick(obs, info, step, env)
+            obs, _, terminated, success, truncated, info = env.step(action)
+            step += 1
+            done = terminated or truncated
+
+            if info_logger:
+                info_logger.log_step(step, info)
+
+        total_steps.append(step)
+        if success:
+            successes += 1
+        if truncated:
+            timeouts += 1
+
+        status = "SUCCESS" if success else ("TIMEOUT" if truncated else "FAIL")
+        print(f"  Ep {ep+1:3d}/{n_episodes}: steps={step:4d} | {status}")
+
+        if info_logger:
+            outcome = (
+                InfoLogger.OUTCOME_SUCCESS if success
+                else (InfoLogger.OUTCOME_TIMEOUT if truncated else InfoLogger.OUTCOME_FAIL)
+            )
+            info_logger.close(outcome=outcome)
+
+    elapsed = time.time() - t0
+    print(f"\n{'='*50}")
+    print(f"  无渲染测试完成 ({task_name})")
+    print(f"  成功率:   {successes / n_episodes * 100:.1f}%")
+    print(f"  超时数:   {timeouts}")
+    print(f"  平均步数: {np.mean(total_steps):.1f} ± {np.std(total_steps):.1f}")
+    print(f"  总耗时:   {elapsed:.1f}s")
+    print(f"  回合/秒:  {n_episodes / elapsed:.2f}")
+    print(f"{'='*50}")
+    env.close()

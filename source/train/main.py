@@ -36,7 +36,7 @@ from pathlib import Path
 # 项目路径配置
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_DATA_PATH = PROJECT_ROOT / "data" / "block_lifting"
-DEFAULT_OUTPUT_PATH = PROJECT_ROOT / "models" / "block_lifting"
+DEFAULT_OUTPUT_PATH = PROJECT_ROOT / "rl_models" / "block_lifting"
 DEFAULT_CACHE_PATH = PROJECT_ROOT / "cache" / "block_lifting"
 
 # 将项目根目录加入Python路径

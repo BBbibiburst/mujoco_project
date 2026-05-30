@@ -32,8 +32,8 @@ from source.env_demos.modes import (
     demo_benchmark,
     demo_keyboard_control,
     demo_pipeline,
+    demo_learned_policy,
 )
-
 
 
 def main():
@@ -49,7 +49,14 @@ def main():
     )
     parser.add_argument(
         "--mode",
-        choices=["random", "verify", "benchmark", "keyboard", "pipeline"],
+        choices=[
+            "random",
+            "verify",
+            "benchmark",
+            "keyboard",
+            "pipeline",
+            "learned",
+        ],  # ← 添加 learned
         default="random",
         help=(
             "演示模式：\n"
@@ -58,6 +65,7 @@ def main():
             "  benchmark 无渲染基准测试\n"
             "  keyboard  键盘控制\n"
             "  pipeline  流程化任务执行（自动策略）\n"
+            "  learned   模仿学习策略（使用训练好的模型）\n"  # ← 新增
         ),
     )
     # ---- 新增：物体描述符参数 ----
@@ -74,19 +82,44 @@ def main():
         ),
     )
     # -----------------------------
-    parser.add_argument("--no-render", action="store_true", help="禁用可视化（random模式）")
+    parser.add_argument(
+        "--no-render", action="store_true", help="禁用可视化（random模式）"
+    )
     parser.add_argument("--no-traj", action="store_true", help="禁用末端轨迹可视化")
     parser.add_argument("--no-ft-mid", action="store_true", help="禁用指尖中点可视化")
     parser.add_argument("--episodes", type=int, default=3, help="回合数")
     parser.add_argument("--action-mode", choices=["joint", "ee"], default="joint")
     parser.add_argument("--controller", choices=["osc", "ik"], default="osc")
-    parser.add_argument("--arm-step", type=float, default=0.05, help="键盘模式臂步长(rad)")
-    parser.add_argument("--hand-step", type=float, default=0.0005, help="键盘模式手步长(m)")
-    parser.add_argument("--pos-step", type=float, default=0.01, help="键盘模式位置步长(m)")
-    parser.add_argument("--rot-step", type=float, default=0.05, help="键盘模式旋转步长(rad)")
+    parser.add_argument(
+        "--arm-step", type=float, default=0.05, help="键盘模式臂步长(rad)"
+    )
+    parser.add_argument(
+        "--hand-step", type=float, default=0.0005, help="键盘模式手步长(m)"
+    )
+    parser.add_argument(
+        "--pos-step", type=float, default=0.01, help="键盘模式位置步长(m)"
+    )
+    parser.add_argument(
+        "--rot-step", type=float, default=0.05, help="键盘模式旋转步长(rad)"
+    )
     parser.add_argument("--seed", type=int, default=42, help="随机种子")
     parser.add_argument("--log_info", action="store_true", help="记录回合信息")
-    parser.add_argument("--n_workers", type=int, default=32, help="无渲染模式并行环境数")
+    parser.add_argument(
+        "--n_workers", type=int, default=32, help="无渲染模式并行环境数"
+    )
+    # ... 新增模型路径参数（在 parser 定义中添加）...
+    parser.add_argument(
+        "--model-path",
+        type=str,
+        default=None,
+        help="训练好的模型路径（learned 模式），默认: models/<task_name>/best_model.pt",
+    )
+    parser.add_argument(
+        "--stats-path",
+        type=str,
+        default=None,
+        help="统计量文件路径（learned 模式），默认: models/<task_name>/stats.pkl",
+    )
 
     args = parser.parse_args()
 
@@ -95,8 +128,12 @@ def main():
     show_ft_mid = not args.no_ft_mid
 
     # ---- 构建物体配置提示 ----
-    obj_hint = f"  物体:       {args.obj}" if args.obj else "  物体:       默认 (box_red_large)"
-    
+    obj_hint = (
+        f"  物体:       {args.obj}"
+        if args.obj
+        else "  物体:       默认 (box_red_large)"
+    )
+
     print(f"\n{'='*65}")
     print(f"  任务:       {TASK_REGISTRY[args.task]['display_name']}")
     print(f"  模式:       {args.mode}")
@@ -157,6 +194,21 @@ def main():
     elif args.mode == "pipeline":
         demo_pipeline(
             task_name=args.task,
+            n_episodes=args.episodes,
+            render=render,
+            action_mode=args.action_mode,
+            controller_type=args.controller,
+            show_ee_traj=show_traj,
+            show_fingertip_midpoint=show_ft_mid,
+            seed=args.seed,
+            log_info=args.log_info,
+            task_config_overrides=task_config_overrides,
+        )
+    elif args.mode == "learned":
+        demo_learned_policy(
+            task_name=args.task,
+            model_path=args.model_path,
+            stats_path=args.stats_path,
             n_episodes=args.episodes,
             render=render,
             action_mode=args.action_mode,
