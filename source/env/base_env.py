@@ -532,7 +532,6 @@ class RobotArmEnvBase(gym.Env, ABC):
         spec, reader = get_combined_spec(
             rot_xyz_deg=self.cfg.rot_xyz_deg,
             attach_point_name=self.cfg.attach_point_name,
-            physics=self.cfg.physics,
             tactile_backend=self.cfg.tactile_backend,
         )
 

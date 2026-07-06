@@ -1160,7 +1160,7 @@ if __name__ == "__main__":
         4. 显示5子图可视化
 
     运行方式：
-        python thick_wall_ellipse_fit.py
+        python -m source.sensors.stl_mesh_sampler_with_plotter --stl_path assets\grippers\dex_hand\meshes\skin_0_0_p.STL
 
     预期输出：
         ============================================================

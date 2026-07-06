@@ -66,7 +66,6 @@ class RobotHardwareConfig:
     rot_xyz_deg: Tuple[float, float, float] = (-90, 0, 0)
     attach_point_name: str = "right_hand"
     tactile_backend: str = "simple_avg"  # "simple" | "simple_avg" | "physics" | "physics_avg"
-    physics: Optional[object] = None     # PhysicsConfig，避免循环导入用 object
 
 
 # ====================== 场景外观参数 ======================
@@ -174,10 +173,6 @@ class RobotConfig:
     @property
     def tactile_backend(self) -> str:
         return self.hardware.tactile_backend
-
-    @property
-    def physics(self):
-        return self.hardware.physics
 
     @property
     def has_table(self) -> bool:

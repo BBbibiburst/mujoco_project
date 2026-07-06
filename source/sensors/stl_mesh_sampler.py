@@ -13,7 +13,7 @@ STL厚壁椭圆柱表面网格点云生成模块.
 5. 智能缓存：基于文件内容MD5的缓存机制，避免重复计算
 
 算法流程：
-1. 加载STL → 2. 估计主轴 → 3. 粗拟合椭圆 → 4. 分离外表面 → 
+1. 加载STL → 2. 估计主轴 → 3. 粗拟合椭圆 → 4. 分离外表面 →
 5. 精拟合外椭圆(RANSAC) → 6. 检测弧段范围 → 7. 生成网格点
 
 依赖库：
@@ -23,7 +23,7 @@ STL厚壁椭圆柱表面网格点云生成模块.
 
 使用方法：
     from source.sensors.stl_mesh_sampler import generate_surface_mesh_points_from_stl
-    
+
     pts = generate_surface_mesh_points_from_stl(
         stl_path="path/to/your/model.stl",
         m=20,
@@ -54,7 +54,9 @@ _CACHE_DIR = Path(__file__).resolve().parent.parent.parent / "cache" / "stl_cach
 _CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _get_cache_key(stl_path: Path, m: int, n: int, ransac_iters: int, inlier_tol: float) -> str:
+def _get_cache_key(
+    stl_path: Path, m: int, n: int, ransac_iters: int, inlier_tol: float
+) -> str:
     """
     生成缓存键，基于文件内容MD5和采样参数.
 
@@ -92,6 +94,7 @@ def _cache_path(key: str) -> Path:
 
 # ====================== 内部辅助方法 ======================
 
+
 def _estimate_axis(mesh: trimesh.Trimesh) -> np.ndarray:
     """
     基于面法向量的加权协方差分析估计圆柱主轴方向.
@@ -109,20 +112,22 @@ def _estimate_axis(mesh: trimesh.Trimesh) -> np.ndarray:
     areas = mesh.area_faces
     normals = mesh.face_normals
     w = areas / areas.sum()
-    
+
     # 加权协方差矩阵
     cov = (normals * w[:, None]).T @ normals
-    
+
     # 特征值分解
     eigvals, eigvecs = np.linalg.eigh(cov)
-    
+
     # 最小特征值对应的特征向量为主轴（法向量垂直于主轴）
     # 确保按特征值排序（eigh通常已排序，但显式确认更安全）
     axis = eigvecs[:, 0]
     return axis / np.linalg.norm(axis)
 
 
-def _fit_ellipse_geometric(pts_2d: np.ndarray, init_params: Optional[List[float]] = None) -> Optional[Tuple[float, float, float, float, float]]:
+def _fit_ellipse_geometric(
+    pts_2d: np.ndarray, init_params: Optional[List[float]] = None
+) -> Optional[Tuple[float, float, float, float, float]]:
     """
     使用Sampson距离最小化进行几何椭圆拟合.
 
@@ -151,44 +156,42 @@ def _fit_ellipse_geometric(pts_2d: np.ndarray, init_params: Optional[List[float]
         cx, cy, a, b, ang = p
         if a <= 0 or b <= 0:
             return 1e12  # 无效参数，返回大值避免选择
-        
+
         cos_a, sin_a = np.cos(ang), np.sin(ang)
         dx, dy = pts[:, 0] - cx, pts[:, 1] - cy
-        
+
         # 旋转到椭圆主轴坐标系
         u, v = dx * cos_a + dy * sin_a, -dx * sin_a + dy * cos_a
-        
+
         # 椭圆代数距离 f = (u/a)^2 + (v/b)^2 - 1
         f = (u / a) ** 2 + (v / b) ** 2 - 1.0
-        
+
         # 梯度模平方（用于Sampson距离归一化）
         # ∇f = [2u/a^2, 2v/b^2]
-        grad_norm_sq = (2 * u / a ** 2) ** 2 + (2 * v / b ** 2) ** 2 + 1e-12
-        
+        grad_norm_sq = (2 * u / a**2) ** 2 + (2 * v / b**2) ** 2 + 1e-12
+
         # Sampson距离 ≈ |f| / |∇f|
-        return (f ** 2 / grad_norm_sq).sum()
+        return (f**2 / grad_norm_sq).sum()
 
     res = minimize(sampson_dist, init_params, args=(pts_2d,), method="L-BFGS-B")
-    
+
     if not res.success:
         return None
 
     cx, cy, a, b, ang = res.x
-    
+
     # 规范化：确保 a >= b，否则交换并调整角度
     if a < b:
         a, b, ang = b, a, ang + np.pi / 2
-    
+
     # 将角度规范化到 [-π/2, π/2] 范围
     ang = (ang + np.pi / 2) % np.pi - np.pi / 2
-    
+
     return cx, cy, a, b, ang
 
 
 def _fit_ellipse_ransac(
-    pts_2d: np.ndarray, 
-    n_iter: int = 100, 
-    tol_ratio: float = 0.15
+    pts_2d: np.ndarray, n_iter: int = 100, tol_ratio: float = 0.15
 ) -> Tuple[Optional[Tuple[float, float, float, float, float]], np.ndarray]:
     """
     使用RANSAC鲁棒拟合椭圆，处理噪声和离群点.
@@ -216,7 +219,7 @@ def _fit_ellipse_ransac(
     # 根据点云范围计算绝对容差
     ref = max(np.ptp(pts_2d[:, 0]), np.ptp(pts_2d[:, 1]))
     tol = tol_ratio * ref
-    
+
     best_res, best_inliers, max_in = None, np.zeros(len(pts_2d), dtype=bool), 0
     rng = np.random.default_rng(42)  # 固定种子保证可复现性
 
@@ -224,34 +227,36 @@ def _fit_ellipse_ransac(
         # 随机采样子集
         idx = rng.choice(len(pts_2d), size=min(20, len(pts_2d)), replace=False)
         res = _fit_ellipse_geometric(pts_2d[idx])
-        
+
         if res is None:
             continue
-            
+
         cx, cy, a, b, ang = res
-        
+
         # 计算所有点到当前椭圆的几何距离
         dx, dy = pts_2d[:, 0] - cx, pts_2d[:, 1] - cy
         u, v = dx * np.cos(ang) + dy * np.sin(ang), -dx * np.sin(ang) + dy * np.cos(ang)
-        
+
         # 归一化半径
         r = np.sqrt((u / a) ** 2 + (v / b) ** 2 + 1e-12)
-        
+
         # 几何距离 = |r - 1| * 实际距离，其中r是归一化半径
-        dist = np.abs(r - 1.0) * np.sqrt(u ** 2 + v ** 2) / r
-        
+        dist = np.abs(r - 1.0) * np.sqrt(u**2 + v**2) / r
+
         inliers = dist < tol
-        
+
         # 更新最佳模型
         if inliers.sum() > max_in:
             max_in, best_inliers, best_res = inliers.sum(), inliers, res
 
     # 用所有内点重新精修
     if best_res is not None:
-        refined = _fit_ellipse_geometric(pts_2d[best_inliers], init_params=list(best_res))
+        refined = _fit_ellipse_geometric(
+            pts_2d[best_inliers], init_params=list(best_res)
+        )
         if refined:
             best_res = refined
-            
+
     return best_res, best_inliers
 
 
@@ -275,19 +280,19 @@ def _detect_arc_range(angles_deg: np.ndarray) -> Tuple[float, float]:
     """
     # 构建90-bin直方图（每bin 4度）
     hist, _ = np.histogram(angles_deg, bins=90, range=(0, 360))
-    
+
     # 高斯平滑，sigma=1.0 bin，mode='wrap'处理循环边界
     smooth = gaussian_filter1d(hist.astype(float), sigma=1.0, mode="wrap")
-    
+
     # 标记低密度区域（<5%峰值）为间隙
     empty = smooth < (0.05 * smooth.max())
-    
+
     # 循环拼接以处理0/360度边界
     double = np.concatenate([empty, empty])
-    
+
     # 寻找最长连续间隙
     best_start, best_len, curr_start, curr_len, in_gap = 0, 0, 0, 0, False
-    
+
     for i, is_empty in enumerate(double):
         if is_empty:
             if not in_gap:
@@ -301,7 +306,7 @@ def _detect_arc_range(angles_deg: np.ndarray) -> Tuple[float, float]:
             if in_gap and curr_len > best_len:
                 best_len, best_start = curr_len, curr_start
             in_gap = False
-            
+
     # 处理跨越末尾的情况
     if in_gap and curr_len > best_len:
         best_len, best_start = curr_len, curr_start
@@ -314,6 +319,7 @@ def _detect_arc_range(angles_deg: np.ndarray) -> Tuple[float, float]:
 
 
 # ====================== 核心功能方法 ======================
+
 
 def generate_surface_mesh_points_from_stl(
     stl_path: Path,
@@ -359,7 +365,7 @@ def generate_surface_mesh_points_from_stl(
         >>> # 基础用法：生成20×10的网格点云
         >>> pts = generate_surface_mesh_points_from_stl("finger.stl", m=20, n=10)
         >>> print(pts.shape) # (200, 3)
-        
+
         >>> # 高精度模式：更多RANSAC迭代，更严格容差
         >>> pts = generate_surface_mesh_points_from_stl(
         ...     "finger.stl", m=50, n=20,
@@ -367,7 +373,7 @@ def generate_surface_mesh_points_from_stl(
         ... )
     """
     stl_path = Path(stl_path)
-    
+
     # ----- 缓存读取 -----
     if use_cache:
         key = _get_cache_key(stl_path, m, n, ransac_iters, inlier_tol)
@@ -384,16 +390,20 @@ def generate_surface_mesh_points_from_stl(
     if not isinstance(mesh, trimesh.Trimesh):
         # 场景文件：选择面积最大的几何体
         mesh = max(mesh.geometry.values(), key=lambda x: x.area)
-    
+
     if mesh.is_empty:
         raise ValueError("Loaded mesh is empty.")
 
     # 2. 建立局部坐标系
     # e_z = 主轴（圆柱方向），e_x, e_y = 截面平面基向量
     axis = _estimate_axis(mesh)
-    
+
     # 避免axis与参考向量平行导致叉积为零
-    ref = np.array([1, 0, 0.0]) if abs(np.dot(axis, [0, 0, 1])) > 0.9 else np.array([0, 0, 1.0])
+    ref = (
+        np.array([1, 0, 0.0])
+        if abs(np.dot(axis, [0, 0, 1])) > 0.9
+        else np.array([0, 0, 1.0])
+    )
     e_x = np.cross(ref, axis)
     e_x /= np.linalg.norm(e_x)
     e_y = np.cross(axis, e_x)  # 自动单位化，因为axis和e_x正交且单位长度
@@ -402,88 +412,89 @@ def generate_surface_mesh_points_from_stl(
     # 投影所有顶点到截面平面
     pts_all = mesh.vertices
     pts_2d_all = np.column_stack([pts_all @ e_x, pts_all @ e_y])
-    
+
     # 粗拟合：获取初始椭圆参数用于分离内外表面
     c_res, _ = _fit_ellipse_ransac(pts_2d_all, n_iter=50)
     if c_res is None:
         raise ValueError("Failed to fit initial ellipse.")
-        
+
     # 计算面片中心到椭圆边界的归一化距离
     f_centers = mesh.vertices[mesh.faces].mean(axis=1)
     dx, dy = (f_centers @ e_x) - c_res[0], (f_centers @ e_y) - c_res[1]
-    
+
     # 旋转到椭圆主轴坐标系计算归一化半径
     cos_ang, sin_ang = np.cos(c_res[4]), np.sin(c_res[4])
     r_norm = np.sqrt(
-        ((dx * cos_ang + dy * sin_ang) / c_res[2]) ** 2 +
-        ((-dx * sin_ang + dy * cos_ang) / c_res[3]) ** 2
+        ((dx * cos_ang + dy * sin_ang) / c_res[2]) ** 2
+        + ((-dx * sin_ang + dy * cos_ang) / c_res[3]) ** 2
     )
-    
+
     # 分离外表面：归一化半径大于中位数的视为外表面
     outer_face_idx = np.where(r_norm > np.median(r_norm))[0]
     o_mesh = mesh.submesh([outer_face_idx], append=True)
-    
+
     # 4. 外表面精拟合
     # 增加表面采样点密度以提高拟合精度
-    o_pts_3d = np.vstack([
-        o_mesh.vertices,
-        trimesh.sample.sample_surface(o_mesh, 5000)[0]
-    ])
+    o_pts_3d = np.vstack(
+        [o_mesh.vertices, trimesh.sample.sample_surface(o_mesh, 5000)[0]]
+    )
     o_pts_2d = np.column_stack([o_pts_3d @ e_x, o_pts_3d @ e_y])
-    
+
     # RANSAC鲁棒拟合
     o_res, o_inliers = _fit_ellipse_ransac(
         o_pts_2d, n_iter=ransac_iters, tol_ratio=inlier_tol
     )
-    
+
     if o_res is None:
         raise ValueError("Failed to fit outer ellipse with RANSAC.")
-        
+
     cx, cy, a, b, ang = o_res
 
     # 5. 弧段检测与网格采样
     # 计算内点的归一化角度
     dx_in, dy_in = o_pts_2d[o_inliers, 0] - cx, o_pts_2d[o_inliers, 1] - cy
-    angles = np.degrees(np.arctan2(
-        (-dx_in * np.sin(ang) + dy_in * np.cos(ang)) / b,
-        (dx_in * np.cos(ang) + dy_in * np.sin(ang)) / a,
-    ))
-    
+    angles = np.degrees(
+        np.arctan2(
+            (-dx_in * np.sin(ang) + dy_in * np.cos(ang)) / b,
+            (dx_in * np.cos(ang) + dy_in * np.sin(ang)) / a,
+        )
+    )
+
     # 检测有效弧段范围
     s_deg, e_deg = _detect_arc_range(np.mod(angles, 360))
-    
+
     # 轴向（高度）范围
     z_vals = pts_all @ axis
     z_grid = np.linspace(z_vals.min(), z_vals.max(), n)
-    
+
     # 圆周方向参数网格
     t_grid = np.radians(np.linspace(s_deg, e_deg, m))
-    
+
     # 生成二维参数网格
     T, Z = np.meshgrid(t_grid, z_grid)
     T_flat = T.ravel()
     Z_flat = Z.ravel()
-    
+
     # 椭圆参数方程计算截面坐标
     u = a * np.cos(T_flat)
     v = b * np.sin(T_flat)
-    
+
     # 旋转和平移到实际位置
     x_s = u * np.cos(ang) - v * np.sin(ang) + cx
     y_s = u * np.sin(ang) + v * np.cos(ang) + cy
-    
+
     # 映射回三维空间：Z*axis + x_s*e_x + y_s*e_y
     sample_pts = (
-        Z_flat[:, None] * axis[None, :] +
-        x_s[:, None] * e_x[None, :] +
-        y_s[:, None] * e_y[None, :]
+        Z_flat[:, None] * axis[None, :]
+        + x_s[:, None] * e_x[None, :]
+        + y_s[:, None] * e_y[None, :]
     )
 
     # ----- 缓存写入 -----
     if use_cache:
         joblib.dump(sample_pts, fpath)
         # print(f"[STLSampler] 已写入缓存: {fpath.name}")
-        
+
     return sample_pts
 
 
@@ -492,15 +503,15 @@ def generate_surface_mesh_points_from_stl(
 if __name__ == "__main__":
     """
     模块独立测试入口.
-    
+
     测试内容：
     1. 首次调用：计算点云并写入缓存
     2. 二次调用：命中缓存，验证结果一致性
     3. 输出诊断信息：点云形状、缓存命中率
-    
+
     使用方法：
-        python stl_sampler.py
-        
+        python -m source.sensors.stl_mesh_sampler
+
     预期输出：
         [STLSampler] 计算采样点云: skin_0_0_p.STL (m=10, n=7)...
         [STLSampler] 已写入缓存: {md5}_m10_n7_iter100_tol0.15.joblib
@@ -510,18 +521,22 @@ if __name__ == "__main__":
         Results identical: True
     """
     PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-    PATH_TO_FILE = PROJECT_ROOT / "models" / "inspirehand" / "meshes" / "skin_0_0_p.STL"
-    
+    PATH_TO_FILE = (
+        PROJECT_ROOT / "assets" / "grippers" / "dex_hand" / "meshes" / "skin_0_0_p.STL"
+    )
+
     if Path(PATH_TO_FILE).exists():
         print(f"Testing generate_surface_mesh_points_from_stl with: {PATH_TO_FILE}")
-        
+
         # 第一次：计算并写入缓存
         pts = generate_surface_mesh_points_from_stl(PATH_TO_FILE, m=10, n=7)
         print(f"Generated point cloud shape: {pts.shape}")
-        
+
         # 第二次：命中缓存
         pts_cached = generate_surface_mesh_points_from_stl(PATH_TO_FILE, m=10, n=7)
         print(f"Cached point cloud shape: {pts_cached.shape}")
         print(f"Results identical: {np.allclose(pts, pts_cached)}")
     else:
-        print("Script ready. Please import 'generate_surface_mesh_points_from_stl' into your project.")
+        print(
+            "Script ready. Please import 'generate_surface_mesh_points_from_stl' into your project."
+        )
